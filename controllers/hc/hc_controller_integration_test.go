@@ -79,10 +79,6 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, statusClient.Close()) })
 
-	for _, client := range []*firestore.Client{specsClient, statusClient} {
-		clearHCCollection(ctx, t, client, "applydesires")
-		clearHCCollection(ctx, t, client, "readdesires")
-	}
 	cleanupHCCollections(t, specsClient, statusClient)
 
 	transportClient := fstransport.New(testLogger(t), opts...)

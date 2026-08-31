@@ -210,8 +210,6 @@ func TestIntegration_Apply_ManifestHandling(t *testing.T) {
 	specsClient, err := firestore.NewClientWithDatabase(ctx, project, "specs", opts...)
 	require.NoError(t, err)
 	closeFirestoreClient(t, specsClient)
-	clearCollection(ctx, t, specsClient, "applydesires")
-	clearCollection(ctx, t, specsClient, "readdesires")
 	cleanupCollections(t, []*firestore.Client{specsClient}, "applydesires", "readdesires")
 
 	_, err = c.Apply(ctx, project, testClusterID, [][]byte{nil})
@@ -742,11 +740,6 @@ func TestIntegration_DeleteStatusAndCleanup(t *testing.T) {
 	require.NoError(t, err)
 	closeFirestoreClient(t, statusClient)
 
-	for _, client := range []*firestore.Client{specsClient, statusClient} {
-		for _, collection := range []string{"applydesires", "readdesires", "deletedesires"} {
-			clearCollection(ctx, t, client, collection)
-		}
-	}
 	cleanupCollections(t, []*firestore.Client{specsClient, statusClient}, "applydesires", "readdesires", "deletedesires")
 
 	status, err := c.GetDeleteStatus(ctx, project, testClusterID)

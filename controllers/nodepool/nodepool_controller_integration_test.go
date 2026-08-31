@@ -70,10 +70,6 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, statusClient.Close()) })
 
-	for _, client := range []*firestore.Client{specsClient, statusClient} {
-		clearNodePoolCollection(ctx, t, client, "applydesires")
-		clearNodePoolCollection(ctx, t, client, "readdesires")
-	}
 	cleanupNodePoolCollections(t, specsClient, statusClient)
 
 	transportClient := fstransport.New(newTestLogger(t), opts...)
