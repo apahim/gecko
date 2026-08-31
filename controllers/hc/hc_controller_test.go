@@ -123,9 +123,12 @@ func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { r
 
 // errTransport is a transport.Client that returns configurable errors.
 type errTransport struct {
-	applyErr    error
-	applyResult *transport.Status
-	deleteErr   error
+	applyErr         error
+	applyResult      *transport.Status
+	deleteErr        error
+	deleteStatus     *transport.DeleteStatus
+	deleteStatusErr  error
+	cleanupDeleteErr error
 }
 
 func (e *errTransport) Apply(_ context.Context, _, _ string, _ [][]byte) (*transport.Status, error) {
@@ -136,10 +139,18 @@ func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Sta
 }
 func (e *errTransport) Delete(_ context.Context, _, _ string) error { return e.deleteErr }
 func (e *errTransport) GetDeleteStatus(_ context.Context, _, _ string) (*transport.DeleteStatus, error) {
+	if e.deleteStatusErr != nil {
+		return nil, e.deleteStatusErr
+	}
+	if e.deleteStatus != nil {
+		return e.deleteStatus, nil
+	}
 	// Return ApplyDesiresCount=1 to trigger Delete() call.
 	return &transport.DeleteStatus{AllSuccessful: false, TotalCount: 0, PendingCount: 0, ApplyDesiresCount: 1}, nil
 }
-func (e *errTransport) CleanupDeleteDesires(_ context.Context, _, _ string) error { return nil }
+func (e *errTransport) CleanupDeleteDesires(_ context.Context, _, _ string) error {
+	return e.cleanupDeleteErr
+}
 
 // clusterReq returns a reconcile.Request for the given cluster name.
 func clusterReq(name string) reconcile.Request {
@@ -943,6 +954,68 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
 	updated := storeClient.updated.(*privatev1.Cluster)
 	require.NotContains(t, updated.Finalizers, constants.FinalizerCluster)
+}
+
+func TestReconcile_Deletion_Pending(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	tr.DeleteStatusOverrides["mc-cluster-1/"+clusterID] = &transport.DeleteStatus{
+		AllSuccessful: false,
+		TotalCount:    5,
+		PendingCount:  2,
+	}
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+	require.Empty(t, tr.DeleteCalls)
+	require.Empty(t, tr.CleanupDeleteDesiresCalls)
+	require.False(t, storeClient.updateCalled)
+}
+
+func TestReconcile_Deletion_GetStatusError(t *testing.T) {
+	cluster := buildReadyCluster("cluster-abc", "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	r, storeClient := buildReconciler(t, cluster, nil, &errTransport{
+		deleteStatusErr: fmt.Errorf("firestore unavailable"),
+	}, nil)
+
+	_, err := r.Reconcile(context.Background(), clusterReq(cluster.Name))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "get delete status")
+	require.False(t, storeClient.updateCalled)
+}
+
+func TestReconcile_Deletion_CleanupError(t *testing.T) {
+	cluster := buildReadyCluster("cluster-abc", "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	r, storeClient := buildReconciler(t, cluster, nil, &errTransport{
+		deleteStatus:     &transport.DeleteStatus{AllSuccessful: true, TotalCount: 5},
+		cleanupDeleteErr: fmt.Errorf("firestore unavailable"),
+	}, nil)
+
+	_, err := r.Reconcile(context.Background(), clusterReq(cluster.Name))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cleanup delete desires")
+	require.False(t, storeClient.updateCalled)
 }
 
 // TestReconcile_Deletion_NoPlacement verifies that when the cluster has no placement

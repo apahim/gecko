@@ -68,6 +68,25 @@ func TestParseManifest_MissingName(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing metadata.name")
 }
 
+func TestParseManifest_Invalid(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		message string
+	}{
+		{name: "invalid JSON", raw: `{`, message: "unmarshal"},
+		{name: "missing apiVersion", raw: `{"kind":"Namespace","metadata":{"name":"test"}}`, message: "missing apiVersion"},
+		{name: "missing kind", raw: `{"apiVersion":"v1","metadata":{"name":"test"}}`, message: "missing kind"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := parseManifest([]byte(test.raw))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.message)
+		})
+	}
+}
+
 func TestResourceKey(t *testing.T) {
 	ref := kubeapplier.ResourceReference{
 		Group:     "hypershift.openshift.io",
@@ -134,6 +153,12 @@ func TestBuildApplyDesireDoc_Contents(t *testing.T) {
 	assert.Equal(t, "mc-prod", specMap.ManagementCluster)
 	assert.Equal(t, ref, specMap.TargetItem)
 	assert.Nil(t, specMap.KubeContent, "KubeContent in spec must be nil (stored in spec_kubeContent)")
+}
+
+func TestBuildApplyDesireDoc_InvalidJSON(t *testing.T) {
+	_, _, err := buildApplyDesireDoc("cluster-abc", "mc-prod", kubeapplier.ResourceReference{}, []byte(`{`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal kubeContent")
 }
 
 func TestBuildReadDesireDoc(t *testing.T) {

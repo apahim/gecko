@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/openshift-online/kube-applier-gcp/pkg/api/kubeapplier"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/openshift-online/kube-applier-gcp/pkg/api/kubeapplier"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -192,6 +192,19 @@ func TestExtractResourceStatuses_CorruptKubeContent_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestExtractCertFields(t *testing.T) {
+	fields, err := extractCertFields([]byte(`{"status":{"conditions":[{"type":"Ready","status":"True"}]}}`))
+	require.NoError(t, err)
+	assert.Equal(t, "True", fields["readyCondition"])
+
+	fields, err = extractCertFields([]byte(`{"status":{"conditions":[{"type":"Issuing","status":"True"}]}}`))
+	require.NoError(t, err)
+	assert.Empty(t, fields)
+
+	_, err = extractCertFields([]byte(`{`))
+	require.Error(t, err)
+}
+
 func TestExtractNPFields(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -213,11 +226,11 @@ func TestExtractNPFields(t *testing.T) {
 				}
 			}`,
 			expected: map[string]string{
-				"readyCondition":              "True",
-				"allNodesHealthyCondition":    "True",
-				"allMachinesReadyCondition":   "True",
-				"updatingConfigCondition":     "False",
-				"updatingVersionCondition":    "False",
+				"readyCondition":            "True",
+				"allNodesHealthyCondition":  "True",
+				"allMachinesReadyCondition": "True",
+				"updatingConfigCondition":   "False",
+				"updatingVersionCondition":  "False",
 			},
 		},
 		{

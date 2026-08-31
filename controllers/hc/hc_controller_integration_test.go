@@ -22,8 +22,6 @@ import (
 	fstransport "github.com/openshift-online/gecko/controllers/client/transport/firestore"
 )
 
-const hcIntegrationProject = "gecko-hc-controller-integration"
-
 type hcExpectedResource struct {
 	group     string
 	version   string
@@ -56,35 +54,43 @@ func clearHCCollection(ctx context.Context, t *testing.T, client *firestore.Clie
 	}
 }
 
+func cleanupHCCollections(t *testing.T, clients ...*firestore.Client) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, client := range clients {
+			clearHCCollection(ctx, t, client, "applydesires")
+			clearHCCollection(ctx, t, client, "readdesires")
+		}
+	})
+}
+
 func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	opts := hcEmulatorOpts(t)
-	specsClient, err := firestore.NewClientWithDatabase(ctx, hcIntegrationProject, "specs", opts...)
+	project := fmt.Sprintf("gecko-hc-%d", time.Now().UnixNano())
+	specsClient, err := firestore.NewClientWithDatabase(ctx, project, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
-	statusClient, err := firestore.NewClientWithDatabase(ctx, hcIntegrationProject, "status", opts...)
+	t.Cleanup(func() { require.NoError(t, specsClient.Close()) })
+	statusClient, err := firestore.NewClientWithDatabase(ctx, project, "status", opts...)
 	require.NoError(t, err)
-	defer statusClient.Close()
+	t.Cleanup(func() { require.NoError(t, statusClient.Close()) })
 
 	for _, client := range []*firestore.Client{specsClient, statusClient} {
 		clearHCCollection(ctx, t, client, "applydesires")
 		clearHCCollection(ctx, t, client, "readdesires")
 	}
-	defer func() {
-		for _, client := range []*firestore.Client{specsClient, statusClient} {
-			clearHCCollection(ctx, t, client, "applydesires")
-			clearHCCollection(ctx, t, client, "readdesires")
-		}
-	}()
+	cleanupHCCollections(t, specsClient, statusClient)
 
 	transportClient := fstransport.New(testLogger(t), opts...)
 	defer transportClient.Close()
 
 	const clusterID = "cluster-integration"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
-	cluster.Status.PlacementResult.ManagementClusterName = hcIntegrationProject
+	cluster.Status.PlacementResult.ManagementClusterName = project
 	r, storeClient := buildReconciler(t, cluster, nil, transportClient, nil)
 
 	result, err := r.Reconcile(ctx, clusterReq(clusterID))
@@ -117,7 +123,7 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 
 		var desire kubeapplier.ApplyDesire
 		require.NoError(t, snapshot.DataTo(&desire))
-		require.Equal(t, hcIntegrationProject, desire.Spec.ManagementCluster)
+		require.Equal(t, project, desire.Spec.ManagementCluster)
 		require.Equal(t, clusterID, desire.Spec.ClusterID)
 		require.Equal(t, resource.group, desire.Spec.TargetItem.Group)
 		require.Equal(t, resource.version, desire.Spec.TargetItem.Version)

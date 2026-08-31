@@ -2,6 +2,7 @@ package nodepool
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -20,8 +21,6 @@ import (
 
 	fstransport "github.com/openshift-online/gecko/controllers/client/transport/firestore"
 )
-
-const nodePoolIntegrationProject = "gecko-nodepool-controller-integration"
 
 func nodePoolEmulatorOpts(t *testing.T) []option.ClientOption {
 	t.Helper()
@@ -46,28 +45,36 @@ func clearNodePoolCollection(ctx context.Context, t *testing.T, client *firestor
 	}
 }
 
+func cleanupNodePoolCollections(t *testing.T, clients ...*firestore.Client) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, client := range clients {
+			clearNodePoolCollection(ctx, t, client, "applydesires")
+			clearNodePoolCollection(ctx, t, client, "readdesires")
+		}
+	})
+}
+
 func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	opts := nodePoolEmulatorOpts(t)
-	specsClient, err := firestore.NewClientWithDatabase(ctx, nodePoolIntegrationProject, "specs", opts...)
+	project := fmt.Sprintf("gecko-np-%d", time.Now().UnixNano())
+	specsClient, err := firestore.NewClientWithDatabase(ctx, project, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
-	statusClient, err := firestore.NewClientWithDatabase(ctx, nodePoolIntegrationProject, "status", opts...)
+	t.Cleanup(func() { require.NoError(t, specsClient.Close()) })
+	statusClient, err := firestore.NewClientWithDatabase(ctx, project, "status", opts...)
 	require.NoError(t, err)
-	defer statusClient.Close()
+	t.Cleanup(func() { require.NoError(t, statusClient.Close()) })
 
 	for _, client := range []*firestore.Client{specsClient, statusClient} {
 		clearNodePoolCollection(ctx, t, client, "applydesires")
 		clearNodePoolCollection(ctx, t, client, "readdesires")
 	}
-	defer func() {
-		for _, client := range []*firestore.Client{specsClient, statusClient} {
-			clearNodePoolCollection(ctx, t, client, "applydesires")
-			clearNodePoolCollection(ctx, t, client, "readdesires")
-		}
-	}()
+	cleanupNodePoolCollections(t, specsClient, statusClient)
 
 	transportClient := fstransport.New(newTestLogger(t), opts...)
 	defer transportClient.Close()
@@ -76,7 +83,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	np.SetGeneration(3)
 	cluster := testCluster(true, true)
 	cluster.SetNamespace(np.Namespace)
-	cluster.Status.PlacementResult.ManagementClusterName = nodePoolIntegrationProject
+	cluster.Status.PlacementResult.ManagementClusterName = project
 	r, storeClient := buildReconciler(t, np, cluster, transportClient, nil, nil, nil)
 
 	result, err := r.Reconcile(ctx, npReq(np.Spec.ClusterID, np.Name))
@@ -109,7 +116,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 
 	var applyDesire kubeapplier.ApplyDesire
 	require.NoError(t, applySnapshots[0].DataTo(&applyDesire))
-	require.Equal(t, nodePoolIntegrationProject, applyDesire.Spec.ManagementCluster)
+	require.Equal(t, project, applyDesire.Spec.ManagementCluster)
 	require.Equal(t, np.Name, applyDesire.Spec.ClusterID)
 	require.Equal(t, expectedTarget, applyDesire.Spec.TargetItem)
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -97,6 +98,30 @@ func clearCollection(ctx context.Context, t *testing.T, client *firestore.Client
 	}
 }
 
+func closeFirestoreClient(t *testing.T, client *firestore.Client) {
+	t.Helper()
+	t.Cleanup(func() {
+		require.NoError(t, client.Close())
+	})
+}
+
+func uniqueIntegrationProject(prefix string) string {
+	return fmt.Sprintf("gecko-%s-%s", prefix, strconv.FormatInt(time.Now().UnixNano(), 36))
+}
+
+func cleanupCollections(t *testing.T, clients []*firestore.Client, collections ...string) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, client := range clients {
+			for _, collection := range collections {
+				clearCollection(ctx, t, client, collection)
+			}
+		}
+	})
+}
+
 // applyDesireSpec builds a minimal ApplyDesireSpec for the given groupKey and resource name.
 func applyDesireSpec(groupKey, name string) kubeapplier.ApplyDesireSpec {
 	return kubeapplier.ApplyDesireSpec{
@@ -144,7 +169,7 @@ func TestIntegration_Apply_WritesApplyAndReadDesires(t *testing.T) {
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
+	closeFirestoreClient(t, specsClient)
 	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, specsClient, "readdesires")
 	defer clearCollection(ctx, t, specsClient, "applydesires")
@@ -174,6 +199,42 @@ func TestIntegration_Apply_WritesApplyAndReadDesires(t *testing.T) {
 	assert.Len(t, readSnaps, 1, "expected 1 ReadDesire for the HostedCluster manifest")
 }
 
+func TestIntegration_Apply_ManifestHandling(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := newTestClient(t)
+	defer c.Close()
+	opts := emulatorOpts(t)
+	project := uniqueIntegrationProject("apply")
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, project, "specs", opts...)
+	require.NoError(t, err)
+	closeFirestoreClient(t, specsClient)
+	clearCollection(ctx, t, specsClient, "applydesires")
+	clearCollection(ctx, t, specsClient, "readdesires")
+	cleanupCollections(t, []*firestore.Client{specsClient}, "applydesires", "readdesires")
+
+	_, err = c.Apply(ctx, project, testClusterID, [][]byte{nil})
+	require.NoError(t, err)
+
+	_, err = c.Apply(ctx, project, testClusterID, [][]byte{[]byte(`{`)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse manifest")
+
+	unknownManifest := []byte(`{"apiVersion":"custom.io/v1","kind":"Widget","metadata":{"name":"sample","namespace":"default"}}`)
+	_, err = c.Apply(ctx, project, testClusterID, [][]byte{unknownManifest})
+	require.NoError(t, err)
+
+	snapshots, err := specsClient.Collection("applydesires").
+		Where("spec.clusterID", "==", testClusterID).
+		Documents(ctx).GetAll()
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	var desire kubeapplier.ApplyDesire
+	require.NoError(t, snapshots[0].DataTo(&desire))
+	assert.Equal(t, "widgets", desire.Spec.TargetItem.Resource)
+}
+
 func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -182,10 +243,11 @@ func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
+	closeFirestoreClient(t, specsClient)
+
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
-	defer statusClient.Close()
+	closeFirestoreClient(t, statusClient)
 
 	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, statusClient, "applydesires")
@@ -221,10 +283,11 @@ func TestIntegration_GetStatus_IsolatesApplyStatusesByGroupKey(t *testing.T) {
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
+	closeFirestoreClient(t, specsClient)
+
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
-	defer statusClient.Close()
+	closeFirestoreClient(t, statusClient)
 
 	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, statusClient, "applydesires")
@@ -262,10 +325,11 @@ func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
+	closeFirestoreClient(t, specsClient)
+
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
-	defer statusClient.Close()
+	closeFirestoreClient(t, statusClient)
 
 	clearCollection(ctx, t, specsClient, "readdesires")
 	clearCollection(ctx, t, statusClient, "readdesires")
@@ -341,7 +405,7 @@ func TestIntegration_Delete_WritesDeleteDesireAndRemovesApplyRead(t *testing.T) 
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
+	closeFirestoreClient(t, specsClient)
 
 	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, specsClient, "readdesires")
@@ -607,7 +671,7 @@ func TestIntegration_Delete_ChunksLargeBatches(t *testing.T) {
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
+	closeFirestoreClient(t, specsClient)
 
 	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, specsClient, "readdesires")
@@ -663,6 +727,159 @@ func TestIntegration_Delete_ChunksLargeBatches(t *testing.T) {
 	assert.Len(t, deleteSnaps, resourceCount, "one DeleteDesire per resource")
 }
 
+func TestIntegration_DeleteStatusAndCleanup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := newTestClient(t)
+	defer c.Close()
+	opts := emulatorOpts(t)
+	project := uniqueIntegrationProject("delete")
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, project, "specs", opts...)
+	require.NoError(t, err)
+	closeFirestoreClient(t, specsClient)
+	statusClient, err := firestore.NewClientWithDatabase(ctx, project, "status", opts...)
+	require.NoError(t, err)
+	closeFirestoreClient(t, statusClient)
+
+	for _, client := range []*firestore.Client{specsClient, statusClient} {
+		for _, collection := range []string{"applydesires", "readdesires", "deletedesires"} {
+			clearCollection(ctx, t, client, collection)
+		}
+	}
+	cleanupCollections(t, []*firestore.Client{specsClient, statusClient}, "applydesires", "readdesires", "deletedesires")
+
+	status, err := c.GetDeleteStatus(ctx, project, testClusterID)
+	require.NoError(t, err)
+	assert.True(t, status.AllSuccessful)
+	assert.Zero(t, status.TotalCount)
+	assert.Zero(t, status.ApplyDesiresCount)
+	require.NoError(t, c.Delete(ctx, project, testClusterID))
+
+	_, err = c.Apply(ctx, project, testClusterID, [][]byte{npManifest(t, testClusterID, "delete-status-np")})
+	require.NoError(t, err)
+	status, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	require.NoError(t, err)
+	assert.False(t, status.AllSuccessful)
+	assert.Zero(t, status.TotalCount)
+	assert.Equal(t, 1, status.ApplyDesiresCount)
+
+	require.NoError(t, c.Delete(ctx, project, testClusterID))
+	deleteSnapshots, err := specsClient.Collection("deletedesires").
+		Where("spec.clusterID", "==", testClusterID).
+		Documents(ctx).GetAll()
+	require.NoError(t, err)
+	require.Len(t, deleteSnapshots, 1)
+	documentID := deleteSnapshots[0].Ref.ID
+
+	status, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	require.NoError(t, err)
+	assert.False(t, status.AllSuccessful)
+	assert.Equal(t, 1, status.PendingCount)
+	assert.Equal(t, 1, status.TotalCount)
+	assert.Zero(t, status.ApplyDesiresCount)
+
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, map[string]any{
+		"status": "not-a-delete-desire-status",
+	})
+	require.NoError(t, err)
+	_, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode")
+
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, kubeapplier.DeleteDesire{
+		Status: kubeapplier.DeleteDesireStatus{Conditions: []metav1.Condition{{
+			Type:   kubeapplier.ConditionTypeSuccessful,
+			Status: metav1.ConditionFalse,
+			Reason: "DeleteFailed",
+		}}},
+	})
+	require.NoError(t, err)
+	status, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	require.NoError(t, err)
+	assert.False(t, status.AllSuccessful)
+	assert.Equal(t, 1, status.PendingCount)
+
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, kubeapplier.DeleteDesire{
+		Status: kubeapplier.DeleteDesireStatus{Conditions: []metav1.Condition{{
+			Type:   kubeapplier.ConditionTypeSuccessful,
+			Status: metav1.ConditionTrue,
+			Reason: "NoErrors",
+		}}},
+	})
+	require.NoError(t, err)
+	status, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	require.NoError(t, err)
+	assert.True(t, status.AllSuccessful)
+	assert.Zero(t, status.PendingCount)
+	assert.Equal(t, 1, status.TotalCount)
+
+	require.NoError(t, c.CleanupDeleteDesires(ctx, project, testClusterID))
+	for _, client := range []*firestore.Client{specsClient, statusClient} {
+		remaining, err := client.Collection("deletedesires").Documents(ctx).GetAll()
+		require.NoError(t, err)
+		assert.Empty(t, remaining)
+	}
+	require.NoError(t, c.CleanupDeleteDesires(ctx, project, testClusterID))
+
+	_, err = specsClient.Collection("applydesires").Doc("malformed-apply-desire").Set(ctx, map[string]any{
+		"spec": map[string]any{
+			"clusterID":  testClusterID,
+			"targetItem": "not-a-resource-reference",
+		},
+	})
+	require.NoError(t, err)
+	_, err = c.GetStatus(ctx, project, testClusterID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode specs apply desire")
+	err = c.Delete(ctx, project, testClusterID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode apply desire")
+	_, err = specsClient.Collection("applydesires").Doc("malformed-apply-desire").Delete(ctx)
+	require.NoError(t, err)
+
+	const malformedStatusID = "malformed-status"
+	malformedStatusSpec := specsApplyDesire(testClusterID, "malformed-status")
+	malformedStatusSpec.Spec.ManagementCluster = project
+	_, err = specsClient.Collection("applydesires").Doc(malformedStatusID).Set(ctx, malformedStatusSpec)
+	require.NoError(t, err)
+	_, err = statusClient.Collection("applydesires").Doc(malformedStatusID).Set(ctx, map[string]any{
+		"status": "not-an-apply-desire-status",
+	})
+	require.NoError(t, err)
+	_, err = c.GetStatus(ctx, project, testClusterID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode apply desire")
+	_, err = specsClient.Collection("applydesires").Doc(malformedStatusID).Delete(ctx)
+	require.NoError(t, err)
+
+	readSpec := kubeapplier.ReadDesire{Spec: kubeapplier.ReadDesireSpec{
+		ManagementCluster: project,
+		ClusterID:         testClusterID,
+		TargetItem: kubeapplier.ResourceReference{
+			Group: "hypershift.openshift.io", Version: "v1beta1", Resource: "hostedclusters", Namespace: "clusters-abc", Name: "malformed-status",
+		},
+	}}
+	_, err = specsClient.Collection("readdesires").Doc(malformedStatusID).Set(ctx, readSpec)
+	require.NoError(t, err)
+	_, err = statusClient.Collection("readdesires").Doc(malformedStatusID).Set(ctx, map[string]any{
+		"status": "not-a-read-desire-status",
+	})
+	require.NoError(t, err)
+	_, err = c.GetStatus(ctx, project, testClusterID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode read desire")
+
+	_, err = statusClient.Collection("readdesires").Doc(malformedStatusID).Set(ctx, map[string]any{
+		"status":             kubeapplier.ReadDesireStatus{},
+		"status_kubeContent": map[string]any{"status": "not-an-object"},
+	})
+	require.NoError(t, err)
+	_, err = c.GetStatus(ctx, project, testClusterID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "extract resource status")
+}
+
 // TestIntegration_Apply_StaleWhenStatusNotProcessed verifies that Apply returns
 // Stale=true when the status DB has not yet been updated by kube-applier-gcp
 // (i.e. ObservedDesireUpdateTime does not match the spec write timestamp).
@@ -674,11 +891,11 @@ func TestIntegration_Apply_StaleWhenStatusNotProcessed(t *testing.T) {
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
+	closeFirestoreClient(t, specsClient)
 
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
-	defer statusClient.Close()
+	closeFirestoreClient(t, statusClient)
 
 	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, specsClient, "readdesires")
@@ -1050,10 +1267,11 @@ func TestIntegration_GetStatus_UsesSpecUpdateTimeForStaleness(t *testing.T) {
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
+	closeFirestoreClient(t, specsClient)
+
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
-	defer statusClient.Close()
+	closeFirestoreClient(t, statusClient)
 
 	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, statusClient, "applydesires")
