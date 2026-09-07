@@ -20,9 +20,9 @@ type Status struct {
 	// ResourceStatuses contains statusFeedback values keyed by resource identity then by field name.
 	// Key format: "{group}/{version}/{resource}/{namespace}/{name}"
 	ResourceStatuses map[string]map[string]string
-	// Stale is true when the status does not yet reflect the most recently
-	// written spec. Callers should requeue sooner and avoid trusting
-	// condition values until Stale becomes false.
+	// Stale is true when an expected status document is missing or does not yet
+	// reflect the most recently written spec. Callers should requeue sooner and
+	// avoid trusting condition values until Stale becomes false.
 	Stale bool
 }
 
@@ -43,7 +43,8 @@ type DeleteStatus struct {
 type Client interface {
 	// Apply creates or updates resources on the target cluster and returns current status.
 	Apply(ctx context.Context, targetCluster, groupKey string, manifests [][]byte) (*Status, error)
-	// GetStatus reads back the status of resources for the given groupKey.
+	// GetStatus compares the expected Desire documents in the specs database
+	// with the statuses currently available for the given groupKey.
 	GetStatus(ctx context.Context, targetCluster, groupKey string) (*Status, error)
 	// Delete removes all resources for the given groupKey from the target cluster.
 	Delete(ctx context.Context, targetCluster, groupKey string) error

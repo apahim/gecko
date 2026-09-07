@@ -73,6 +73,17 @@ func npManifest(t *testing.T, clusterID, npName string) []byte {
 	return raw
 }
 
+func configMapManifest(t *testing.T, namespace, name string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]any{"name": name, "namespace": namespace},
+	})
+	require.NoError(t, err)
+	return raw
+}
+
 // clearCollection deletes all documents in a collection (used between tests).
 func clearCollection(ctx context.Context, t *testing.T, client *firestore.Client, coll string) {
 	t.Helper()
@@ -167,17 +178,24 @@ func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	defer specsClient.Close()
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
 	defer statusClient.Close()
 
+	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, statusClient, "applydesires")
 	clearCollection(ctx, t, statusClient, "readdesires")
+	defer clearCollection(ctx, t, specsClient, "applydesires")
 	defer clearCollection(ctx, t, statusClient, "applydesires")
 	defer clearCollection(ctx, t, statusClient, "readdesires")
 
 	const docID = "doc-1"
 
+	_, err = specsClient.Collection("applydesires").Doc(docID).Set(ctx, specsApplyDesire(testGroupKey, "my-hc"))
+	require.NoError(t, err)
 	_, err = statusClient.Collection("applydesires").Doc(docID).Set(ctx, statusApplyDesire(testGroupKey, "my-hc", []metav1.Condition{
 		{Type: "Successful", Status: metav1.ConditionTrue, Reason: "NoErrors"},
 	}))
@@ -196,16 +214,25 @@ func TestIntegration_GetStatus_IsolatesApplyStatusesByGroupKey(t *testing.T) {
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	defer specsClient.Close()
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
 	defer statusClient.Close()
 
+	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, statusClient, "applydesires")
+	defer clearCollection(ctx, t, specsClient, "applydesires")
 	defer clearCollection(ctx, t, statusClient, "applydesires")
 
 	otherGroupKey, err := transport.ClusterGroupKey("other-ns", testClusterID)
 	require.NoError(t, err)
 
+	_, err = specsClient.Collection("applydesires").Doc("doc-1").Set(ctx, specsApplyDesire(testGroupKey, "hc-1"))
+	require.NoError(t, err)
+	_, err = specsClient.Collection("applydesires").Doc("doc-2").Set(ctx, specsApplyDesire(otherGroupKey, "hc-2"))
+	require.NoError(t, err)
 	_, err = statusClient.Collection("applydesires").Doc("doc-1").Set(ctx, statusApplyDesire(testGroupKey, "hc-1", []metav1.Condition{
 		{Type: "Successful", Status: metav1.ConditionTrue, Reason: "NoErrors"},
 	}))
@@ -228,11 +255,16 @@ func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	defer specsClient.Close()
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
 	defer statusClient.Close()
 
+	clearCollection(ctx, t, specsClient, "readdesires")
 	clearCollection(ctx, t, statusClient, "readdesires")
+	defer clearCollection(ctx, t, specsClient, "readdesires")
 	defer clearCollection(ctx, t, statusClient, "readdesires")
 
 	const docID = "rd-1"
@@ -250,6 +282,8 @@ func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
 			},
 		},
 	}
+	_, err = specsClient.Collection("readdesires").Doc(docID).Set(ctx, specsReadDesire)
+	require.NoError(t, err)
 	// status_kubeContent carries the live object at the document root.
 	hcLiveObject := map[string]any{
 		"status": map[string]any{
@@ -274,6 +308,8 @@ func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
 	otherSpec := specsReadDesire.Spec
 	otherSpec.GroupKey = otherGroupKey
 	otherSpec.TargetItem.Name = "other-hc"
+	_, err = specsClient.Collection("readdesires").Doc("rd-other").Set(ctx, kubeapplier.ReadDesire{Spec: otherSpec})
+	require.NoError(t, err)
 	_, err = statusClient.Collection("readdesires").Doc("rd-other").Set(ctx, map[string]any{
 		"spec":               otherSpec,
 		"status":             kubeapplier.ReadDesireStatus{},
@@ -620,6 +656,75 @@ func TestIntegration_Apply_StaleWhenStatusNotProcessed(t *testing.T) {
 	assert.False(t, status.Stale, "should not be stale when ObservedDesireUpdateTime matches")
 }
 
+func TestIntegration_GetStatus_PendingWhenOneOfTwoApplyStatusesIsMissing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := newTestClient(t)
+	defer c.Close()
+	opts := emulatorOpts(t)
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	defer specsClient.Close()
+	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
+	require.NoError(t, err)
+	defer statusClient.Close()
+
+	collections := []string{"applydesires", "readdesires"}
+	for _, collection := range collections {
+		clearCollection(ctx, t, specsClient, collection)
+		clearCollection(ctx, t, statusClient, collection)
+	}
+	defer func() {
+		for _, collection := range collections {
+			clearCollection(ctx, t, specsClient, collection)
+			clearCollection(ctx, t, statusClient, collection)
+		}
+	}()
+
+	manifests := [][]byte{
+		hcManifest(t, testClusterID, "my-hc"),
+		configMapManifest(t, "clusters-"+testClusterID, "cluster-config"),
+	}
+	_, err = c.Apply(ctx, testMCName, testGroupKey, manifests)
+	require.NoError(t, err)
+
+	applySnaps, err := specsClient.Collection("applydesires").
+		Where("spec.groupKey", "==", testGroupKey).
+		Documents(ctx).GetAll()
+	require.NoError(t, err)
+	require.Len(t, applySnaps, 2)
+	readSnaps, err := specsClient.Collection("readdesires").
+		Where("spec.groupKey", "==", testGroupKey).
+		Documents(ctx).GetAll()
+	require.NoError(t, err)
+	require.Len(t, readSnaps, 2)
+
+	var applyDesire kubeapplier.ApplyDesire
+	require.NoError(t, applySnaps[0].DataTo(&applyDesire))
+	applyDesire.Status = kubeapplier.ApplyDesireStatus{
+		Conditions:               []metav1.Condition{{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionTrue}},
+		ObservedDesireUpdateTime: applySnaps[0].UpdateTime,
+	}
+	_, err = statusClient.Collection("applydesires").Doc(applySnaps[0].Ref.ID).Set(ctx, applyDesire)
+	require.NoError(t, err)
+
+	for _, snap := range readSnaps {
+		var readDesire kubeapplier.ReadDesire
+		require.NoError(t, snap.DataTo(&readDesire))
+		readDesire.Status.ObservedDesireUpdateTime = snap.UpdateTime
+		_, err = statusClient.Collection("readdesires").Doc(snap.Ref.ID).Set(ctx, readDesire)
+		require.NoError(t, err)
+	}
+
+	status, err := c.GetStatus(ctx, testMCName, testGroupKey)
+	require.NoError(t, err)
+	require.Len(t, status.Conditions, 1)
+	assert.Equal(t, metav1.ConditionFalse, status.Conditions[0].Status)
+	assert.Equal(t, "Pending", status.Conditions[0].Reason)
+	assert.True(t, status.Stale, "a missing expected Apply status must make the result stale")
+}
+
 // hcManifestNS builds a HostedCluster manifest with an explicit namespace,
 // used in collision regression tests where the namespace is not derived from clusterID.
 func hcManifestNS(t *testing.T, ns, name string) []byte {
@@ -744,28 +849,43 @@ func TestIntegration_Regression_NodePoolCollision(t *testing.T) {
 	require.True(t, nsBetaSnap.Exists(), "ns-beta ApplyDesire must still exist after ns-alpha NodePool Delete")
 }
 
-// TestIntegration_GetStatus_NeverStale verifies that GetStatus (without Apply)
-// never reports stale, since there are no write timestamps to compare against.
-func TestIntegration_GetStatus_NeverStale(t *testing.T) {
+func TestIntegration_GetStatus_UsesSpecUpdateTimeForStaleness(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	defer specsClient.Close()
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
 	defer statusClient.Close()
 
+	clearCollection(ctx, t, specsClient, "applydesires")
 	clearCollection(ctx, t, statusClient, "applydesires")
+	defer clearCollection(ctx, t, specsClient, "applydesires")
 	defer clearCollection(ctx, t, statusClient, "applydesires")
 
 	const docID = "doc-getstatus"
-	_, err = statusClient.Collection("applydesires").Doc(docID).Set(ctx, statusApplyDesire(testGroupKey, "my-hc", []metav1.Condition{
+	writeResult, err := specsClient.Collection("applydesires").Doc(docID).Set(ctx, specsApplyDesire(testGroupKey, "my-hc"))
+	require.NoError(t, err)
+	applyStatus := statusApplyDesire(testGroupKey, "my-hc", []metav1.Condition{
 		{Type: "Successful", Status: metav1.ConditionTrue, Reason: "NoErrors"},
-	}))
+	})
+	applyStatus.Status.ObservedDesireUpdateTime = writeResult.UpdateTime.Add(-time.Second)
+	_, err = statusClient.Collection("applydesires").Doc(docID).Set(ctx, applyStatus)
 	require.NoError(t, err)
 
 	status, err := c.GetStatus(ctx, testMCName, testGroupKey)
 	require.NoError(t, err)
-	assert.False(t, status.Stale, "GetStatus without Apply should never report stale")
+	assert.True(t, status.Stale, "status observing an older spec should be stale")
+
+	applyStatus.Status.ObservedDesireUpdateTime = writeResult.UpdateTime
+	_, err = statusClient.Collection("applydesires").Doc(docID).Set(ctx, applyStatus)
+	require.NoError(t, err)
+
+	status, err = c.GetStatus(ctx, testMCName, testGroupKey)
+	require.NoError(t, err)
+	assert.False(t, status.Stale, "status observing the current spec should not be stale")
 }

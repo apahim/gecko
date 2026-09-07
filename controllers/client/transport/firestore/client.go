@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/option"
@@ -117,12 +116,7 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 
 	batch := mc.specs.BulkWriter(ctx)
 
-	// Track jobs per document type so we can extract write timestamps.
-	type writtenDoc struct {
-		docID string
-		job   *firestore.BulkWriterJob
-	}
-	var applyDocs, readDocs []writtenDoc
+	var applyJobs, readJobs []*firestore.BulkWriterJob
 
 	for _, raw := range manifests {
 		if len(raw) == 0 {
@@ -147,7 +141,7 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 		if err != nil {
 			return nil, fmt.Errorf("firestore transport: Apply %s/%s set apply desire: %w", targetCluster, groupKey, err)
 		}
-		applyDocs = append(applyDocs, writtenDoc{docID: applyID, job: job})
+		applyJobs = append(applyJobs, job)
 
 		// Write ReadDesire
 		readID, readData := buildReadDesireDoc(groupKey, targetCluster, ref)
@@ -156,45 +150,44 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 		if err != nil {
 			return nil, fmt.Errorf("firestore transport: Apply %s/%s set read desire: %w", targetCluster, groupKey, err)
 		}
-		readDocs = append(readDocs, writtenDoc{docID: readID, job: job})
+		readJobs = append(readJobs, job)
 	}
 
 	batch.Flush()
 
-	// Collect write timestamps from job results for staleness detection.
-	writeTimes := make(map[string]time.Time, len(applyDocs)+len(readDocs))
-	for _, wd := range applyDocs {
-		wr, err := wd.job.Results()
-		if err != nil {
+	for _, job := range applyJobs {
+		if _, err := job.Results(); err != nil {
 			return nil, fmt.Errorf("firestore transport: Apply %s/%s write error: %w", targetCluster, groupKey, err)
 		}
-		writeTimes[collectionApplyDesires+"/"+wd.docID] = wr.UpdateTime
 	}
-	for _, wd := range readDocs {
-		wr, err := wd.job.Results()
-		if err != nil {
+	for _, job := range readJobs {
+		if _, err := job.Results(); err != nil {
 			return nil, fmt.Errorf("firestore transport: Apply %s/%s write error: %w", targetCluster, groupKey, err)
 		}
-		writeTimes[collectionReadDesires+"/"+wd.docID] = wr.UpdateTime
 	}
 
 	c.log.Infof(ctx, "firestore transport: applied %d manifests for %s/%s", len(manifests), targetCluster, groupKey)
 
-	return c.getStatus(ctx, targetCluster, groupKey, writeTimes)
+	return c.getStatus(ctx, targetCluster, groupKey)
 }
 
-// GetStatus reads ApplyDesire and ReadDesire statuses for the given groupKey.
+// GetStatus compares expected Desire documents with the ApplyDesire and
+// ReadDesire statuses currently available for the given groupKey.
 func (c *Client) GetStatus(ctx context.Context, targetCluster, groupKey string) (*transport.Status, error) {
-	return c.getStatus(ctx, targetCluster, groupKey, nil)
+	return c.getStatus(ctx, targetCluster, groupKey)
 }
 
-// getStatus is the internal implementation of GetStatus. When specWriteTimes is
-// non-nil (i.e. called from Apply), each desire's ObservedDesireUpdateTime is
-// compared against the write timestamp to detect stale status.
-func (c *Client) getStatus(ctx context.Context, targetCluster, groupKey string, specWriteTimes map[string]time.Time) (*transport.Status, error) {
+func (c *Client) getStatus(ctx context.Context, targetCluster, groupKey string) (*transport.Status, error) {
 	mc, err := c.clients(ctx, targetCluster)
 	if err != nil {
 		return nil, err
+	}
+
+	specsApplySnaps, err := mc.specs.Collection(collectionApplyDesires).
+		Where("spec.groupKey", "==", groupKey).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("firestore transport: GetStatus %s/%s query specs apply desires: %w", targetCluster, groupKey, err)
 	}
 
 	statusApplySnaps, err := mc.status.Collection(collectionApplyDesires).
@@ -202,6 +195,13 @@ func (c *Client) getStatus(ctx context.Context, targetCluster, groupKey string, 
 		Documents(ctx).GetAll()
 	if err != nil {
 		return nil, fmt.Errorf("firestore transport: GetStatus %s/%s query status apply desires: %w", targetCluster, groupKey, err)
+	}
+
+	specsReadSnaps, err := mc.specs.Collection(collectionReadDesires).
+		Where("spec.groupKey", "==", groupKey).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("firestore transport: GetStatus %s/%s query specs read desires: %w", targetCluster, groupKey, err)
 	}
 
 	statusReadSnaps, err := mc.status.Collection(collectionReadDesires).
@@ -212,30 +212,53 @@ func (c *Client) getStatus(ctx context.Context, targetCluster, groupKey string, 
 	}
 
 	stale := false
-	seenStatuses := make(map[string]struct{}, len(statusApplySnaps)+len(statusReadSnaps))
-	applyDesires := make([]kubeapplier.ApplyDesire, 0, len(statusApplySnaps))
+	statusApplyByID := make(map[string]*firestore.DocumentSnapshot, len(statusApplySnaps))
 	for _, snap := range statusApplySnaps {
+		statusApplyByID[snap.Ref.ID] = snap
+	}
+	applyDesires := make([]kubeapplier.ApplyDesire, 0, len(specsApplySnaps))
+	for _, specsSnap := range specsApplySnaps {
+		var specsAD kubeapplier.ApplyDesire
+		if err := specsSnap.DataTo(&specsAD); err != nil {
+			return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode specs apply desire %s: %w", targetCluster, groupKey, specsSnap.Ref.ID, err)
+		}
+		snap, ok := statusApplyByID[specsSnap.Ref.ID]
+		if !ok {
+			applyDesires = append(applyDesires, kubeapplier.ApplyDesire{Spec: specsAD.Spec})
+			stale = true
+			continue
+		}
 		var ad kubeapplier.ApplyDesire
 		if err := snap.DataTo(&ad); err != nil {
 			return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode apply desire %s: %w", targetCluster, groupKey, snap.Ref.ID, err)
 		}
-		key := collectionApplyDesires + "/" + snap.Ref.ID
-		seenStatuses[key] = struct{}{}
-		if wt, ok := specWriteTimes[key]; ok && ad.Status.ObservedDesireUpdateTime.Before(wt) {
+		if ad.Status.ObservedDesireUpdateTime.Before(specsSnap.UpdateTime) {
 			stale = true
 		}
 		applyDesires = append(applyDesires, ad)
 	}
 
-	readDesires := make([]kubeapplier.ReadDesire, 0, len(statusReadSnaps))
+	statusReadByID := make(map[string]*firestore.DocumentSnapshot, len(statusReadSnaps))
 	for _, snap := range statusReadSnaps {
+		statusReadByID[snap.Ref.ID] = snap
+	}
+	readDesires := make([]kubeapplier.ReadDesire, 0, len(specsReadSnaps))
+	for _, specsSnap := range specsReadSnaps {
+		var specsRD kubeapplier.ReadDesire
+		if err := specsSnap.DataTo(&specsRD); err != nil {
+			return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode specs read desire %s: %w", targetCluster, groupKey, specsSnap.Ref.ID, err)
+		}
+		snap, ok := statusReadByID[specsSnap.Ref.ID]
+		if !ok {
+			readDesires = append(readDesires, kubeapplier.ReadDesire{Spec: specsRD.Spec})
+			stale = true
+			continue
+		}
 		var rd kubeapplier.ReadDesire
 		if err := snap.DataTo(&rd); err != nil {
 			return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode read desire %s: %w", targetCluster, groupKey, snap.Ref.ID, err)
 		}
-		key := collectionReadDesires + "/" + snap.Ref.ID
-		seenStatuses[key] = struct{}{}
-		if wt, ok := specWriteTimes[key]; ok && rd.Status.ObservedDesireUpdateTime.Before(wt) {
+		if rd.Status.ObservedDesireUpdateTime.Before(specsSnap.UpdateTime) {
 			stale = true
 		}
 		// Manually decode status_kubeContent (stored as map[string]any at doc root).
@@ -247,13 +270,6 @@ func (c *Client) getStatus(ctx context.Context, targetCluster, groupKey string, 
 			rd.Status.KubeContent = &k8sruntime.RawExtension{Raw: raw}
 		}
 		readDesires = append(readDesires, rd)
-	}
-
-	for key := range specWriteTimes {
-		if _, ok := seenStatuses[key]; !ok {
-			stale = true
-			break
-		}
 	}
 
 	resourceStatuses, err := extractResourceStatuses(readDesires)
