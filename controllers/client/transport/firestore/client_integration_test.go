@@ -194,11 +194,13 @@ func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
 
 	const docID = "doc-1"
 
-	_, err = specsClient.Collection("applydesires").Doc(docID).Set(ctx, specsApplyDesire(testGroupKey, "my-hc"))
+	writeResult, err := specsClient.Collection("applydesires").Doc(docID).Set(ctx, specsApplyDesire(testGroupKey, "my-hc"))
 	require.NoError(t, err)
-	_, err = statusClient.Collection("applydesires").Doc(docID).Set(ctx, statusApplyDesire(testGroupKey, "my-hc", []metav1.Condition{
+	applyStatus := statusApplyDesire(testGroupKey, "my-hc", []metav1.Condition{
 		{Type: "Successful", Status: metav1.ConditionTrue, Reason: "NoErrors"},
-	}))
+	})
+	applyStatus.Status.ObservedDesireUpdateTime = writeResult.UpdateTime
+	_, err = statusClient.Collection("applydesires").Doc(docID).Set(ctx, applyStatus)
 	require.NoError(t, err)
 
 	status, err := c.GetStatus(ctx, testMCName, testGroupKey)
@@ -206,6 +208,7 @@ func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
 	require.Len(t, status.Conditions, 1)
 	assert.Equal(t, "Applied", status.Conditions[0].Type)
 	assert.Equal(t, metav1.ConditionTrue, status.Conditions[0].Status)
+	assert.False(t, status.Stale)
 }
 
 func TestIntegration_GetStatus_IsolatesApplyStatusesByGroupKey(t *testing.T) {
@@ -723,6 +726,85 @@ func TestIntegration_GetStatus_PendingWhenOneOfTwoApplyStatusesIsMissing(t *test
 	assert.Equal(t, metav1.ConditionFalse, status.Conditions[0].Status)
 	assert.Equal(t, "Pending", status.Conditions[0].Reason)
 	assert.True(t, status.Stale, "a missing expected Apply status must make the result stale")
+}
+
+func TestIntegration_GetStatus_StaleWhenOneOfTwoReadStatusesIsMissing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := newTestClient(t)
+	defer c.Close()
+	opts := emulatorOpts(t)
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	defer specsClient.Close()
+	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
+	require.NoError(t, err)
+	defer statusClient.Close()
+
+	collections := []string{"applydesires", "readdesires"}
+	for _, collection := range collections {
+		clearCollection(ctx, t, specsClient, collection)
+		clearCollection(ctx, t, statusClient, collection)
+	}
+	defer func() {
+		for _, collection := range collections {
+			clearCollection(ctx, t, specsClient, collection)
+			clearCollection(ctx, t, statusClient, collection)
+		}
+	}()
+
+	manifests := [][]byte{
+		hcManifest(t, testClusterID, "my-hc"),
+		configMapManifest(t, "clusters-"+testClusterID, "cluster-config"),
+	}
+	_, err = c.Apply(ctx, testMCName, testGroupKey, manifests)
+	require.NoError(t, err)
+
+	applySnaps, err := specsClient.Collection("applydesires").
+		Where("spec.groupKey", "==", testGroupKey).
+		Documents(ctx).GetAll()
+	require.NoError(t, err)
+	require.Len(t, applySnaps, 2)
+	for _, snap := range applySnaps {
+		var applyDesire kubeapplier.ApplyDesire
+		require.NoError(t, snap.DataTo(&applyDesire))
+		applyDesire.Status = kubeapplier.ApplyDesireStatus{
+			Conditions:               []metav1.Condition{{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionTrue}},
+			ObservedDesireUpdateTime: snap.UpdateTime,
+		}
+		_, err = statusClient.Collection("applydesires").Doc(snap.Ref.ID).Set(ctx, applyDesire)
+		require.NoError(t, err)
+	}
+
+	readSnaps, err := specsClient.Collection("readdesires").
+		Where("spec.groupKey", "==", testGroupKey).
+		Documents(ctx).GetAll()
+	require.NoError(t, err)
+	require.Len(t, readSnaps, 2)
+	var processedRead kubeapplier.ReadDesire
+	require.NoError(t, readSnaps[0].DataTo(&processedRead))
+	processedRead.Status.ObservedDesireUpdateTime = readSnaps[0].UpdateTime
+	_, err = statusClient.Collection("readdesires").Doc(readSnaps[0].Ref.ID).Set(ctx, processedRead)
+	require.NoError(t, err)
+
+	var missingRead kubeapplier.ReadDesire
+	require.NoError(t, readSnaps[1].DataTo(&missingRead))
+	missingKey := transport.ResourceKey(
+		missingRead.Spec.TargetItem.Group,
+		missingRead.Spec.TargetItem.Version,
+		missingRead.Spec.TargetItem.Resource,
+		missingRead.Spec.TargetItem.Namespace,
+		missingRead.Spec.TargetItem.Name,
+	)
+
+	status, err := c.GetStatus(ctx, testMCName, testGroupKey)
+	require.NoError(t, err)
+	require.Len(t, status.Conditions, 1)
+	assert.Equal(t, metav1.ConditionTrue, status.Conditions[0].Status)
+	assert.True(t, status.Stale, "a missing expected Read status must make the result stale")
+	require.Contains(t, status.ResourceStatuses, missingKey)
+	assert.Empty(t, status.ResourceStatuses[missingKey])
 }
 
 // hcManifestNS builds a HostedCluster manifest with an explicit namespace,

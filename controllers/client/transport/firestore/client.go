@@ -116,7 +116,7 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 
 	batch := mc.specs.BulkWriter(ctx)
 
-	var applyJobs, readJobs []*firestore.BulkWriterJob
+	var jobs []*firestore.BulkWriterJob
 
 	for _, raw := range manifests {
 		if len(raw) == 0 {
@@ -141,7 +141,7 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 		if err != nil {
 			return nil, fmt.Errorf("firestore transport: Apply %s/%s set apply desire: %w", targetCluster, groupKey, err)
 		}
-		applyJobs = append(applyJobs, job)
+		jobs = append(jobs, job)
 
 		// Write ReadDesire
 		readID, readData := buildReadDesireDoc(groupKey, targetCluster, ref)
@@ -150,17 +150,12 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 		if err != nil {
 			return nil, fmt.Errorf("firestore transport: Apply %s/%s set read desire: %w", targetCluster, groupKey, err)
 		}
-		readJobs = append(readJobs, job)
+		jobs = append(jobs, job)
 	}
 
 	batch.Flush()
 
-	for _, job := range applyJobs {
-		if _, err := job.Results(); err != nil {
-			return nil, fmt.Errorf("firestore transport: Apply %s/%s write error: %w", targetCluster, groupKey, err)
-		}
-	}
-	for _, job := range readJobs {
+	for _, job := range jobs {
 		if _, err := job.Results(); err != nil {
 			return nil, fmt.Errorf("firestore transport: Apply %s/%s write error: %w", targetCluster, groupKey, err)
 		}
@@ -168,16 +163,12 @@ func (c *Client) Apply(ctx context.Context, targetCluster, groupKey string, mani
 
 	c.log.Infof(ctx, "firestore transport: applied %d manifests for %s/%s", len(manifests), targetCluster, groupKey)
 
-	return c.getStatus(ctx, targetCluster, groupKey)
+	return c.GetStatus(ctx, targetCluster, groupKey)
 }
 
 // GetStatus compares expected Desire documents with the ApplyDesire and
 // ReadDesire statuses currently available for the given groupKey.
 func (c *Client) GetStatus(ctx context.Context, targetCluster, groupKey string) (*transport.Status, error) {
-	return c.getStatus(ctx, targetCluster, groupKey)
-}
-
-func (c *Client) getStatus(ctx context.Context, targetCluster, groupKey string) (*transport.Status, error) {
 	mc, err := c.clients(ctx, targetCluster)
 	if err != nil {
 		return nil, err
