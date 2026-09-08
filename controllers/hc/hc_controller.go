@@ -48,8 +48,11 @@ func New(transport transport.Client, log logger.Logger, c client.Client, custome
 
 // Reconcile runs the hc-controller loop for one cluster event.
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
-	clusterID := req.Name
-	log := r.log.With("controller", adapterName).With("cluster_id", clusterID)
+	groupKey, err := transport.ClusterGroupKey(req.Namespace, req.Name)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("build group key: %w", err)
+	}
+	log := r.log.With("controller", adapterName).With("cluster_id", req.Name)
 
 	var cluster privatev1.Cluster
 	if err := r.client.Get(ctx, req.NamespacedName, &cluster); err != nil {
@@ -141,7 +144,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// Build manifests.
 	// TODO: ClusterIDUUID and CreatedBy are not yet in the orlop ClusterSpec.
 	mwInput := manifest.Input{
-		ClusterID:            clusterID,
+		ClusterID:            req.Name,
 		ClusterName:          cluster.Name,
 		Generation:           cluster.Generation,
 		CreatedBy:            cluster.Annotations[constants.AnnotationCreatedBy],
@@ -173,14 +176,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("%s: build manifests: %w", adapterName, err)
 	}
 
-	mwStatus, err := r.transport.Apply(ctx, placement.ManagementClusterName, clusterID, manifests)
+	mwStatus, err := r.transport.Apply(ctx, placement.ManagementClusterName, groupKey, manifests)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("%s: apply resources: %w", adapterName, err)
 	}
 
 	// If status is stale, skip condition updates and requeue quickly.
 	if mwStatus != nil && mwStatus.Stale {
-		log.Infof(ctx, "hc-controller: cluster %s status is stale, requeueing after %s", clusterID, requeuePending)
+		log.Infof(ctx, "hc-controller: cluster %s status is stale, requeueing after %s", req.Name, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
@@ -195,16 +198,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, "ResourcesApplied") {
-		log.Infof(ctx, "hc-controller: cluster %s resources not yet applied, requeueing after %s", clusterID, requeuePending)
+		log.Infof(ctx, "hc-controller: cluster %s resources not yet applied, requeueing after %s", req.Name, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, "HostedClusterAvailable") {
-		log.Infof(ctx, "hc-controller: cluster %s not yet available, requeueing after %s", clusterID, requeuePending)
+		log.Infof(ctx, "hc-controller: cluster %s not yet available, requeueing after %s", req.Name, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
-	log.Infof(ctx, "hc-controller: cluster %s reconciled, requeueing after %s", clusterID, requeueStable)
+	log.Infof(ctx, "hc-controller: cluster %s reconciled, requeueing after %s", req.Name, requeueStable)
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
 }
 
@@ -219,15 +222,18 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 		return reconcile.Result{}, nil
 	}
 
-	clusterID := cluster.Name
-
 	// Only call transport.Delete if resources were applied to an MC.
 	if meta.FindStatusCondition(cluster.Status.Conditions, "ResourcesApplied") != nil &&
 		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
 		mcName := cluster.Status.PlacementResult.ManagementClusterName
 
+		groupKey, err := transport.ClusterGroupKey(cluster.Namespace, cluster.Name)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("%s: build group key: %w", adapterName, err)
+		}
+
 		// Check if deletion already in progress by querying delete status first.
-		deleteStatus, err := r.transport.GetDeleteStatus(ctx, mcName, clusterID)
+		deleteStatus, err := r.transport.GetDeleteStatus(ctx, mcName, groupKey)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("%s: get delete status: %w", adapterName, err)
 		}
@@ -236,11 +242,11 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 			// No DeleteDesires exist.
 			if deleteStatus.ApplyDesiresCount > 0 {
 				// ApplyDesires still present → deletion never started, call Delete().
-				log.Infof(ctx, "%s: deleting resources for cluster %s from %s", adapterName, clusterID, mcName)
-				if err := r.transport.Delete(ctx, mcName, clusterID); err != nil {
+				log.Infof(ctx, "%s: deleting resources for cluster %s from %s", adapterName, cluster.Name, mcName)
+				if err := r.transport.Delete(ctx, mcName, groupKey); err != nil {
 					return reconcile.Result{}, fmt.Errorf("%s: delete resources: %w", adapterName, err)
 				}
-				log.Infof(ctx, "%s: delete initiated for cluster %s, requeueing to poll status", adapterName, clusterID)
+				log.Infof(ctx, "%s: delete initiated for cluster %s, requeueing to poll status", adapterName, cluster.Name)
 				return reconcile.Result{RequeueAfter: requeuePending}, nil
 			}
 			// TotalCount=0 and ApplyDesiresCount=0 → deletion already complete (no-op), proceed to finalizer.
@@ -249,14 +255,14 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 		if !deleteStatus.AllSuccessful {
 			// Deletion in progress — wait for completion.
 			log.Infof(ctx, "%s: deletion in progress for cluster %s (%d/%d pending), requeueing",
-				adapterName, clusterID, deleteStatus.PendingCount, deleteStatus.TotalCount)
+				adapterName, cluster.Name, deleteStatus.PendingCount, deleteStatus.TotalCount)
 			return reconcile.Result{RequeueAfter: requeuePending}, nil
 		}
 
 		// All DeleteDesires successful — cleanup before removing finalizer.
 		log.Infof(ctx, "%s: deletion complete for cluster %s, cleaning up %d DeleteDesires",
-			adapterName, clusterID, deleteStatus.TotalCount)
-		if err := r.transport.CleanupDeleteDesires(ctx, mcName, clusterID); err != nil {
+			adapterName, cluster.Name, deleteStatus.TotalCount)
+		if err := r.transport.CleanupDeleteDesires(ctx, mcName, groupKey); err != nil {
 			return reconcile.Result{}, fmt.Errorf("%s: cleanup delete desires: %w", adapterName, err)
 		}
 	}
@@ -266,7 +272,7 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 		return reconcile.Result{}, fmt.Errorf("%s: remove finalizer: %w", adapterName, err)
 	}
 
-	log.Infof(ctx, "%s: finalizer removed for cluster %s", adapterName, clusterID)
+	log.Infof(ctx, "%s: finalizer removed for cluster %s", adapterName, cluster.Name)
 	return reconcile.Result{}, nil
 }
 

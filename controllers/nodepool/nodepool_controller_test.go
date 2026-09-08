@@ -160,6 +160,15 @@ func npReq(clusterID, nodepoolID string) reconcile.Request {
 	}
 }
 
+// mustNodePoolGroupKey returns the group key for a nodepool, panicking on error.
+func mustNodePoolGroupKey(namespace, clusterName, nodePoolName string) string {
+	key, err := transport.NodePoolGroupKey(namespace, clusterName, nodePoolName)
+	if err != nil {
+		panic(err)
+	}
+	return key
+}
+
 // conflictErr returns a Kubernetes conflict error.
 func conflictErr() error {
 	return apierrors.NewConflict(schema.GroupResource{Resource: "nodepools"}, "test", fmt.Errorf("conflict"))
@@ -442,7 +451,7 @@ func TestReconcile_NodeCountHonored(t *testing.T) {
 
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -467,7 +476,7 @@ func TestReconcile_DefaultNodeCount(t *testing.T) {
 
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -496,7 +505,7 @@ func TestReconcile_DefaultPlatformValues(t *testing.T) {
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -526,7 +535,7 @@ func TestReconcile_ZoneDerivedFromRegion(t *testing.T) {
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -595,9 +604,9 @@ func TestReconcile_HappyPath(t *testing.T) {
 	cluster := testCluster(true, true)
 
 	tr := mock.New()
-	nodepoolID := "np-test"
+	npGroupKey := mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
-	tr.StatusOverrides["mc-us-c1/"+nodepoolID] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+npGroupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -620,7 +629,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 
 	require.Len(t, tr.ApplyCalls, 1)
 	require.Equal(t, "mc-us-c1", tr.ApplyCalls[0].TargetCluster)
-	require.Equal(t, "np-test", tr.ApplyCalls[0].ClusterID)
+	require.Equal(t, npGroupKey, tr.ApplyCalls[0].GroupKey)
 	require.True(t, storeClient.statusWriter.called, "expected Status().Update to be called")
 
 	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
@@ -646,7 +655,7 @@ func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionFalse, Reason: "ApplyFailed"},
 		},
@@ -688,7 +697,7 @@ func TestReconcile_ResourcesApplied_ClusterNotAvailable_RequeuesPending(t *testi
 
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -714,7 +723,7 @@ func TestReconcile_ResourcesApplied_NodePoolNotAvailable_RequeuesPending(t *test
 
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -750,7 +759,7 @@ func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -774,7 +783,7 @@ func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	cluster := testCluster(true, true)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -797,7 +806,7 @@ func TestReconcile_StaleStatus_RequeuesPending(t *testing.T) {
 
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -885,7 +894,8 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
 
 	// Simulate ApplyDesires exist (deletion not started).
-	key := "mc-us-c1/np-test"
+	npGroupKey := mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")
+	key := "mc-us-c1/" + npGroupKey
 	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{
 		AllSuccessful:     false,
 		TotalCount:        0,
@@ -899,7 +909,7 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	require.Equal(t, 15*time.Second, result.RequeueAfter, "should requeue after initiating delete")
 	require.Len(t, tr.DeleteCalls, 1)
 	require.Equal(t, "mc-us-c1", tr.DeleteCalls[0].TargetCluster)
-	require.Equal(t, "np-test", tr.DeleteCalls[0].ClusterID)
+	require.Equal(t, npGroupKey, tr.DeleteCalls[0].GroupKey)
 	require.False(t, storeClient.updateCalled, "finalizer not removed yet")
 
 	// Simulate kube-applier-gcp completing deletion.
@@ -912,7 +922,7 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	require.Zero(t, result.RequeueAfter)
 	require.Len(t, tr.CleanupDeleteDesiresCalls, 1, "should cleanup DeleteDesires")
 	require.Equal(t, "mc-us-c1", tr.CleanupDeleteDesiresCalls[0].TargetCluster)
-	require.Equal(t, "np-test", tr.CleanupDeleteDesiresCalls[0].ClusterID)
+	require.Equal(t, npGroupKey, tr.CleanupDeleteDesiresCalls[0].GroupKey)
 
 	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
 	updated := storeClient.updated.(*privatev1.NodePool)
@@ -1020,7 +1030,8 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	r := New(tr, newTestLogger(t), storeClient)
 
 	// Simulate ApplyDesires exist (deletion not started).
-	key := "mc-us-c1/np-test"
+	npGroupKey := mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")
+	key := "mc-us-c1/" + npGroupKey
 	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{
 		AllSuccessful:     false,
 		TotalCount:        0,
@@ -1055,7 +1066,7 @@ func TestReconcile_Progressing_AllMachinesReadyFalse(t *testing.T) {
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -1085,7 +1096,7 @@ func TestReconcile_Progressing_AllMachinesReadyAbsent(t *testing.T) {
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -1115,7 +1126,7 @@ func TestReconcile_Progressing_UpdatingConfig(t *testing.T) {
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -1146,7 +1157,7 @@ func TestReconcile_Progressing_Priority_UpdatingConfigWins(t *testing.T) {
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -1178,7 +1189,7 @@ func TestReconcile_Progressing_UpdatingVersion(t *testing.T) {
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -1209,7 +1220,7 @@ func TestReconcile_Progressing_AsExpected(t *testing.T) {
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -1241,7 +1252,7 @@ func TestReconcile_Progressing_Priority_MachinesNotReadyWins(t *testing.T) {
 	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},

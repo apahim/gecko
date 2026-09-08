@@ -148,6 +148,15 @@ func clusterReq(name string) reconcile.Request {
 	}
 }
 
+// mustClusterGroupKey returns the group key for a cluster, panicking on error.
+func mustClusterGroupKey(namespace, clusterName string) string {
+	key, err := transport.ClusterGroupKey(namespace, clusterName)
+	if err != nil {
+		panic(err)
+	}
+	return key
+}
+
 // conflictErr returns a Kubernetes conflict error.
 func conflictErr() error {
 	return apierrors.NewConflict(schema.GroupResource{Resource: "clusters"}, "test", fmt.Errorf("conflict"))
@@ -463,12 +472,13 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 func TestReconcile_HappyPath(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
 	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
 		},
@@ -484,7 +494,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 	require.Equal(t, 5*time.Minute, result.RequeueAfter)
 	require.Len(t, tr.ApplyCalls, 1)
 	require.Equal(t, mcName, tr.ApplyCalls[0].TargetCluster)
-	require.Equal(t, clusterID, tr.ApplyCalls[0].ClusterID)
+	require.Equal(t, groupKey, tr.ApplyCalls[0].GroupKey)
 	require.True(t, storeClient.statusWriter.called, "expected Status().Update to be called")
 }
 
@@ -493,13 +503,14 @@ func TestReconcile_HappyPath(t *testing.T) {
 func TestReconcile_EndpointAccessPropagated(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.Spec.Platform.GCP.EndpointAccess = "PublicAndPrivate"
 
 	tr := mock.New()
 	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
 		},
@@ -528,12 +539,13 @@ func TestReconcile_EndpointAccessPropagated(t *testing.T) {
 func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
 	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
 		},
@@ -564,6 +576,7 @@ func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 func TestReconcile_CreatedByAnnotationPropagated(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.SetAnnotations(map[string]string{
@@ -572,7 +585,7 @@ func TestReconcile_CreatedByAnnotationPropagated(t *testing.T) {
 
 	tr := mock.New()
 	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
 		},
@@ -615,11 +628,12 @@ func TestReconcile_CreatedByAnnotationPropagated(t *testing.T) {
 func TestReconcile_MWNoAppliedCondition_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{} // no conditions at all
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{} // no conditions at all
 
 	r, _ := buildReconciler(t, cluster, nil, tr, nil)
 
@@ -633,11 +647,12 @@ func TestReconcile_MWNoAppliedCondition_RequeuesPending(t *testing.T) {
 func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionFalse, Reason: "ApplyFailed", LastTransitionTime: metav1.Now()},
 		},
@@ -656,11 +671,12 @@ func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 func TestReconcile_ResourcesApplied_NotYetAvailable_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
 		},
@@ -690,6 +706,7 @@ func TestReconcile_ResourcesApplied_NotYetAvailable_RequeuesPending(t *testing.T
 func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	// Pre-populate conditions to exactly match what applyStatusConditions would set,
@@ -701,7 +718,7 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	}
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -721,12 +738,13 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	// No prior conditions → applyStatusConditions will add them → returns true → Update called.
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -745,6 +763,7 @@ func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 	clusterID := "cluster-wif"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.Spec.Platform.GCP.WorkloadIdentity = privatev1.WorkloadIdentitySpec{
@@ -762,7 +781,7 @@ func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 	}
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -782,11 +801,12 @@ func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -806,11 +826,12 @@ func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 func TestReconcile_StaleStatus_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -878,6 +899,7 @@ func TestReconcile_AddFinalizer_UpdateError(t *testing.T) {
 func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
 		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
@@ -889,7 +911,7 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
 
 	// Simulate ApplyDesires exist (deletion not started).
-	key := mcName + "/" + clusterID
+	key := mcName + "/" + groupKey
 	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{
 		AllSuccessful:     false,
 		TotalCount:        0,
@@ -903,7 +925,7 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	require.Equal(t, 15*time.Second, result.RequeueAfter, "should requeue after initiating delete")
 	require.Len(t, tr.DeleteCalls, 1)
 	require.Equal(t, mcName, tr.DeleteCalls[0].TargetCluster)
-	require.Equal(t, clusterID, tr.DeleteCalls[0].ClusterID)
+	require.Equal(t, groupKey, tr.DeleteCalls[0].GroupKey)
 	require.False(t, storeClient.updateCalled, "finalizer not removed yet")
 
 	// Simulate kube-applier-gcp completing deletion.
@@ -916,7 +938,7 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	require.Zero(t, result.RequeueAfter)
 	require.Len(t, tr.CleanupDeleteDesiresCalls, 1, "should cleanup DeleteDesires")
 	require.Equal(t, mcName, tr.CleanupDeleteDesiresCalls[0].TargetCluster)
-	require.Equal(t, clusterID, tr.CleanupDeleteDesiresCalls[0].ClusterID)
+	require.Equal(t, groupKey, tr.CleanupDeleteDesiresCalls[0].GroupKey)
 
 	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
 	updated := storeClient.updated.(*privatev1.Cluster)
@@ -992,6 +1014,7 @@ func TestReconcile_Deletion_NoFinalizer(t *testing.T) {
 func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
 		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
@@ -1005,7 +1028,7 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	})
 
 	// Simulate ApplyDesires exist (deletion not started).
-	key := mcName + "/" + clusterID
+	key := mcName + "/" + groupKey
 	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{
 		AllSuccessful:     false,
 		TotalCount:        0,

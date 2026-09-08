@@ -128,7 +128,9 @@ func TestBuildApplyDesireDoc_Contents(t *testing.T) {
 	// spec sub-document
 	specMap, ok := data["spec"].(kubeapplier.ApplyDesireSpec)
 	require.True(t, ok, "spec must be ApplyDesireSpec")
-	assert.Equal(t, "cluster-abc", specMap.ClusterID)
+	assert.Empty(t, specMap.ClusterID)
+	assert.Empty(t, specMap.NodePoolName)
+	assert.Equal(t, "cluster-abc", specMap.GroupKey)
 	assert.Equal(t, "mc-prod", specMap.ManagementCluster)
 	assert.Equal(t, ref, specMap.TargetItem)
 	assert.Nil(t, specMap.KubeContent, "KubeContent in spec must be nil (stored in spec_kubeContent)")
@@ -145,7 +147,9 @@ func TestBuildReadDesireDoc(t *testing.T) {
 
 	spec, ok := data["spec"].(kubeapplier.ReadDesireSpec)
 	require.True(t, ok)
-	assert.Equal(t, "cluster-abc", spec.ClusterID)
+	assert.Empty(t, spec.ClusterID)
+	assert.Empty(t, spec.NodePoolName)
+	assert.Equal(t, "cluster-abc", spec.GroupKey)
 	assert.Equal(t, ref, spec.TargetItem)
 }
 
@@ -159,7 +163,9 @@ func TestBuildDeleteDesireDoc(t *testing.T) {
 
 	spec, ok := data["spec"].(kubeapplier.DeleteDesireSpec)
 	require.True(t, ok)
-	assert.Equal(t, "cluster-abc", spec.ClusterID)
+	assert.Empty(t, spec.ClusterID)
+	assert.Empty(t, spec.NodePoolName)
+	assert.Equal(t, "cluster-abc", spec.GroupKey)
 	assert.Equal(t, ref, spec.TargetItem)
 }
 

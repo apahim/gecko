@@ -126,8 +126,8 @@ github.com/onsi/ginkgo/v2 v2.32.1 h1:6tlvcDm/3sE8lGJbZ4+d4mO3RLy24/tQWOFzVSQNIfw
 github.com/onsi/ginkgo/v2 v2.32.1/go.mod h1:+aXOY+vzZ5mu2iI2HpTZUPmM//oQfsNFX6gU9kNcA44=
 github.com/onsi/gomega v1.43.0 h1:VlG/1FxqNxhSO+lq/OHBNaaqwiBK/mO8JbVkX9Y+FeU=
 github.com/onsi/gomega v1.43.0/go.mod h1:REff/hsDsodHoKlWsP2mAPhu1+5/6hVYNf9rIEBpeSg=
-github.com/openshift-online/kube-applier-gcp v0.0.0-20260813072616-b7a4c3c2d105 h1:uxttWKca3anZKVXO5g3L8i6zHjH4PUm386C44y3YKMY=
-github.com/openshift-online/kube-applier-gcp v0.0.0-20260813072616-b7a4c3c2d105/go.mod h1:+w7UfnSDbyZ6mHSG5oKini3tU4/cEgnHSSUz345MrK0=
+github.com/openshift-online/kube-applier-gcp v0.0.0-20260903184437-a0a17126d22a h1:ECEOkRYDih/xQ9yw4xrq+zv26mpGeHbCQlpP8s30RGo=
+github.com/openshift-online/kube-applier-gcp v0.0.0-20260903184437-a0a17126d22a/go.mod h1:yxXtXXqq/IvSsgDXJQcCs43tLoGuXHdPusnO6PcDCmo=
 github.com/planetscale/vtprotobuf v0.6.1-0.20260702190614-8ae5a48058df h1:x2ymdov8jnZLDPfI+VVcf/ZvzuZ2u36ieXTuQASMkWI=
 github.com/planetscale/vtprotobuf v0.6.1-0.20260702190614-8ae5a48058df/go.mod h1:araspv2uYKozbi5lrKaqpv1/Uei7eQSml8JCw2A3IRg=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
