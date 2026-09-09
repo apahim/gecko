@@ -13,7 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	fstransport "github.com/openshift-online/gecko/controllers/client/transport/firestore"
@@ -483,6 +485,45 @@ func TestIntegration_GetDeleteStatus_IsolatesByGroupKey(t *testing.T) {
 	assert.True(t, status.AllSuccessful)
 	assert.Zero(t, status.PendingCount)
 	assert.Equal(t, 1, status.TotalCount)
+}
+
+func TestIntegration_CleanupDeleteDesires_LeavesStatusDocumentsForKubeApplier(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := newTestClient(t)
+	defer c.Close()
+	opts := emulatorOpts(t)
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	defer specsClient.Close()
+	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
+	require.NoError(t, err)
+	defer statusClient.Close()
+
+	clearCollection(ctx, t, specsClient, "deletedesires")
+	clearCollection(ctx, t, statusClient, "deletedesires")
+	defer clearCollection(ctx, t, specsClient, "deletedesires")
+	defer clearCollection(ctx, t, statusClient, "deletedesires")
+
+	const documentID = "delete-1"
+	_, err = specsClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteDesire(testGroupKey, "hc-1", nil))
+	require.NoError(t, err)
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteDesire(testGroupKey, "hc-1", []metav1.Condition{
+		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionTrue},
+	}))
+	require.NoError(t, err)
+
+	require.NoError(t, c.CleanupDeleteDesires(ctx, testMCName, testGroupKey))
+
+	specSnap, err := specsClient.Collection("deletedesires").Doc(documentID).Get(ctx)
+	assert.NotNil(t, specSnap)
+	assert.False(t, specSnap.Exists())
+	assert.Equal(t, codes.NotFound, status.Code(err), "Gecko should remove the spec document")
+
+	statusSnap, err := statusClient.Collection("deletedesires").Doc(documentID).Get(ctx)
+	require.NoError(t, err)
+	assert.True(t, statusSnap.Exists(), "kube-applier owns status document cleanup")
 }
 
 // TestIntegration_Delete_ChunksLargeBatches verifies that Delete correctly
