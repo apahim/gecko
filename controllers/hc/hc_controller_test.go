@@ -966,7 +966,8 @@ func TestReconcile_Deletion_Pending(t *testing.T) {
 	cluster.SetDeletionTimestamp(&now)
 
 	tr := mock.New()
-	tr.DeleteStatusOverrides["mc-cluster-1/"+clusterID] = &transport.DeleteStatus{
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
+	tr.DeleteStatusOverrides["mc-cluster-1/"+groupKey] = &transport.DeleteStatus{
 		AllSuccessful: false,
 		TotalCount:    5,
 		PendingCount:  2,

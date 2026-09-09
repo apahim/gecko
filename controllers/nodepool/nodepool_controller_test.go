@@ -950,7 +950,8 @@ func TestReconcile_Deletion_Pending(t *testing.T) {
 	cluster := testCluster(true, true)
 
 	tr := mock.New()
-	tr.DeleteStatusOverrides["mc-us-c1/np-test"] = &transport.DeleteStatus{
+	groupKey := mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")
+	tr.DeleteStatusOverrides["mc-us-c1/"+groupKey] = &transport.DeleteStatus{
 		AllSuccessful: false,
 		TotalCount:    1,
 		PendingCount:  1,
