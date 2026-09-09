@@ -9,10 +9,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-logr/logr"
+	"golang.org/x/net/http2"
+
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/aggregated"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
-	"golang.org/x/net/http2"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/server/healthz"
@@ -32,10 +34,10 @@ type Server struct {
 // PrivateAPIOptions holds configuration for the private API server.
 // The private API always uses GenericAPIServer (aggregated mode).
 type PrivateAPIOptions struct {
-	Port      int
-	Resources []ResourceInfo
-	Scheme    *runtime.Scheme
-	Prefix    string // Optional: prefix for private labels/annotations/conditions filtered during conversion (defaults to conversion.DefaultPrivatePrefix)
+	Port                     int
+	Resources                []ResourceInfo
+	Scheme                   *runtime.Scheme
+	Prefix                   string // Optional: prefix for private labels/annotations/conditions filtered during conversion (defaults to conversion.DefaultPrivatePrefix)
 	TLSCertFile              string // TLS certificate file (auto-generated if empty)
 	TLSKeyFile               string // TLS private key file (auto-generated if empty)
 	AuthenticationKubeconfig string // Kubeconfig for delegated authn (in-cluster if empty)
@@ -59,7 +61,7 @@ type Options struct {
 	Private        PrivateAPIOptions
 	Public         PublicAPIOptions
 	StorageFactory StorageFactory
-	Logger         logr.Logger    // Optional: logger for server operations (defaults to discard logger)
+	Logger         logr.Logger // Optional: logger for server operations (defaults to discard logger)
 }
 
 // New creates a new API server with the given options.

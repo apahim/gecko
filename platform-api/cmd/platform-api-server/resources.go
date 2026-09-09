@@ -1,9 +1,10 @@
 package main
 
 import (
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 	publicv1 "github.com/openshift-online/gecko/platform-api/api/public/v1"
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
+
 	"k8s.io/apimachinery/pkg/runtime"
 )
 

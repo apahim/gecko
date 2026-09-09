@@ -1,0 +1,213 @@
+version: "2"
+
+run:
+  allow-parallel-runners: true
+  timeout: 5m
+
+linters:
+  enable:
+    - dupword
+    - durationcheck
+    - errorlint
+    - fatcontext
+    - gocyclo
+    - misspell
+    - nilerr
+    - noctx
+    - unparam
+    - usestdlibvars
+    - errcheck
+    - unused
+  # staticcheck (honnef.co/go/tools@v0.7.0) panics on go1.27 IR constructs
+  # (*ast.KeyValueExpr in the poll package). Disable until the upstream library
+  # adds go1.27 support.
+  disable:
+    - staticcheck
+  settings:
+    gocyclo:
+      min-complexity: 30
+    govet:
+      enable:
+        - nilness
+    misspell:
+      locale: US
+      # Kubernetes ecosystem uses "Creater" as a deliberate interface name.
+      ignore-rules:
+        - Creater
+    errcheck:
+      exclude-functions:
+        # HTTP response writes — errors are unrecoverable after headers are sent.
+        - (net/http.ResponseWriter).Write
+        - (*encoding/json.Encoder).Encode
+  exclusions:
+    warn-unused: true
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # ── errcheck ───────────────────────────────────────────────────────────
+      # Close()/Rollback()/Ping() calls in deferred positions — errors here are
+      # unrecoverable by the caller.
+      - linters:
+          - errcheck
+        text: 'Error return value of `.*\.(Close|Rollback|Ping)` is not checked'
+      # AddToScheme only errors on duplicate type registrations, a programming
+      # error that surfaces immediately at startup.
+      - linters:
+          - errcheck
+        text: 'Error return value is not checked'
+        source: 'AddToScheme'
+      # Watch/bookmark helpers propagate errors through the watch stream itself.
+      - linters:
+          - errcheck
+        text: 'Error return value of `.*\.(sendBookmark|sendInitialBookmarkIfCaughtUp)` is not checked'
+      # Tests routinely omit secondary error checks in helper functions where the
+      # primary assertion is on the response status code.
+      - linters:
+          - errcheck
+        path: '_test\.go$'
+
+      # ── errorlint ──────────────────────────────────────────────────────────
+      # Sentinel errors from stdlib (http, sql) and google/iterator are never
+      # wrapped by those packages, so == comparison is safe.
+      - linters:
+          - errorlint
+        text: 'comparing with .* will fail on wrapped errors'
+        source: '(http\.ErrServerClosed|sql\.ErrNoRows|iterator\.Done)'
+      # Existing %v usage in fmt.Errorf — migrating to %w is a separate effort.
+      - linters:
+          - errorlint
+        text: 'non-wrapping format verb for fmt\.Errorf'
+        path: '^(pkg/apiserver/handlers/patch|pkg/apiserver/storage/memory/broadcaster)\.go$'
+
+      # ── gocyclo ───────────────────────────────────────────────────────────
+      # Large integration / security tests have inherently high cyclomatic
+      # complexity. New production code must stay under the threshold.
+      - linters:
+          - gocyclo
+        path: '_test\.go$'
+      # Complex existing production functions — refactoring is a separate effort.
+      - linters:
+          - gocyclo
+        path: '^pkg/apiserver/(aggregated/openapi|storage/spanner/store)\.go$'
+
+      # ── govet ─────────────────────────────────────────────────────────────
+      # reflect.Ptr is deprecated; migration to reflect.Pointer is a separate
+      # effort and does not affect correctness.
+      - linters:
+          - govet
+        text: 'inline: Constant reflect\.Ptr'
+      # httpresponse: Body.Close() in deferred calls before the error check is
+      # idiomatic Go (err is checked immediately above the defer).
+      - linters:
+          - govet
+        text: 'httpresponse: using .* before checking for errors'
+        path: '_test\.go$'
+
+      # ── misspell ──────────────────────────────────────────────────────────
+      # British/Canadian spelling in existing Spanner comments.
+      - linters:
+          - misspell
+        text: '`(signalling|cancelled)` is a misspelling'
+        path: '^pkg/apiserver/storage/spanner/'
+      - linters:
+          - misspell
+        text: '`cancelled` is a misspelling'
+        path: '_test\.go$'
+
+      # ── nilerr ────────────────────────────────────────────────────────────
+      # Existing nilerr in conversions.go — fix separately.
+      - linters:
+          - nilerr
+        path: '^pkg/generator/conversions\.go$'
+
+      # ── noctx ─────────────────────────────────────────────────────────────
+      # Tests spin up short-lived in-memory servers; context-free API calls are
+      # acceptable within bounded test lifetimes.
+      - linters:
+          - noctx
+        path: '_test\.go$'
+      # Existing production noctx in the GC binary — fix separately.
+      - linters:
+          - noctx
+        path: '^cmd/orlop-gc/main\.go$'
+
+      # ── unparam ───────────────────────────────────────────────────────────
+      - linters:
+          - unparam
+        path: '_test\.go$'
+      # Known always-nil error returns in existing router/table API surface.
+      - linters:
+          - unparam
+        text: 'result .* \(error\) is always nil'
+        path: '^pkg/apiserver/(aggregated/table|router)\.go$'
+      - linters:
+          - unparam
+        text: '- result 1 \(error\) is always nil'
+        path: '^pkg/apiserver/router\.go$'
+      # Existing unused parameter in handler — fix in a separate PR.
+      - linters:
+          - unparam
+        text: 'shardSelector is unused'
+        path: '^pkg/apiserver/handlers/watch\.go$'
+      - linters:
+          - unparam
+        text: 'publicImportPath is unused'
+        path: '^pkg/generator/conversions\.go$'
+      - linters:
+          - unparam
+        text: 'appendWhere - result'
+        path: '^pkg/apiserver/storage/spanner/querybuilder\.go$'
+
+      # ── unused ────────────────────────────────────────────────────────────
+      # localSchemeBuilder is assigned for side-effects in the Kubernetes scheme
+      # registration pattern (required by controller-runtime).
+      - linters:
+          - unused
+        text: 'var localSchemeBuilder is unused'
+      # Unused struct fields throughout existing code — fix separately.
+      - linters:
+          - unused
+        text: 'field .* is unused'
+      # Unused helper functions kept for future use.
+      - linters:
+          - unused
+        text: 'func .* is unused'
+        path: '^(pkg/apiserver/router\.go|pkg/generator/(generator|schemas)\.go)$'
+      - linters:
+          - unused
+        path: '_test\.go$'
+
+      # ── usestdlibvars ─────────────────────────────────────────────────────
+      # Existing test files use string HTTP method literals — migrating to
+      # http.MethodXxx constants is a separate cleanup effort.
+      - linters:
+          - usestdlibvars
+        path: '_test\.go$'
+
+    paths:
+      - apis/public/
+
+severity:
+  default: error
+
+formatters:
+  enable:
+    - gci
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/openshift-online/gecko)
+        - prefix(k8s.io)
+        - prefix(sigs.k8s.io)
+      custom-order: true
+  exclusions:
+    warn-unused: true
+    generated: lax
+    paths:
+      - apis/public/

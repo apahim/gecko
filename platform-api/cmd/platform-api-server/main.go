@@ -14,11 +14,13 @@ import (
 
 	"github.com/go-logr/stdr"
 	_ "github.com/lib/pq"
+
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/postgres"
 	spannerbackend "github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/spanner"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -148,7 +150,7 @@ func main() {
 		}
 		defer db.Close()
 
-		if err := db.Ping(); err != nil {
+		if err := db.PingContext(context.Background()); err != nil {
 			log.Fatalf("Failed to connect to database: %v", err)
 		}
 

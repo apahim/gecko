@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -79,9 +80,9 @@ func TestWatchBuffer_GetEventsSince_FiltersByRV(t *testing.T) {
 	buf.Add(makeEvent(storage.EventAdded, "4"))
 
 	tests := []struct {
-		name     string
-		sinceRV  string
-		wantLen  int
+		name      string
+		sinceRV   string
+		wantLen   int
 		wantFirst string
 	}{
 		{

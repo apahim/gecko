@@ -9,11 +9,13 @@ import (
 	"sync/atomic"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -82,10 +84,10 @@ type MemoryStore struct {
 	resourceType           string
 	objects                map[string]client.Object // key -> object
 	scheme                 *runtime.Scheme          // For creating list objects
-	gvk                    schema.GroupVersionKind   // For list metadata
-	resourceVersionCounter atomic.Int64              // Per-resource version counter
-	broadcaster            storage.EventBroadcaster  // Pluggable event broadcaster
-	contextFilterKey       any                       // Optional context key for filtering
+	gvk                    schema.GroupVersionKind  // For list metadata
+	resourceVersionCounter atomic.Int64             // Per-resource version counter
+	broadcaster            storage.EventBroadcaster // Pluggable event broadcaster
+	contextFilterKey       any                      // Optional context key for filtering
 }
 
 // contextFilterValue extracts the filter value from the context.

@@ -4,6 +4,7 @@ import (
 	privatev1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
 	publicv1 "github.com/openshift-online/gecko/orlop/apis/public/test/v1"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
+
 	"k8s.io/apimachinery/pkg/runtime"
 )
 

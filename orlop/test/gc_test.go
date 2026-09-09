@@ -111,7 +111,7 @@ func TestGarbageCollection(t *testing.T) {
 		// and delete the dependent object. For this test, we're just verifying
 		// that the owner reference is set correctly. The actual GC would need to
 		// be running as a separate process (orlop-gc binary).
-		
+
 		// For now, just verify the dependent still has the owner reference
 		finalGetResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + dependentName)
 		if finalGetResp.StatusCode != http.StatusOK {

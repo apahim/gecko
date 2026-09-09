@@ -10,17 +10,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-logr/logr"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/handlers"
+	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+
 	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	extschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
-	"sigs.k8s.io/yaml"
 
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/handlers"
-	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+	"sigs.k8s.io/yaml"
 )
 
 func TestParentFilterMiddleware(t *testing.T) {
@@ -319,4 +321,3 @@ func TestNestedRoute_DeleteWrongParent(t *testing.T) {
 		t.Fatalf("expected 404 for wrong parent, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
-

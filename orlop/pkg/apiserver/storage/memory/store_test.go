@@ -4,13 +4,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // contextKey is a local type for context filter keys in tests.

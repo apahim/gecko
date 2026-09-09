@@ -3,11 +3,11 @@ package handlers
 import (
 	"testing"
 
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	privatev1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
 	privatev2 "github.com/openshift-online/gecko/orlop/apis/private/test/v2"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 var (

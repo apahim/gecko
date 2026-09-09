@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
 	"sigs.k8s.io/controller-tools/pkg/crd"
 	"sigs.k8s.io/controller-tools/pkg/genall"
 	"sigs.k8s.io/controller-tools/pkg/loader"
@@ -245,7 +246,7 @@ func (g *Generator) generateSchemaGoFile(outputPath, packageDir string, schemas 
 		source.WriteString(fmt.Sprintf("\tSingular:   %q,\n", s.singular))
 		source.WriteString(fmt.Sprintf("\tNamespaced: %t,\n", s.namespaced))
 		source.WriteString(fmt.Sprintf("\tSchemaYAML: %sSchemaYAML,\n", s.typeName))
-		
+
 		// Add printer columns if present
 		if len(s.printerColumns) > 0 {
 			source.WriteString("\tPrinterColumns: []types.PrinterColumn{\n")
@@ -267,7 +268,7 @@ func (g *Generator) generateSchemaGoFile(outputPath, packageDir string, schemas 
 			}
 			source.WriteString("\t},\n")
 		}
-		
+
 		source.WriteString("}\n\n")
 	}
 

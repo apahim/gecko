@@ -164,7 +164,7 @@ func TestStrategicMergePatch(t *testing.T) {
 		}
 
 		spec := result["spec"].(map[string]interface{})
-		
+
 		// Top-level fields should be preserved
 		if spec["publicField"] != "original" {
 			t.Errorf("Expected publicField 'original' to be preserved, got %v", spec["publicField"])

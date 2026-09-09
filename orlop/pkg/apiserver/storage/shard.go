@@ -2,12 +2,13 @@ package storage
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"encoding/binary"
+	"fmt"
+	"strconv"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strconv"
 )
 
 // ComputeObjectShard computes which shard (0 to shardCount-1) an object belongs to.

@@ -14,17 +14,20 @@ import (
 	"cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 	instance "cloud.google.com/go/spanner/admin/instance/apiv1"
 	"cloud.google.com/go/spanner/admin/instance/apiv1/instancepb"
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -85,12 +88,12 @@ const (
 )
 
 var (
-	sharedClient    *spanner.Client
-	sharedDBAdmin   *database.DatabaseAdminClient
-	sharedDBPath    string
-	resourcesTable  string
-	countersTable   string
-	testCounterSeq  atomic.Int64
+	sharedClient   *spanner.Client
+	sharedDBAdmin  *database.DatabaseAdminClient
+	sharedDBPath   string
+	resourcesTable string
+	countersTable  string
+	testCounterSeq atomic.Int64
 )
 
 func TestMain(m *testing.M) {

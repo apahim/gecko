@@ -5,13 +5,14 @@ import (
 	"strings"
 	"testing"
 
+	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
+
 	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"sigs.k8s.io/yaml"
 
-	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
+	"sigs.k8s.io/yaml"
 )
 
 func newProcessor(t *testing.T, schemaYAML string) *pkgschema.Processor {

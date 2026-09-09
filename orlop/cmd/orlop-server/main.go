@@ -11,19 +11,21 @@ import (
 	"time"
 
 	"github.com/go-logr/stdr"
+
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func main() {
 	var (
-		address     string
-		privatePort int
-		publicPort  int
-		corsOrigins string
+		address      string
+		privatePort  int
+		publicPort   int
+		corsOrigins  string
 		enablePublic bool
 		disableAuth  bool
 	)

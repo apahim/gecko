@@ -10,6 +10,7 @@ import (
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/managedfields"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 )
@@ -52,13 +53,13 @@ func NewManager(scheme *runtime.Scheme, openAPISchema *apiextschema.Structural, 
 	// Create field manager using default CRD field manager
 	fieldMgr, err := managedfields.NewDefaultCRDFieldManager(
 		typeConverter,
-		scheme,          // ObjectConvertor
-		scheme,          // ObjectDefaulter
-		scheme,          // ObjectCreater
-		gvk,             // GroupVersionKind
+		scheme,             // ObjectConvertor
+		scheme,             // ObjectDefaulter
+		scheme,             // ObjectCreater
+		gvk,                // GroupVersionKind
 		gvk.GroupVersion(), // hub version
-		"",              // subresource (empty for main resource)
-		nil,             // resetFields
+		"",                 // subresource (empty for main resource)
+		nil,                // resetFields
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create field manager: %w", err)
@@ -217,7 +218,6 @@ func (m *Manager) applyUpdate(current client.Object, applyObj client.Object, fie
 
 	return nil, fmt.Errorf("unexpected result type: %T", result)
 }
-
 
 // structuralToOpenAPIV3 converts a structural schema to OpenAPI v3 schema
 func structuralToOpenAPIV3(structural *apiextschema.Structural, gvk runtimeschema.GroupVersionKind) *spec.Schema {

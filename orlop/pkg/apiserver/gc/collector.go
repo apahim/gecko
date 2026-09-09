@@ -6,11 +6,14 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -112,7 +115,7 @@ func (c *Collector) collectGarbage() {
 		// Check each object for orphaned owner references
 		for _, item := range items {
 			checked++
-			
+
 			obj, ok := item.(client.Object)
 			if !ok {
 				continue
@@ -133,8 +136,8 @@ func (c *Collector) collectGarbage() {
 			for _, ownerRef := range ownerRefs {
 				exists, err := c.ownerExists(ownerRef, accessor.GetNamespace())
 				if err != nil {
-					c.logger.Error(err, "Failed to check owner existence", 
-						"object", accessor.GetName(), 
+					c.logger.Error(err, "Failed to check owner existence",
+						"object", accessor.GetName(),
 						"namespace", accessor.GetNamespace(),
 						"owner", ownerRef.Name)
 					continue

@@ -509,7 +509,6 @@ func (g *Generator) rewriteImports(file *ast.File) {
 	}
 }
 
-
 func (g *Generator) filterFile(file *ast.File) *ast.File {
 	newFile := &ast.File{
 		Name:    file.Name,

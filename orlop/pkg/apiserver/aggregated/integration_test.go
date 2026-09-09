@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+
 	testv1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -53,7 +55,7 @@ func setupIntegrationTestWithConfig(t *testing.T, mutate func(*Config)) *integra
 	resources := []types.ResourceInfo{testv1.ObjectResourceInfo}
 
 	cfg := Config{
-		Scheme: scheme,
+		Scheme:    scheme,
 		Resources: resources,
 		StorageFactory: func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
 			return memory.NewMemoryStore(resourceType, scheme, gvk), nil

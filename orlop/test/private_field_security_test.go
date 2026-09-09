@@ -17,6 +17,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -285,7 +286,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		name := "create-inject-labels"
 		obj := baseObj(name)
 		meta(obj)["labels"] = map[string]interface{}{
-			"app":                                    "myapp",
+			"app": "myapp",
 			"private.orlop.gcp.managed.openshift.io/secret": "should-be-stripped",
 		}
 
@@ -313,7 +314,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		name := "create-inject-annot"
 		obj := baseObj(name)
 		meta(obj)["annotations"] = map[string]interface{}{
-			"note":                                        "public",
+			"note": "public",
 			"private.orlop.gcp.managed.openshift.io/sync": "should-be-stripped",
 		}
 
@@ -404,7 +405,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		spec(privObj)["internalField"] = "secret"
 		spec(privObj)["nested"].(map[string]interface{})["internalField"] = "nested-secret"
 		meta(privObj)["labels"] = map[string]interface{}{
-			"app":                                    "myapp",
+			"app": "myapp",
 			"private.orlop.gcp.managed.openshift.io/owner": "system",
 		}
 		meta(privObj)["annotations"] = map[string]interface{}{
@@ -468,7 +469,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		updateObj := baseObj(name)
 		meta(updateObj)["resourceVersion"] = rv(pub)
 		meta(updateObj)["labels"] = map[string]interface{}{
-			"app":                                      "updated",
+			"app": "updated",
 			"private.orlop.gcp.managed.openshift.io/injected": "attack",
 		}
 
@@ -566,7 +567,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		priv := privateGet(t, name)
 		privMeta := meta(priv)
 		privMeta["labels"] = map[string]interface{}{
-			"app":                                    "myapp",
+			"app": "myapp",
 			"private.orlop.gcp.managed.openshift.io/owner": "controller",
 		}
 		privateUpdate(t, name, priv)
@@ -596,7 +597,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 
 		priv := privateGet(t, name)
 		meta(priv)["annotations"] = map[string]interface{}{
-			"note":                                        "public-note",
+			"note": "public-note",
 			"private.orlop.gcp.managed.openshift.io/sync": "done",
 		}
 		privateUpdate(t, name, priv)
@@ -995,8 +996,8 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		priv := privateGet(t, name)
 		privMeta := meta(priv)
 		privMeta["labels"] = map[string]interface{}{
-			"app":                                          "myapp",
-			"env":                                          "staging",
+			"app": "myapp",
+			"env": "staging",
 			"private.orlop.gcp.managed.openshift.io/owner": "controller",
 		}
 		privateUpdate(t, name, priv)
@@ -1037,8 +1038,8 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		priv := privateGet(t, name)
 		privMeta := meta(priv)
 		privMeta["annotations"] = map[string]interface{}{
-			"note":                                        "keep",
-			"temp":                                        "remove-me",
+			"note": "keep",
+			"temp": "remove-me",
 			"private.orlop.gcp.managed.openshift.io/sync": "done",
 		}
 		privateUpdate(t, name, priv)
@@ -1076,7 +1077,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		priv := privateGet(t, name)
 		privMeta := meta(priv)
 		privMeta["labels"] = map[string]interface{}{
-			"app":                                          "myapp",
+			"app": "myapp",
 			"private.orlop.gcp.managed.openshift.io/owner": "controller",
 		}
 		privateUpdate(t, name, priv)
@@ -1134,12 +1135,12 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		// Create via private API with ALL private field types
 		privObj := baseObj(name)
 		meta(privObj)["labels"] = map[string]interface{}{
-			"app":                                          "myapp",
+			"app": "myapp",
 			"private.orlop.gcp.managed.openshift.io/owner": "controller",
 		}
 		meta(privObj)["annotations"] = map[string]interface{}{
-			"note":                                         "public-note",
-			"private.orlop.gcp.managed.openshift.io/sync":  "done",
+			"note": "public-note",
+			"private.orlop.gcp.managed.openshift.io/sync": "done",
 		}
 		meta(privObj)["finalizers"] = []string{"test.io/fin"}
 		spec(privObj)["internalField"] = "secret-data"
@@ -1228,11 +1229,11 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		// Create via private API with all private fields
 		privObj := baseObj(name)
 		meta(privObj)["labels"] = map[string]interface{}{
-			"app":                                          "myapp",
+			"app": "myapp",
 			"private.orlop.gcp.managed.openshift.io/owner": "controller",
 		}
 		meta(privObj)["annotations"] = map[string]interface{}{
-			"note":                                        "visible",
+			"note": "visible",
 			"private.orlop.gcp.managed.openshift.io/sync": "done",
 		}
 		meta(privObj)["finalizers"] = []string{"test.io/fin"}
@@ -1337,11 +1338,11 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		// Create via private API with all private fields + finalizer (for soft-delete)
 		privObj := baseObj(name)
 		meta(privObj)["labels"] = map[string]interface{}{
-			"app":                                          "myapp",
+			"app": "myapp",
 			"private.orlop.gcp.managed.openshift.io/owner": "controller",
 		}
 		meta(privObj)["annotations"] = map[string]interface{}{
-			"note":                                        "visible",
+			"note": "visible",
 			"private.orlop.gcp.managed.openshift.io/sync": "done",
 		}
 		meta(privObj)["finalizers"] = []string{"test.io/prevent-delete"}
@@ -1638,11 +1639,11 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		name := "h9-get-leak"
 		privObj := baseObj(name)
 		meta(privObj)["labels"] = map[string]interface{}{
-			"app":                                          "myapp",
+			"app": "myapp",
 			"private.orlop.gcp.managed.openshift.io/owner": "controller",
 		}
 		meta(privObj)["annotations"] = map[string]interface{}{
-			"note":                                        "visible",
+			"note": "visible",
 			"private.orlop.gcp.managed.openshift.io/sync": "done",
 		}
 		meta(privObj)["finalizers"] = []string{"test.io/fin"}
@@ -1708,7 +1709,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		name := "m1-create-resp"
 		obj := baseObj(name)
 		meta(obj)["labels"] = map[string]interface{}{
-			"app":                                          "myapp",
+			"app": "myapp",
 			"private.orlop.gcp.managed.openshift.io/owner": "attack",
 		}
 		meta(obj)["annotations"] = map[string]interface{}{
@@ -1825,7 +1826,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 
 	t.Run("Update/StatusBlocked/existing_status_preserved", func(t *testing.T) {
 		name := "update-status-blocked"
-		
+
 		// Create via private API with status
 		privObj := baseObj(name)
 		privObj["status"] = map[string]interface{}{
@@ -1846,7 +1847,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		// Verify controller-set status preserved
 		priv := privateGet(t, name)
 		conds := conditions(priv)
-		
+
 		foundReady := false
 		foundPrivateSync := false
 		foundFailed := false
@@ -1867,7 +1868,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 				}
 			}
 		}
-		
+
 		if !foundReady {
 			t.Errorf("Ready condition lost after public Update (should be preserved). Conditions: %v", conds)
 		}

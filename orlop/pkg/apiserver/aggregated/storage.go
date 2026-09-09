@@ -6,8 +6,10 @@ import (
 	"regexp"
 
 	"github.com/go-logr/logr"
+
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -19,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -57,14 +60,14 @@ func NewResourceStorage(
 	printerColumns []types.PrinterColumn,
 ) *ResourceStorage {
 	gr := runtimeschema.GroupResource{Group: gvk.Group, Resource: plural}
-	
+
 	var tableConvertor rest.TableConvertor
 	if len(printerColumns) > 0 {
 		tableConvertor = NewCustomTableConvertor(gr, printerColumns)
 	} else {
 		tableConvertor = rest.NewDefaultTableConvertor(gr)
 	}
-	
+
 	return &ResourceStorage{
 		store:          store,
 		strategy:       strategy,
@@ -378,8 +381,8 @@ func NewStatusStorage(store *ResourceStorage) *StatusStorage {
 	return &StatusStorage{store: store}
 }
 
-func (s *StatusStorage) New() runtime.Object     { return s.store.New() }
-func (s *StatusStorage) Destroy()                 {}
+func (s *StatusStorage) New() runtime.Object { return s.store.New() }
+func (s *StatusStorage) Destroy()            {}
 
 func (s *StatusStorage) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
 	return s.store.Get(ctx, name, options)

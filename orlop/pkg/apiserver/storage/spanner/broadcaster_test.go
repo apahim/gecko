@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -330,4 +331,3 @@ func TestBroadcaster_CloseShutdown(t *testing.T) {
 		t.Error("expected error subscribing to closed broadcaster")
 	}
 }
-

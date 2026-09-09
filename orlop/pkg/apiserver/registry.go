@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/apply"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/handlers"
@@ -12,11 +13,13 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
+
 	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
+
 	"sigs.k8s.io/yaml"
 )
 
@@ -265,7 +268,7 @@ func injectPublicMetadataSchema(s *schema.Structural) {
 	}
 
 	stringMapType := schema.Structural{
-		Generic:              schema.Generic{Type: "object"},
+		Generic: schema.Generic{Type: "object"},
 		AdditionalProperties: &schema.StructuralOrBool{
 			Structural: &schema.Structural{
 				Generic: schema.Generic{Type: "string"},

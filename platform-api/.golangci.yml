@@ -1,0 +1,93 @@
+version: "2"
+
+run:
+  allow-parallel-runners: true
+  timeout: 5m
+
+linters:
+  enable:
+    - dupword
+    - durationcheck
+    - errorlint
+    - fatcontext
+    - gocyclo
+    - misspell
+    - nilerr
+    - noctx
+    - unparam
+    - usestdlibvars
+    - errcheck
+    - unused
+  # staticcheck (honnef.co/go/tools@v0.7.0) panics on go1.27 IR constructs
+  # (*ast.KeyValueExpr in the poll package). Disable until the upstream library
+  # adds go1.27 support.
+  disable:
+    - staticcheck
+  settings:
+    gocyclo:
+      min-complexity: 30
+    govet:
+      enable:
+        - nilness
+    misspell:
+      locale: US
+    errcheck:
+      exclude-functions:
+        # HTTP response writes — errors are unrecoverable after headers are sent.
+        - (net/http.ResponseWriter).Write
+        - (*encoding/json.Encoder).Encode
+  exclusions:
+    warn-unused: true
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # ── errcheck ───────────────────────────────────────────────────────────
+      # Close() calls in deferred positions — errors are unrecoverable.
+      - linters:
+          - errcheck
+        text: 'Error return value of `.*\.Close` is not checked'
+      # AddToScheme only errors on duplicate type registrations, caught at startup.
+      - linters:
+          - errcheck
+        text: 'Error return value is not checked'
+        source: 'AddToScheme'
+      - linters:
+          - errcheck
+        path: '_test\.go$'
+      # ── unused ────────────────────────────────────────────────────────────
+      # localSchemeBuilder is a side-effect assignment in the scheme registration
+      # pattern required by controller-runtime.
+      - linters:
+          - unused
+        text: 'var localSchemeBuilder is unused'
+      # ── unparam ───────────────────────────────────────────────────────────
+      - linters:
+          - unparam
+        path: '_test\.go$'
+    paths:
+      - api/public/
+
+severity:
+  default: error
+
+formatters:
+  enable:
+    - gci
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/openshift-online/gecko)
+        - prefix(k8s.io)
+        - prefix(sigs.k8s.io)
+      custom-order: true
+  exclusions:
+    warn-unused: true
+    generated: lax
+    paths:
+      - api/public/
