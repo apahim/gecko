@@ -408,7 +408,7 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 		}
 		for _, cond := range dd.Status.Conditions {
 			if cond.Type == kubeapplier.ConditionTypeSuccessful && cond.Status == "True" {
-				if !dd.Status.ObservedDesireUpdateTime.Before(specUpdateTimes[snap.Ref.ID]) {
+				if dd.Status.ObservedDesireUpdateTime.Equal(specUpdateTimes[snap.Ref.ID]) {
 					successful[snap.Ref.ID] = true
 				}
 				break

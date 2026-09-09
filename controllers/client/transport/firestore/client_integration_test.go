@@ -469,11 +469,13 @@ func TestIntegration_GetDeleteStatus_IsolatesByGroupKey(t *testing.T) {
 
 	otherGroupKey, err := transport.ClusterGroupKey("other-ns", testClusterID)
 	require.NoError(t, err)
-	_, err = specsClient.Collection("deletedesires").Doc("delete-1").Set(ctx, deleteDesire(testGroupKey, "hc-1", nil))
+	writeResult, err := specsClient.Collection("deletedesires").Doc("delete-1").Set(ctx, deleteDesire(testGroupKey, "hc-1", nil))
 	require.NoError(t, err)
-	_, err = statusClient.Collection("deletedesires").Doc("delete-1").Set(ctx, deleteDesire(testGroupKey, "hc-1", []metav1.Condition{
+	deleteStatus := deleteDesire(testGroupKey, "hc-1", []metav1.Condition{
 		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionTrue},
-	}))
+	})
+	deleteStatus.Status.ObservedDesireUpdateTime = writeResult.UpdateTime
+	_, err = statusClient.Collection("deletedesires").Doc("delete-1").Set(ctx, deleteStatus)
 	require.NoError(t, err)
 	_, err = statusClient.Collection("deletedesires").Doc("delete-other").Set(ctx, deleteDesire(otherGroupKey, "hc-2", []metav1.Condition{
 		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionFalse},
@@ -535,7 +537,7 @@ func TestIntegration_CleanupDeleteDesires_LeavesStatusDocumentsForKubeApplier(t 
 	assert.True(t, statusSnap.Exists(), "kube-applier-gcp owns status document cleanup")
 }
 
-func TestIntegration_GetDeleteStatus_IgnoresStaleStatusFromPreviousDeleteCycle(t *testing.T) {
+func TestIntegration_GetDeleteStatus_RequiresExactStatusRevision(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	c := newTestClient(t)
@@ -571,6 +573,26 @@ func TestIntegration_GetDeleteStatus_IgnoresStaleStatusFromPreviousDeleteCycle(t
 	require.NoError(t, err)
 	assert.False(t, result.AllSuccessful, "a status from an earlier DeleteDesire must not complete the current cycle")
 	assert.Equal(t, 1, result.PendingCount)
+	assert.Equal(t, 1, result.TotalCount)
+
+	deleteStatus.Status.ObservedDesireUpdateTime = specSnap.UpdateTime.Add(time.Second)
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteStatus)
+	require.NoError(t, err)
+
+	result, err = c.GetDeleteStatus(ctx, testMCName, testGroupKey)
+	require.NoError(t, err)
+	assert.False(t, result.AllSuccessful, "a status for a different DeleteDesire revision must not complete the current cycle")
+	assert.Equal(t, 1, result.PendingCount)
+	assert.Equal(t, 1, result.TotalCount)
+
+	deleteStatus.Status.ObservedDesireUpdateTime = specSnap.UpdateTime
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteStatus)
+	require.NoError(t, err)
+
+	result, err = c.GetDeleteStatus(ctx, testMCName, testGroupKey)
+	require.NoError(t, err)
+	assert.True(t, result.AllSuccessful, "a status observing the current DeleteDesire revision must complete the current cycle")
+	assert.Zero(t, result.PendingCount)
 	assert.Equal(t, 1, result.TotalCount)
 }
 
