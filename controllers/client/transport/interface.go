@@ -51,6 +51,6 @@ type Client interface {
 	// GetDeleteStatus checks the status of delete operations for the given groupKey.
 	GetDeleteStatus(ctx context.Context, targetCluster, groupKey string) (*DeleteStatus, error)
 	// CleanupDeleteDesires removes DeleteDesire spec documents for the given groupKey.
-	// kube-applier owns cleanup of the corresponding status documents.
+	// kube-applier-gcp owns cleanup of the corresponding status documents.
 	CleanupDeleteDesires(ctx context.Context, targetCluster, groupKey string) error
 }

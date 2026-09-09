@@ -137,8 +137,9 @@ Controllers express intent (Apply/Read/Delete desires) in Firestore rather than 
 ### Finalizer-Based Async Deletion
 1. `Delete()` enqueues DeleteDesire documents
 2. Controller requeues, polling `GetDeleteStatus()` until all desires report success
-3. `CleanupDeleteDesires()` removes the DeleteDesire spec documents; kube-applier
-   cleans up the corresponding status documents
+3. `CleanupDeleteDesires()` removes the DeleteDesire spec documents; kube-applier-gcp
+   cleans up the corresponding status documents. Deploy its status-cleanup support
+   before this behavior so retained status records are reaped.
 4. Finalizer is removed, allowing Kubernetes garbage collection to complete
 
 ### Requeue Strategy

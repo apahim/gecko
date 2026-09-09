@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/option"
@@ -394,6 +395,11 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 		return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s query status: %w", targetCluster, groupKey, err)
 	}
 
+	specUpdateTimes := make(map[string]time.Time, len(specsSnaps))
+	for _, snap := range specsSnaps {
+		specUpdateTimes[snap.Ref.ID] = snap.UpdateTime
+	}
+
 	successful := make(map[string]bool, len(statusSnaps))
 	for _, snap := range statusSnaps {
 		var dd kubeapplier.DeleteDesire
@@ -402,7 +408,9 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 		}
 		for _, cond := range dd.Status.Conditions {
 			if cond.Type == kubeapplier.ConditionTypeSuccessful && cond.Status == "True" {
-				successful[snap.Ref.ID] = true
+				if !dd.Status.ObservedDesireUpdateTime.Before(specUpdateTimes[snap.Ref.ID]) {
+					successful[snap.Ref.ID] = true
+				}
 				break
 			}
 		}
@@ -424,7 +432,11 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 }
 
 // CleanupDeleteDesires removes all DeleteDesire spec documents for the given
-// groupKey. kube-applier owns cleanup of the corresponding status documents.
+// groupKey.
+//
+// Gecko has read-only access to the status database, so it must not delete
+// status documents here. kube-applier-gcp removes the corresponding status
+// documents after it observes that their spec documents are gone.
 func (c *Client) CleanupDeleteDesires(ctx context.Context, targetCluster, groupKey string) error {
 	mc, err := c.clients(ctx, targetCluster)
 	if err != nil {

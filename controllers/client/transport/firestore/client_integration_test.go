@@ -496,10 +496,58 @@ func TestIntegration_CleanupDeleteDesires_LeavesStatusDocumentsForKubeApplier(t 
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
 	require.NoError(t, err)
-	defer specsClient.Close()
+	t.Cleanup(func() { assert.NoError(t, specsClient.Close()) })
 	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
 	require.NoError(t, err)
-	defer statusClient.Close()
+	t.Cleanup(func() { assert.NoError(t, statusClient.Close()) })
+
+	clearCollection(ctx, t, specsClient, "deletedesires")
+	clearCollection(ctx, t, statusClient, "deletedesires")
+	defer clearCollection(ctx, t, specsClient, "deletedesires")
+	defer clearCollection(ctx, t, statusClient, "deletedesires")
+
+	const documentID = "delete-1"
+	otherGroupKey, err := transport.ClusterGroupKey("other-ns", testClusterID)
+	require.NoError(t, err)
+	_, err = specsClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteDesire(testGroupKey, "hc-1", nil))
+	require.NoError(t, err)
+	_, err = specsClient.Collection("deletedesires").Doc("delete-other").Set(ctx, deleteDesire(otherGroupKey, "hc-2", nil))
+	require.NoError(t, err)
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteDesire(testGroupKey, "hc-1", []metav1.Condition{
+		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionTrue},
+	}))
+	require.NoError(t, err)
+
+	require.NoError(t, c.CleanupDeleteDesires(ctx, testMCName, testGroupKey))
+	// Controllers retry cleanup after a transient finalizer-update failure.
+	require.NoError(t, c.CleanupDeleteDesires(ctx, testMCName, testGroupKey))
+
+	specSnap, err := specsClient.Collection("deletedesires").Doc(documentID).Get(ctx)
+	require.NotNil(t, specSnap)
+	assert.False(t, specSnap.Exists())
+	assert.Equal(t, codes.NotFound, status.Code(err), "Gecko should remove the spec document")
+	otherSpecSnap, err := specsClient.Collection("deletedesires").Doc("delete-other").Get(ctx)
+	require.NoError(t, err)
+	assert.True(t, otherSpecSnap.Exists(), "cleanup must not touch another groupKey's DeleteDesire")
+
+	statusSnap, err := statusClient.Collection("deletedesires").Doc(documentID).Get(ctx)
+	require.NoError(t, err)
+	assert.True(t, statusSnap.Exists(), "kube-applier-gcp owns status document cleanup")
+}
+
+func TestIntegration_GetDeleteStatus_IgnoresStaleStatusFromPreviousDeleteCycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := newTestClient(t)
+	defer c.Close()
+	opts := emulatorOpts(t)
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, specsClient.Close()) })
+	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, statusClient.Close()) })
 
 	clearCollection(ctx, t, specsClient, "deletedesires")
 	clearCollection(ctx, t, statusClient, "deletedesires")
@@ -509,21 +557,21 @@ func TestIntegration_CleanupDeleteDesires_LeavesStatusDocumentsForKubeApplier(t 
 	const documentID = "delete-1"
 	_, err = specsClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteDesire(testGroupKey, "hc-1", nil))
 	require.NoError(t, err)
-	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteDesire(testGroupKey, "hc-1", []metav1.Condition{
-		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionTrue},
-	}))
-	require.NoError(t, err)
-
-	require.NoError(t, c.CleanupDeleteDesires(ctx, testMCName, testGroupKey))
-
 	specSnap, err := specsClient.Collection("deletedesires").Doc(documentID).Get(ctx)
-	assert.NotNil(t, specSnap)
-	assert.False(t, specSnap.Exists())
-	assert.Equal(t, codes.NotFound, status.Code(err), "Gecko should remove the spec document")
-
-	statusSnap, err := statusClient.Collection("deletedesires").Doc(documentID).Get(ctx)
 	require.NoError(t, err)
-	assert.True(t, statusSnap.Exists(), "kube-applier owns status document cleanup")
+
+	deleteStatus := deleteDesire(testGroupKey, "hc-1", []metav1.Condition{
+		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionTrue},
+	})
+	deleteStatus.Status.ObservedDesireUpdateTime = specSnap.UpdateTime.Add(-time.Second)
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteStatus)
+	require.NoError(t, err)
+
+	result, err := c.GetDeleteStatus(ctx, testMCName, testGroupKey)
+	require.NoError(t, err)
+	assert.False(t, result.AllSuccessful, "a status from an earlier DeleteDesire must not complete the current cycle")
+	assert.Equal(t, 1, result.PendingCount)
+	assert.Equal(t, 1, result.TotalCount)
 }
 
 // TestIntegration_Delete_ChunksLargeBatches verifies that Delete correctly
