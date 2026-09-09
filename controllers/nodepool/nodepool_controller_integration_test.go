@@ -80,6 +80,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	cluster := testCluster(true, true)
 	cluster.SetNamespace(np.Namespace)
 	cluster.Status.PlacementResult.ManagementClusterName = project
+	groupKey := mustNodePoolGroupKey(np.Namespace, cluster.Name, np.Name)
 	r, storeClient := buildReconciler(t, np, cluster, transportClient, nil, nil, nil)
 
 	result, err := r.Reconcile(ctx, npReq(np.Spec.ClusterID, np.Name))
@@ -95,7 +96,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 		Name:      "np-test",
 	}
 	expectedID := desireid.NewDocumentID(
-		np.Name,
+		groupKey,
 		expectedTarget.Group,
 		expectedTarget.Version,
 		expectedTarget.Resource,
@@ -104,7 +105,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	)
 
 	applySnapshots, err := specsClient.Collection("applydesires").
-		Where("spec.clusterID", "==", np.Name).
+		Where("spec.groupKey", "==", groupKey).
 		Documents(ctx).GetAll()
 	require.NoError(t, err)
 	require.Len(t, applySnapshots, 1)
@@ -113,7 +114,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	var applyDesire kubeapplier.ApplyDesire
 	require.NoError(t, applySnapshots[0].DataTo(&applyDesire))
 	require.Equal(t, project, applyDesire.Spec.ManagementCluster)
-	require.Equal(t, np.Name, applyDesire.Spec.ClusterID)
+	require.Equal(t, groupKey, applyDesire.Spec.GroupKey)
 	require.Equal(t, expectedTarget, applyDesire.Spec.TargetItem)
 
 	content, ok := applySnapshots[0].Data()["spec_kubeContent"].(map[string]any)
@@ -147,7 +148,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	require.Equal(t, cluster.Spec.Platform.GCP.Subnet, gcp["subnet"])
 
 	readSnapshots, err := specsClient.Collection("readdesires").
-		Where("spec.clusterID", "==", np.Name).
+		Where("spec.groupKey", "==", groupKey).
 		Documents(ctx).GetAll()
 	require.NoError(t, err)
 	require.Len(t, readSnapshots, 1)
@@ -157,7 +158,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	require.Equal(t, expectedTarget, readDesire.Spec.TargetItem)
 
 	_, err = statusClient.Collection("applydesires").Doc(expectedID).Set(ctx, map[string]any{
-		"spec": kubeapplier.ApplyDesireSpec{},
+		"spec": applyDesire.Spec,
 		"status": kubeapplier.ApplyDesireStatus{
 			Conditions: []metav1.Condition{{
 				Type:   kubeapplier.ConditionTypeSuccessful,
@@ -169,7 +170,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, err = statusClient.Collection("readdesires").Doc(expectedID).Set(ctx, map[string]any{
-		"spec": kubeapplier.ReadDesireSpec{},
+		"spec": readDesire.Spec,
 		"status": kubeapplier.ReadDesireStatus{
 			ObservedDesireUpdateTime: readSnapshots[0].UpdateTime,
 		},

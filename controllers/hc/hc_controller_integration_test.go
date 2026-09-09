@@ -87,6 +87,7 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 	const clusterID = "cluster-integration"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.Status.PlacementResult.ManagementClusterName = project
+	groupKey := mustClusterGroupKey(cluster.Namespace, cluster.Name)
 	r, storeClient := buildReconciler(t, cluster, nil, transportClient, nil)
 
 	result, err := r.Reconcile(ctx, clusterReq(clusterID))
@@ -104,12 +105,12 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 	}
 	expectedByID := make(map[string]hcExpectedResource, len(expected))
 	for _, resource := range expected {
-		id := desireid.NewDocumentID(clusterID, resource.group, resource.version, resource.resource, resource.namespace, resource.name)
+		id := desireid.NewDocumentID(groupKey, resource.group, resource.version, resource.resource, resource.namespace, resource.name)
 		expectedByID[id] = resource
 	}
 
 	applySnapshots, err := specsClient.Collection("applydesires").
-		Where("spec.clusterID", "==", clusterID).
+		Where("spec.groupKey", "==", groupKey).
 		Documents(ctx).GetAll()
 	require.NoError(t, err)
 	require.Len(t, applySnapshots, len(expected))
@@ -120,7 +121,7 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 		var desire kubeapplier.ApplyDesire
 		require.NoError(t, snapshot.DataTo(&desire))
 		require.Equal(t, project, desire.Spec.ManagementCluster)
-		require.Equal(t, clusterID, desire.Spec.ClusterID)
+		require.Equal(t, groupKey, desire.Spec.GroupKey)
 		require.Equal(t, resource.group, desire.Spec.TargetItem.Group)
 		require.Equal(t, resource.version, desire.Spec.TargetItem.Version)
 		require.Equal(t, resource.resource, desire.Spec.TargetItem.Resource)
@@ -139,7 +140,7 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 	}
 
 	readSnapshots, err := specsClient.Collection("readdesires").
-		Where("spec.clusterID", "==", clusterID).
+		Where("spec.groupKey", "==", groupKey).
 		Documents(ctx).GetAll()
 	require.NoError(t, err)
 	require.Len(t, readSnapshots, len(expected))
@@ -154,8 +155,10 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 	}
 
 	for _, snapshot := range applySnapshots {
+		var desire kubeapplier.ApplyDesire
+		require.NoError(t, snapshot.DataTo(&desire))
 		_, err := statusClient.Collection("applydesires").Doc(snapshot.Ref.ID).Set(ctx, map[string]any{
-			"spec": kubeapplier.ApplyDesireSpec{},
+			"spec": desire.Spec,
 			"status": kubeapplier.ApplyDesireStatus{
 				Conditions: []metav1.Condition{{
 					Type:   kubeapplier.ConditionTypeSuccessful,
@@ -169,8 +172,10 @@ func TestIntegration_HC_ApplyAndStatusReadback(t *testing.T) {
 	}
 	for _, snapshot := range readSnapshots {
 		resource := expectedByID[snapshot.Ref.ID]
+		var desire kubeapplier.ReadDesire
+		require.NoError(t, snapshot.DataTo(&desire))
 		data := map[string]any{
-			"spec": kubeapplier.ReadDesireSpec{},
+			"spec": desire.Spec,
 			"status": kubeapplier.ReadDesireStatus{
 				ObservedDesireUpdateTime: snapshot.UpdateTime,
 			},

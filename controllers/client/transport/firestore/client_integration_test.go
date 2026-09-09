@@ -206,25 +206,26 @@ func TestIntegration_Apply_ManifestHandling(t *testing.T) {
 	defer c.Close()
 	opts := emulatorOpts(t)
 	project := uniqueIntegrationProject("apply")
+	groupKey := testGroupKey
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, project, "specs", opts...)
 	require.NoError(t, err)
 	closeFirestoreClient(t, specsClient)
 	cleanupCollections(t, []*firestore.Client{specsClient}, "applydesires", "readdesires")
 
-	_, err = c.Apply(ctx, project, testClusterID, [][]byte{nil})
+	_, err = c.Apply(ctx, project, groupKey, [][]byte{nil})
 	require.NoError(t, err)
 
-	_, err = c.Apply(ctx, project, testClusterID, [][]byte{[]byte(`{`)})
+	_, err = c.Apply(ctx, project, groupKey, [][]byte{[]byte(`{`)})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse manifest")
 
 	unknownManifest := []byte(`{"apiVersion":"custom.io/v1","kind":"Widget","metadata":{"name":"sample","namespace":"default"}}`)
-	_, err = c.Apply(ctx, project, testClusterID, [][]byte{unknownManifest})
+	_, err = c.Apply(ctx, project, groupKey, [][]byte{unknownManifest})
 	require.NoError(t, err)
 
 	snapshots, err := specsClient.Collection("applydesires").
-		Where("spec.clusterID", "==", testClusterID).
+		Where("spec.groupKey", "==", groupKey).
 		Documents(ctx).GetAll()
 	require.NoError(t, err)
 	require.Len(t, snapshots, 1)
@@ -732,6 +733,7 @@ func TestIntegration_DeleteStatusAndCleanup(t *testing.T) {
 	defer c.Close()
 	opts := emulatorOpts(t)
 	project := uniqueIntegrationProject("delete")
+	groupKey := testGroupKey
 
 	specsClient, err := firestore.NewClientWithDatabase(ctx, project, "specs", opts...)
 	require.NoError(t, err)
@@ -742,30 +744,30 @@ func TestIntegration_DeleteStatusAndCleanup(t *testing.T) {
 
 	cleanupCollections(t, []*firestore.Client{specsClient, statusClient}, "applydesires", "readdesires", "deletedesires")
 
-	status, err := c.GetDeleteStatus(ctx, project, testClusterID)
+	status, err := c.GetDeleteStatus(ctx, project, groupKey)
 	require.NoError(t, err)
 	assert.True(t, status.AllSuccessful)
 	assert.Zero(t, status.TotalCount)
 	assert.Zero(t, status.ApplyDesiresCount)
-	require.NoError(t, c.Delete(ctx, project, testClusterID))
+	require.NoError(t, c.Delete(ctx, project, groupKey))
 
-	_, err = c.Apply(ctx, project, testClusterID, [][]byte{npManifest(t, testClusterID, "delete-status-np")})
+	_, err = c.Apply(ctx, project, groupKey, [][]byte{npManifest(t, testClusterID, "delete-status-np")})
 	require.NoError(t, err)
-	status, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	status, err = c.GetDeleteStatus(ctx, project, groupKey)
 	require.NoError(t, err)
 	assert.False(t, status.AllSuccessful)
 	assert.Zero(t, status.TotalCount)
 	assert.Equal(t, 1, status.ApplyDesiresCount)
 
-	require.NoError(t, c.Delete(ctx, project, testClusterID))
+	require.NoError(t, c.Delete(ctx, project, groupKey))
 	deleteSnapshots, err := specsClient.Collection("deletedesires").
-		Where("spec.clusterID", "==", testClusterID).
+		Where("spec.groupKey", "==", groupKey).
 		Documents(ctx).GetAll()
 	require.NoError(t, err)
 	require.Len(t, deleteSnapshots, 1)
 	documentID := deleteSnapshots[0].Ref.ID
 
-	status, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	status, err = c.GetDeleteStatus(ctx, project, groupKey)
 	require.NoError(t, err)
 	assert.False(t, status.AllSuccessful)
 	assert.Equal(t, 1, status.PendingCount)
@@ -773,74 +775,73 @@ func TestIntegration_DeleteStatusAndCleanup(t *testing.T) {
 	assert.Zero(t, status.ApplyDesiresCount)
 
 	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, map[string]any{
+		"spec":   kubeapplier.DeleteDesireSpec{GroupKey: groupKey},
 		"status": "not-a-delete-desire-status",
 	})
 	require.NoError(t, err)
-	_, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	_, err = c.GetDeleteStatus(ctx, project, groupKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode")
 
-	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, kubeapplier.DeleteDesire{
-		Status: kubeapplier.DeleteDesireStatus{Conditions: []metav1.Condition{{
-			Type:   kubeapplier.ConditionTypeSuccessful,
-			Status: metav1.ConditionFalse,
-			Reason: "DeleteFailed",
-		}}},
-	})
+	deleteStatus := deleteDesire(groupKey, "delete-status-np", []metav1.Condition{{
+		Type:   kubeapplier.ConditionTypeSuccessful,
+		Status: metav1.ConditionFalse,
+		Reason: "DeleteFailed",
+	}})
+	deleteStatus.Status.ObservedDesireUpdateTime = deleteSnapshots[0].UpdateTime
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteStatus)
 	require.NoError(t, err)
-	status, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	status, err = c.GetDeleteStatus(ctx, project, groupKey)
 	require.NoError(t, err)
 	assert.False(t, status.AllSuccessful)
 	assert.Equal(t, 1, status.PendingCount)
 
-	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, kubeapplier.DeleteDesire{
-		Status: kubeapplier.DeleteDesireStatus{Conditions: []metav1.Condition{{
-			Type:   kubeapplier.ConditionTypeSuccessful,
-			Status: metav1.ConditionTrue,
-			Reason: "NoErrors",
-		}}},
-	})
+	deleteStatus.Status.Conditions[0].Status = metav1.ConditionTrue
+	deleteStatus.Status.Conditions[0].Reason = "NoErrors"
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteStatus)
 	require.NoError(t, err)
-	status, err = c.GetDeleteStatus(ctx, project, testClusterID)
+	status, err = c.GetDeleteStatus(ctx, project, groupKey)
 	require.NoError(t, err)
 	assert.True(t, status.AllSuccessful)
 	assert.Zero(t, status.PendingCount)
 	assert.Equal(t, 1, status.TotalCount)
 
-	require.NoError(t, c.CleanupDeleteDesires(ctx, project, testClusterID))
-	for _, client := range []*firestore.Client{specsClient, statusClient} {
-		remaining, err := client.Collection("deletedesires").Documents(ctx).GetAll()
-		require.NoError(t, err)
-		assert.Empty(t, remaining)
-	}
-	require.NoError(t, c.CleanupDeleteDesires(ctx, project, testClusterID))
+	require.NoError(t, c.CleanupDeleteDesires(ctx, project, groupKey))
+	remainingSpecs, err := specsClient.Collection("deletedesires").Documents(ctx).GetAll()
+	require.NoError(t, err)
+	assert.Empty(t, remainingSpecs)
+	remainingStatuses, err := statusClient.Collection("deletedesires").Documents(ctx).GetAll()
+	require.NoError(t, err)
+	assert.Len(t, remainingStatuses, 1, "kube-applier-gcp owns status document cleanup")
+	require.NoError(t, c.CleanupDeleteDesires(ctx, project, groupKey))
 
 	_, err = specsClient.Collection("applydesires").Doc("malformed-apply-desire").Set(ctx, map[string]any{
 		"spec": map[string]any{
-			"clusterID":  testClusterID,
+			"groupKey":   groupKey,
 			"targetItem": "not-a-resource-reference",
 		},
 	})
 	require.NoError(t, err)
-	_, err = c.GetStatus(ctx, project, testClusterID)
+	_, err = c.GetStatus(ctx, project, groupKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode specs apply desire")
-	err = c.Delete(ctx, project, testClusterID)
+	err = c.Delete(ctx, project, groupKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode apply desire")
 	_, err = specsClient.Collection("applydesires").Doc("malformed-apply-desire").Delete(ctx)
 	require.NoError(t, err)
 
 	const malformedStatusID = "malformed-status"
-	malformedStatusSpec := specsApplyDesire(testClusterID, "malformed-status")
+	malformedStatusSpec := specsApplyDesire(groupKey, "malformed-status")
 	malformedStatusSpec.Spec.ManagementCluster = project
 	_, err = specsClient.Collection("applydesires").Doc(malformedStatusID).Set(ctx, malformedStatusSpec)
 	require.NoError(t, err)
 	_, err = statusClient.Collection("applydesires").Doc(malformedStatusID).Set(ctx, map[string]any{
+		"spec":   kubeapplier.ApplyDesireSpec{GroupKey: groupKey},
 		"status": "not-an-apply-desire-status",
 	})
 	require.NoError(t, err)
-	_, err = c.GetStatus(ctx, project, testClusterID)
+	_, err = c.GetStatus(ctx, project, groupKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode apply desire")
 	_, err = specsClient.Collection("applydesires").Doc(malformedStatusID).Delete(ctx)
@@ -848,7 +849,7 @@ func TestIntegration_DeleteStatusAndCleanup(t *testing.T) {
 
 	readSpec := kubeapplier.ReadDesire{Spec: kubeapplier.ReadDesireSpec{
 		ManagementCluster: project,
-		ClusterID:         testClusterID,
+		GroupKey:          groupKey,
 		TargetItem: kubeapplier.ResourceReference{
 			Group: "hypershift.openshift.io", Version: "v1beta1", Resource: "hostedclusters", Namespace: "clusters-abc", Name: "malformed-status",
 		},
@@ -856,19 +857,21 @@ func TestIntegration_DeleteStatusAndCleanup(t *testing.T) {
 	_, err = specsClient.Collection("readdesires").Doc(malformedStatusID).Set(ctx, readSpec)
 	require.NoError(t, err)
 	_, err = statusClient.Collection("readdesires").Doc(malformedStatusID).Set(ctx, map[string]any{
+		"spec":   readSpec.Spec,
 		"status": "not-a-read-desire-status",
 	})
 	require.NoError(t, err)
-	_, err = c.GetStatus(ctx, project, testClusterID)
+	_, err = c.GetStatus(ctx, project, groupKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode read desire")
 
 	_, err = statusClient.Collection("readdesires").Doc(malformedStatusID).Set(ctx, map[string]any{
+		"spec":               readSpec.Spec,
 		"status":             kubeapplier.ReadDesireStatus{},
 		"status_kubeContent": map[string]any{"status": "not-an-object"},
 	})
 	require.NoError(t, err)
-	_, err = c.GetStatus(ctx, project, testClusterID)
+	_, err = c.GetStatus(ctx, project, groupKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "extract resource status")
 }
