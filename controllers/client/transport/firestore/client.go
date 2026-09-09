@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/option"
@@ -394,6 +395,11 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 		return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s query status: %w", targetCluster, groupKey, err)
 	}
 
+	specUpdateTimes := make(map[string]time.Time, len(specsSnaps))
+	for _, snap := range specsSnaps {
+		specUpdateTimes[snap.Ref.ID] = snap.UpdateTime
+	}
+
 	successful := make(map[string]bool, len(statusSnaps))
 	for _, snap := range statusSnaps {
 		var dd kubeapplier.DeleteDesire
@@ -402,7 +408,9 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 		}
 		for _, cond := range dd.Status.Conditions {
 			if cond.Type == kubeapplier.ConditionTypeSuccessful && cond.Status == "True" {
-				successful[snap.Ref.ID] = true
+				if dd.Status.ObservedDesireUpdateTime.Equal(specUpdateTimes[snap.Ref.ID]) {
+					successful[snap.Ref.ID] = true
+				}
 				break
 			}
 		}
@@ -423,8 +431,12 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 	}, nil
 }
 
-// CleanupDeleteDesires removes all DeleteDesire documents for the given groupKey
-// from both specs and status DBs.
+// CleanupDeleteDesires removes all DeleteDesire spec documents for the given
+// groupKey.
+//
+// Gecko has read-only access to the status database, so it must not delete
+// status documents here. kube-applier-gcp removes the corresponding status
+// documents after it observes that their spec documents are gone.
 func (c *Client) CleanupDeleteDesires(ctx context.Context, targetCluster, groupKey string) error {
 	mc, err := c.clients(ctx, targetCluster)
 	if err != nil {
@@ -438,25 +450,14 @@ func (c *Client) CleanupDeleteDesires(ctx context.Context, targetCluster, groupK
 		return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s query specs: %w", targetCluster, groupKey, err)
 	}
 
-	statusSnaps, err := mc.status.Collection(collectionDeleteDesires).
-		Where("spec.groupKey", "==", groupKey).
-		Documents(ctx).GetAll()
-	if err != nil {
-		return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s query status: %w", targetCluster, groupKey, err)
-	}
-
-	if len(specsSnaps) == 0 && len(statusSnaps) == 0 {
+	if len(specsSnaps) == 0 {
 		c.log.Infof(ctx, "firestore transport: CleanupDeleteDesires %s/%s: no delete desires found", targetCluster, groupKey)
 		return nil
 	}
 
 	// Delete in batches (Firestore batch write limit = 500).
-	// Use separate BulkWriters: specs and status refs have same shortPath (deletedesires/<id>),
-	// BulkWriter rejects duplicate paths.
 	specsBatch := mc.specs.BulkWriter(ctx)
-	statusBatch := mc.status.BulkWriter(ctx)
 	var specsJobs []*firestore.BulkWriterJob
-	var statusJobs []*firestore.BulkWriterJob
 
 	for _, snap := range specsSnaps {
 		job, err := specsBatch.Delete(snap.Ref)
@@ -465,16 +466,8 @@ func (c *Client) CleanupDeleteDesires(ctx context.Context, targetCluster, groupK
 		}
 		specsJobs = append(specsJobs, job)
 	}
-	for _, snap := range statusSnaps {
-		job, err := statusBatch.Delete(snap.Ref)
-		if err != nil {
-			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s delete status: %w", targetCluster, groupKey, err)
-		}
-		statusJobs = append(statusJobs, job)
-	}
 
 	specsBatch.Flush()
-	statusBatch.Flush()
 
 	// Check job results.
 	for _, job := range specsJobs {
@@ -482,13 +475,8 @@ func (c *Client) CleanupDeleteDesires(ctx context.Context, targetCluster, groupK
 			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s specs write error: %w", targetCluster, groupKey, err)
 		}
 	}
-	for _, job := range statusJobs {
-		if _, err := job.Results(); err != nil {
-			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s status write error: %w", targetCluster, groupKey, err)
-		}
-	}
 
-	c.log.Infof(ctx, "firestore transport: cleaned up %d specs and %d status delete desires for %s/%s", len(specsSnaps), len(statusSnaps), targetCluster, groupKey)
+	c.log.Infof(ctx, "firestore transport: cleaned up %d delete desire specs for %s/%s", len(specsSnaps), targetCluster, groupKey)
 	return nil
 }
 
