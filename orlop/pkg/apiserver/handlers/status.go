@@ -1,14 +1,17 @@
 package handlers
 
 import (
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
 	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 

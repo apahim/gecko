@@ -16,6 +16,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -236,7 +237,7 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 			t.Fatalf("Create request failed: %v", err)
 		}
 		defer createResp.Body.Close()
-		
+
 		if createResp.StatusCode != http.StatusCreated {
 			body, _ := io.ReadAll(createResp.Body)
 			t.Fatalf("Create via public API failed: %d - %s", createResp.StatusCode, body)
@@ -260,7 +261,7 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 
 		privateMetadata := privateObj["metadata"].(map[string]interface{})
 		privateMetadata["finalizers"] = []string{"test.orlop.gcp.managed.openshift.io/my-finalizer"}
-		
+
 		updateJSON, _ := json.Marshal(privateObj)
 		updateReq, _ := http.NewRequest("PUT", privateURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name, bytes.NewBuffer(updateJSON))
 		updateReq.Header.Set("Content-Type", "application/json")
@@ -277,7 +278,7 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err := updateResp.Body.Close(); err != nil {
 			t.Logf("warning: failed to close response body: %v", err)
 		}
-		
+
 		// Debug: check if finalizer was actually set
 		updateMeta := updateResult["metadata"].(map[string]interface{})
 		if fins, ok := updateMeta["finalizers"]; !ok {

@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,9 +9,14 @@ import (
 
 	"github.com/evanphx/json-patch/v5"
 	"github.com/go-chi/chi/v5"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 

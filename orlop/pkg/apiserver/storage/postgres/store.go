@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -688,8 +690,8 @@ func isDuplicateKeyError(err error) bool {
 	}
 	// PostgreSQL error code 23505 is unique_violation
 	return err.Error() != "" && (
-		// Check for common duplicate key error messages
-		contains(err.Error(), "duplicate key") ||
+	// Check for common duplicate key error messages
+	contains(err.Error(), "duplicate key") ||
 		contains(err.Error(), "unique constraint") ||
 		contains(err.Error(), "23505"))
 }
@@ -697,7 +699,7 @@ func isDuplicateKeyError(err error) bool {
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) &&
 		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
-		 findSubstring(s, substr)))
+			findSubstring(s, substr)))
 }
 
 func findSubstring(s, substr string) bool {

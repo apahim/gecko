@@ -9,7 +9,6 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 )
 
-
 // WatchBuffer stores recent events for a resource type to allow watch synchronization.
 type WatchBuffer struct {
 	mu     sync.RWMutex

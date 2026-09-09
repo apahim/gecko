@@ -6,11 +6,13 @@ import (
 	"reflect"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	generatedopenapi "github.com/openshift-online/gecko/orlop/pkg/generated/openapi"
+
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	openapicommon "k8s.io/kube-openapi/pkg/common"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
 	"sigs.k8s.io/yaml"
 )
 

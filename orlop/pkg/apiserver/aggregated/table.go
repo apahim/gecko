@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -166,4 +167,3 @@ func extractItems(obj runtime.Object) ([]runtime.Object, error) {
 	// Single object
 	return []runtime.Object{obj}, nil
 }
-

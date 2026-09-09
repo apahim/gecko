@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
+
 	testv1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -149,7 +151,7 @@ func TestPrepareForUpdate_PreservesMetadata(t *testing.T) {
 			Namespace:         "default",
 			UID:               "preserved-uid",
 			Generation:        2,
-			CreationTimestamp:  creationTime,
+			CreationTimestamp: creationTime,
 		},
 		Spec: testv1.ObjectSpec{
 			PublicField: "value",
@@ -222,9 +224,9 @@ func TestPrepareForUpdate_PreservesDeletionTimestamp(t *testing.T) {
 			Namespace:         "default",
 			UID:               "old-uid",
 			Generation:        2,
-			DeletionTimestamp:  &deletionTime,
+			DeletionTimestamp: &deletionTime,
 			Finalizers:        []string{"test-finalizer"},
-			CreationTimestamp:  metav1.Time{Time: metav1.Now().Add(-1 * 60 * 1e9)},
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-1 * 60 * 1e9)},
 		},
 		Spec: testv1.ObjectSpec{
 			PublicField: "value",
@@ -262,7 +264,7 @@ func TestPrepareForUpdate_NoDeletionTimestamp(t *testing.T) {
 			Namespace:         "default",
 			UID:               "old-uid",
 			Generation:        2,
-			CreationTimestamp:  metav1.Time{Time: metav1.Now().Add(-1 * 60 * 1e9)},
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-1 * 60 * 1e9)},
 		},
 		Spec: testv1.ObjectSpec{
 			PublicField: "value",
@@ -338,7 +340,7 @@ func TestPrepareForUpdate_CallsCustomDefaulter(t *testing.T) {
 			Namespace:         "default",
 			UID:               "old-uid",
 			Generation:        1,
-			CreationTimestamp:  metav1.Time{Time: metav1.Now().Add(-1 * 60 * 1e9)},
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-1 * 60 * 1e9)},
 		},
 		Spec: testv1.ObjectSpec{PublicField: "value"},
 	}
@@ -529,7 +531,7 @@ func TestPrepareForUpdate_PreservesCreatedByAnnotation(t *testing.T) {
 			Namespace:         "default",
 			UID:               "old-uid",
 			Generation:        1,
-			CreationTimestamp:  metav1.Time{Time: metav1.Now().Add(-1 * 60 * 1e9)},
+			CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-1 * 60 * 1e9)},
 			Annotations: map[string]string{
 				constants.AnnotationCreatedBy: "original@example.com",
 			},

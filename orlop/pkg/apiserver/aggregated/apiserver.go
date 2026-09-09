@@ -8,6 +8,7 @@ import (
 
 	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
+
 	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 	apiopenapi "k8s.io/apiserver/pkg/endpoints/openapi"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -24,7 +26,7 @@ import (
 	"k8s.io/apiserver/pkg/util/compatibility"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	basecompatibility "k8s.io/component-base/compatibility"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+
 	"sigs.k8s.io/yaml"
 )
 

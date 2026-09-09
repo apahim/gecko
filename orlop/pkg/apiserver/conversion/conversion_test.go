@@ -115,10 +115,10 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 			},
 			privateObj: newTestObject(
 				withLabels(map[string]string{
-					"app":                                     "myapp",
-					"private.orlop.gcp.managed.openshift.io/secret":  "hidden",
-					"private.orlop.gcp.managed.openshift.io/owner":   "system",
-					"public-label":                            "visible",
+					"app": "myapp",
+					"private.orlop.gcp.managed.openshift.io/secret": "hidden",
+					"private.orlop.gcp.managed.openshift.io/owner":  "system",
+					"public-label": "visible",
 				}),
 			),
 			validate: func(t *testing.T, obj runtime.Object) {
@@ -146,10 +146,10 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 			},
 			privateObj: newTestObject(
 				withAnnotations(map[string]string{
-					"description":                                  "public",
+					"description": "public",
 					"private.orlop.gcp.managed.openshift.io/internal-id":  "12345",
 					"private.orlop.gcp.managed.openshift.io/tracking-key": "xyz",
-					"public-annotation":                            "visible",
+					"public-annotation": "visible",
 				}),
 			),
 			validate: func(t *testing.T, obj runtime.Object) {
@@ -360,7 +360,7 @@ func TestConverter_PublicToPrivate(t *testing.T) {
 					"internalField": "preserved",
 				}),
 				withLabels(map[string]string{
-					"app":                                    "original",
+					"app": "original",
 					"private.orlop.gcp.managed.openshift.io/owner": "system",
 				}),
 			),
@@ -446,10 +446,10 @@ func TestConverter_FilterPrivateMetadata(t *testing.T) {
 			name: "filters only private labels",
 			obj: newTestObject(
 				withLabels(map[string]string{
-					"app":                                     "myapp",
-					"private.orlop.gcp.managed.openshift.io/secret":  "hidden",
-					"tier":                                    "frontend",
-					"private.orlop.gcp.managed.openshift.io/owner":   "system",
+					"app": "myapp",
+					"private.orlop.gcp.managed.openshift.io/secret": "hidden",
+					"tier": "frontend",
+					"private.orlop.gcp.managed.openshift.io/owner": "system",
 				}),
 			),
 			validate: func(t *testing.T, obj *unstructured.Unstructured) {
@@ -469,9 +469,9 @@ func TestConverter_FilterPrivateMetadata(t *testing.T) {
 			name: "filters only private annotations",
 			obj: newTestObject(
 				withAnnotations(map[string]string{
-					"description":                                  "public desc",
-					"private.orlop.gcp.managed.openshift.io/internal-id":  "12345",
-					"public-ann":                                   "visible",
+					"description": "public desc",
+					"private.orlop.gcp.managed.openshift.io/internal-id": "12345",
+					"public-ann": "visible",
 					"private.orlop.gcp.managed.openshift.io/tracking-key": "xyz",
 				}),
 			),
@@ -672,11 +672,11 @@ func TestConverter_StripPrivateFieldsFromPublicInput_NoMutation(t *testing.T) {
 
 	// Create object with mixed labels and annotations
 	originalLabels := map[string]string{
-		"app":                         "test",
+		"app": "test",
 		"private.orlop.gcp.managed.openshift.io/internal": "secret",
 	}
 	originalAnnotations := map[string]string{
-		"note":                        "public",
+		"note": "public",
 		"private.orlop.gcp.managed.openshift.io/sync": "done",
 	}
 
@@ -953,7 +953,7 @@ func TestConverter_PublicToPrivate_PreservesNonPublicConditions(t *testing.T) {
 			// converted object is seeded from existing (including non-public conditions).
 			// preserveNonPublicConditions must not duplicate those conditions.
 			publicObj: newTestObject(
-				// Public input has no status.conditions field
+			// Public input has no status.conditions field
 			),
 			existing: newTestObject(
 				withStatus(map[string]interface{}{
@@ -1031,4 +1031,3 @@ func TestConverter_PublicToPrivate_PreservesNonPublicConditions(t *testing.T) {
 		})
 	}
 }
-

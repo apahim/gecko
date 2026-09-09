@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -202,7 +204,7 @@ func TestCollector_MultipleStoresScanned(t *testing.T) {
 
 type mockPrunerBroadcaster struct {
 	storage.EventBroadcaster
-	pruneCalled   bool
+	pruneCalled    bool
 	pruneOlderThan time.Duration
 }
 

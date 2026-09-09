@@ -10,19 +10,22 @@ import (
 
 	"cloud.google.com/go/spanner"
 	"github.com/go-logr/logr"
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"google.golang.org/api/iterator"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type csColumnType struct {
-	Name           string           `spanner:"name"`
-	Type           spanner.NullJSON `spanner:"type"`
-	IsPrimaryKey   bool             `spanner:"is_primary_key"`
-	OrdinalPosition int64           `spanner:"ordinal_position"`
+	Name            string           `spanner:"name"`
+	Type            spanner.NullJSON `spanner:"type"`
+	IsPrimaryKey    bool             `spanner:"is_primary_key"`
+	OrdinalPosition int64            `spanner:"ordinal_position"`
 }
 
 type csMod struct {
@@ -32,19 +35,19 @@ type csMod struct {
 }
 
 type csDataChangeRecord struct {
-	CommitTimestamp                       time.Time      `spanner:"commit_timestamp"`
-	RecordSequence                       string         `spanner:"record_sequence"`
-	ServerTransactionID                  string         `spanner:"server_transaction_id"`
-	IsLastRecordInTransactionInPartition bool           `spanner:"is_last_record_in_transaction_in_partition"`
-	TableName                            string         `spanner:"table_name"`
+	CommitTimestamp                      time.Time       `spanner:"commit_timestamp"`
+	RecordSequence                       string          `spanner:"record_sequence"`
+	ServerTransactionID                  string          `spanner:"server_transaction_id"`
+	IsLastRecordInTransactionInPartition bool            `spanner:"is_last_record_in_transaction_in_partition"`
+	TableName                            string          `spanner:"table_name"`
 	ColumnTypes                          []*csColumnType `spanner:"column_types"`
-	Mods                                 []*csMod       `spanner:"mods"`
-	ModType                              string         `spanner:"mod_type"`
-	ValueCaptureType                     string         `spanner:"value_capture_type"`
-	NumberOfRecordsInTransaction         int64          `spanner:"number_of_records_in_transaction"`
-	NumberOfPartitionsInTransaction      int64          `spanner:"number_of_partitions_in_transaction"`
-	TransactionTag                       string         `spanner:"transaction_tag"`
-	IsSystemTransaction                  bool           `spanner:"is_system_transaction"`
+	Mods                                 []*csMod        `spanner:"mods"`
+	ModType                              string          `spanner:"mod_type"`
+	ValueCaptureType                     string          `spanner:"value_capture_type"`
+	NumberOfRecordsInTransaction         int64           `spanner:"number_of_records_in_transaction"`
+	NumberOfPartitionsInTransaction      int64           `spanner:"number_of_partitions_in_transaction"`
+	TransactionTag                       string          `spanner:"transaction_tag"`
+	IsSystemTransaction                  bool            `spanner:"is_system_transaction"`
 }
 
 type csHeartbeatRecord struct {
@@ -57,15 +60,15 @@ type csChildPartition struct {
 }
 
 type csChildPartitionsRecord struct {
-	StartTimestamp  time.Time          `spanner:"start_timestamp"`
-	RecordSequence  string             `spanner:"record_sequence"`
+	StartTimestamp  time.Time           `spanner:"start_timestamp"`
+	RecordSequence  string              `spanner:"record_sequence"`
 	ChildPartitions []*csChildPartition `spanner:"child_partitions"`
 }
 
 type csRecord struct {
 	DataChangeRecords      []*csDataChangeRecord      `spanner:"data_change_record"`
-	HeartbeatRecords       []*csHeartbeatRecord        `spanner:"heartbeat_record"`
-	ChildPartitionsRecords []*csChildPartitionsRecord  `spanner:"child_partitions_record"`
+	HeartbeatRecords       []*csHeartbeatRecord       `spanner:"heartbeat_record"`
+	ChildPartitionsRecords []*csChildPartitionsRecord `spanner:"child_partitions_record"`
 }
 
 type spannerBroadcaster struct {
@@ -180,7 +183,7 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 		params := map[string]any{
 			"startTimestamp":        lastTs,
 			"endTimestamp":          (*time.Time)(nil),
-			"partitionToken":       partitionToken,
+			"partitionToken":        partitionToken,
 			"heartbeatMilliseconds": b.heartbeatMilliseconds,
 		}
 

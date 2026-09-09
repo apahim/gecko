@@ -10,10 +10,13 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -38,10 +41,10 @@ type PostgresBroadcaster struct {
 // PostgresBroadcasterConfig configures the SQL broadcaster.
 type PostgresBroadcasterConfig struct {
 	DB          *sql.DB
-	ConnString  string                 // For pq.Listener
-	ChannelName string                 // LISTEN/NOTIFY channel name
-	TableName   string                 // Event log table name
-	Scheme      *runtime.Scheme        // Required for object deserialization
+	ConnString  string                  // For pq.Listener
+	ChannelName string                  // LISTEN/NOTIFY channel name
+	TableName   string                  // Event log table name
+	Scheme      *runtime.Scheme         // Required for object deserialization
 	GVK         schema.GroupVersionKind // Required for setting TypeMeta
 }
 

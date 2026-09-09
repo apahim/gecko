@@ -6,7 +6,9 @@ import (
 	"net/http"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/api/meta"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -49,7 +51,6 @@ func (h *ResourceHandler) handleWatch(w http.ResponseWriter, r *http.Request, op
 	streamWatch(ctx, streamer, eventCh, config, opts, h.store, transformer)
 }
 
-
 // getCurrentResourceVersion retrieves the current resource version from the store
 func (h *ResourceHandler) getCurrentResourceVersion(ctx context.Context, opts storage.ListOptions) (string, bool) {
 	list, err := h.store.List(ctx, opts)
@@ -60,4 +61,3 @@ func (h *ResourceHandler) getCurrentResourceVersion(ctx context.Context, opts st
 	items, _ := meta.ExtractList(list)
 	return list.GetResourceVersion(), len(items) == 0
 }
-

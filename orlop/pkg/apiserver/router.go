@@ -5,9 +5,11 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/handlers"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/middleware"
+
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -155,7 +157,6 @@ func setupRouter(registry *ResourceRegistry, corsOrigins []string, customMiddlew
 
 	return r, nil
 }
-
 
 // setupConvertingRouter configures the HTTP router with converting handlers for public API.
 // publicRegistry defines the public API types and schemas.

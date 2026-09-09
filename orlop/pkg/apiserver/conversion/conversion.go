@@ -148,7 +148,7 @@ func (c *Converter) filterNonPublicConditions(obj runtime.Object, kind string) e
 	// Get the allowlist for this Kind
 	allowed := publicConditionTypes[kind]
 	// If Kind not in map, allowed is nil set — .Has() returns false for all conditions
-	
+
 	// Convert to map to access status.conditions
 	jsonData, err := json.Marshal(obj)
 	if err != nil {
@@ -210,7 +210,7 @@ func (c *Converter) filterNonPublicConditions(obj runtime.Object, kind string) e
 	if err := json.Unmarshal(filteredJSON, obj); err != nil {
 		return fmt.Errorf("failed to unmarshal filtered conditions into object: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -268,7 +268,7 @@ func (c *Converter) stripPrivateFieldsFromPublicInput(obj runtime.Object, kind s
 	if err := c.filterNonPublicConditions(obj, kind); err != nil {
 		return fmt.Errorf("failed to filter non-public conditions from public input: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -326,7 +326,6 @@ func (c *Converter) reconcileMetadata(public, existing, private runtime.Object) 
 		privateAccessor.SetAnnotations(nil)
 	}
 }
-
 
 // PublicToPrivate converts a public API object to its private representation.
 // Uses JSON round-trip for conversion.
@@ -441,7 +440,7 @@ func (c *Converter) preserveNonPublicConditions(existing, converted runtime.Obje
 	// input omits status.conditions (converted still has conditions from seeded existing).
 	allowed := publicConditionTypes[kind]
 	conditions, _ := status["conditions"].([]interface{})
-	
+
 	// Keep only public conditions from converted
 	var publicOnly []interface{}
 	for _, cond := range conditions {
@@ -459,7 +458,7 @@ func (c *Converter) preserveNonPublicConditions(existing, converted runtime.Obje
 			}
 		}
 	}
-	
+
 	// Append non-public conditions from existing
 	publicOnly = append(publicOnly, nonPublicConditions...)
 	status["conditions"] = publicOnly
@@ -481,7 +480,7 @@ func (c *Converter) preserveNonPublicConditions(existing, converted runtime.Obje
 func (c *Converter) extractNonPublicConditions(obj runtime.Object, kind string) []interface{} {
 	// Get the allowlist for this Kind
 	allowed := publicConditionTypes[kind]
-	
+
 	jsonData, err := json.Marshal(obj)
 	if err != nil {
 		return nil
@@ -529,4 +528,3 @@ func (c *Converter) extractNonPublicConditions(obj runtime.Object, kind string) 
 
 	return nonPublic
 }
-

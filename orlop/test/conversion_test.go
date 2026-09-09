@@ -18,6 +18,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -480,16 +481,16 @@ func TestConversion_FilterPrivateMetadata(t *testing.T) {
 			"name":      name,
 			"namespace": namespace,
 			"labels": map[string]interface{}{
-				"app":                                     "myapp",
-				"private.orlop.gcp.managed.openshift.io/secret":  "hidden",
-				"private.orlop.gcp.managed.openshift.io/owner":   "system",
-				"public-label":                            "visible",
+				"app": "myapp",
+				"private.orlop.gcp.managed.openshift.io/secret": "hidden",
+				"private.orlop.gcp.managed.openshift.io/owner":  "system",
+				"public-label": "visible",
 			},
 			"annotations": map[string]interface{}{
-				"description":                                  "public description",
+				"description": "public description",
 				"private.orlop.gcp.managed.openshift.io/internal-id":  "12345",
 				"private.orlop.gcp.managed.openshift.io/tracking-key": "xyz",
-				"public-annotation":                            "visible",
+				"public-annotation": "visible",
 			},
 		},
 		"spec": map[string]interface{}{

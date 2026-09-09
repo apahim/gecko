@@ -1,3 +1,24 @@
+GOLANGCI_LINT ?= golangci-lint
+
+# When not otherwise set, diff/lint against the upstream main branch.
+# This is always set in OpenShift CI.
+UPSTREAM_REMOTE ?= $(shell git remote -v 2>/dev/null | grep 'openshift-online/gecko.*fetch' | head -1 | cut -f1)
+PULL_BASE_SHA ?= $(if $(UPSTREAM_REMOTE),$(shell git rev-parse $(UPSTREAM_REMOTE)/main 2>/dev/null),$(shell git rev-parse main 2>/dev/null))
+
+.PHONY: lint
+lint:
+	$(GOLANGCI_LINT) run --config ./.golangci.yml --modules-download-mode=readonly -v \
+		$(if $(PULL_BASE_SHA),--new-from-rev=$(PULL_BASE_SHA))
+
+.PHONY: lint-fix
+lint-fix:
+	$(GOLANGCI_LINT) run --config ./.golangci.yml --fix -v \
+		$(if $(PULL_BASE_SHA),--new-from-rev=$(PULL_BASE_SHA) --whole-files)
+
+.PHONY: lint-fmt
+lint-fmt:
+	$(GOLANGCI_LINT) fmt --config ./.golangci.yml
+
 .PHONY: generate build test server-start server-stop server-logs
 
 generate:

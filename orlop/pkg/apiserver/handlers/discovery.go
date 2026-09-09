@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,11 +8,15 @@ import (
 	"time"
 
 	"github.com/munnerz/goautoneg"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	openapihandler "k8s.io/kube-openapi/pkg/handler"
 	openapispec "k8s.io/kube-openapi/pkg/validation/spec"
+
 	"sigs.k8s.io/yaml"
 )
 
@@ -24,12 +27,12 @@ type ResourceProvider interface {
 
 // DiscoveryHandler handles API discovery requests.
 type DiscoveryHandler struct {
-	resources           []types.ResourceInfo
-	advertiseStatus     bool // whether to advertise /status subresource in discovery
-	openAPIV2Spec       *openapispec.Swagger
-	openAPIV2Once       sync.Once
-	v2JSONCache         []byte
-	v2ProtoCache        []byte
+	resources       []types.ResourceInfo
+	advertiseStatus bool // whether to advertise /status subresource in discovery
+	openAPIV2Spec   *openapispec.Swagger
+	openAPIV2Once   sync.Once
+	v2JSONCache     []byte
+	v2ProtoCache    []byte
 }
 
 // DiscoveryOptions configures discovery behavior.

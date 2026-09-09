@@ -12,9 +12,11 @@ import (
 	"cloud.google.com/go/spanner"
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -167,7 +170,6 @@ func (s *SpannerStore) incrementCounter(txn *spanner.ReadWriteTransaction, ctx c
 	}
 	return current + 1, nil
 }
-
 
 func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
 	filterValue, err := s.contextFilterValue(ctx)

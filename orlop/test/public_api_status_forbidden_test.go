@@ -16,6 +16,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -46,19 +47,19 @@ func TestPublicAPIStatusForbidden(t *testing.T) {
 	}
 
 	privateResources := []apiserver.ResourceInfo{{
-		GVK:         gvk,
-		Plural:      privatev1.ObjectResourceInfo.Plural,
-		Singular:    "object",
-		Namespaced:  true,
-		SchemaYAML:  privatev1.ObjectSchemaYAML,
+		GVK:        gvk,
+		Plural:     privatev1.ObjectResourceInfo.Plural,
+		Singular:   "object",
+		Namespaced: true,
+		SchemaYAML: privatev1.ObjectSchemaYAML,
 	}}
 
 	publicResources := []apiserver.ResourceInfo{{
-		GVK:         gvk,
-		Plural:      publicv1.ObjectResourceInfo.Plural,
-		Singular:    "object",
-		Namespaced:  true,
-		SchemaYAML:  publicv1.ObjectSchemaYAML,
+		GVK:        gvk,
+		Plural:     publicv1.ObjectResourceInfo.Plural,
+		Singular:   "object",
+		Namespaced: true,
+		SchemaYAML: publicv1.ObjectSchemaYAML,
 	}}
 
 	storageFactory := func(resourceType string, s *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
@@ -249,7 +250,7 @@ func TestPublicAPIStatusForbidden(t *testing.T) {
 		if !ok {
 			t.Errorf("status field missing: %+v", retrieved)
 		}
-		
+
 		conds, ok := status["conditions"].([]interface{})
 		if !ok || len(conds) == 0 || conds[0] != "Ready" {
 			t.Errorf("status.conditions not updated correctly: %+v", status)
