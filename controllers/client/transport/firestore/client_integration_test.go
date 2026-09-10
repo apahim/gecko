@@ -574,13 +574,15 @@ func TestIntegration_CleanupDeleteDesires_LeavesStatusDocumentsForKubeApplier(t 
 	const documentID = "delete-1"
 	otherGroupKey, err := transport.ClusterGroupKey("other-ns", testClusterID)
 	require.NoError(t, err)
-	_, err = specsClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteDesire(testGroupKey, "hc-1", nil))
+	writeResult, err := specsClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteDesire(testGroupKey, "hc-1", nil))
 	require.NoError(t, err)
 	_, err = specsClient.Collection("deletedesires").Doc("delete-other").Set(ctx, deleteDesire(otherGroupKey, "hc-2", nil))
 	require.NoError(t, err)
-	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteDesire(testGroupKey, "hc-1", []metav1.Condition{
+	deleteStatus := deleteDesire(testGroupKey, "hc-1", []metav1.Condition{
 		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionTrue},
-	}))
+	})
+	deleteStatus.Status.ObservedDesireUpdateTime = writeResult.UpdateTime
+	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteStatus)
 	require.NoError(t, err)
 
 	require.NoError(t, c.CleanupDeleteDesires(ctx, testMCName, testGroupKey))
@@ -783,11 +785,13 @@ func TestIntegration_DeleteStatusAndCleanup(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode")
 
-	deleteStatus := deleteDesire(groupKey, "delete-status-np", []metav1.Condition{{
+	var deleteStatus kubeapplier.DeleteDesire
+	require.NoError(t, deleteSnapshots[0].DataTo(&deleteStatus))
+	deleteStatus.Status = kubeapplier.DeleteDesireStatus{Conditions: []metav1.Condition{{
 		Type:   kubeapplier.ConditionTypeSuccessful,
 		Status: metav1.ConditionFalse,
 		Reason: "DeleteFailed",
-	}})
+	}}}
 	deleteStatus.Status.ObservedDesireUpdateTime = deleteSnapshots[0].UpdateTime
 	_, err = statusClient.Collection("deletedesires").Doc(documentID).Set(ctx, deleteStatus)
 	require.NoError(t, err)
