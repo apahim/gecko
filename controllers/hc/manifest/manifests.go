@@ -11,7 +11,7 @@ import (
 // Input holds all parameters needed to build the HC manifests.
 type Input struct {
 	ClusterID                    string
-	ClusterName                  string
+	ClusterName                  string // bounded internal HostedCluster name
 	Generation                   int64
 	CreatedBy                    string
 	InfraID                      string

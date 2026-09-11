@@ -12,7 +12,7 @@ import (
 func testInput() manifest.Input {
 	return manifest.Input{
 		ClusterID:                    "550e8400-e29b-41d4-a716-446655440000",
-		ClusterName:                  "my-cluster",
+		ClusterName:                  "my-cluster-safe",
 		Generation:                   3,
 		CreatedBy:                    "alice@redhat.com",
 		InfraID:                      "infra-xyz",
@@ -56,14 +56,30 @@ func TestBuild_UsesClusterIDForNamespaceAndHostedClusterSpec(t *testing.T) {
 	var hc map[string]any
 	require.NoError(t, json.Unmarshal(manifests[3], &hc))
 	hcMeta := hc["metadata"].(map[string]any)
-	require.Equal(t, "my-cluster", hcMeta["name"])
+	require.Equal(t, "my-cluster-safe", hcMeta["name"])
 	require.Equal(t, "clusters-550e8400-e29b-41d4-a716-446655440000", hcMeta["namespace"])
+	require.LessOrEqual(t, len(hcMeta["namespace"].(string)+"-"+hcMeta["name"].(string)), 63)
 
 	labels := hcMeta["labels"].(map[string]any)
 	require.Equal(t, input.ClusterID, labels["gcp.managed.openshift.io/cluster-id"])
 
 	spec := hc["spec"].(map[string]any)
 	require.Equal(t, input.ClusterID, spec["clusterID"])
+}
+
+func TestBuild_HostedControlPlaneNamespaceWithinLimit(t *testing.T) {
+	input := testInput()
+	input.ClusterName = "seventeen-chars-o"
+	require.Len(t, input.ClusterName, 17)
+
+	manifests, err := manifest.Build(input)
+	require.NoError(t, err)
+
+	var job map[string]any
+	require.NoError(t, json.Unmarshal(manifests[4], &job))
+	metadata := job["metadata"].(map[string]any)
+	require.Equal(t, "clusters-550e8400-e29b-41d4-a716-446655440000-seventeen-chars-o", metadata["namespace"])
+	require.Len(t, metadata["namespace"], 63)
 }
 
 func TestBuild_ReturnsManifests(t *testing.T) {

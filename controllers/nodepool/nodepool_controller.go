@@ -163,13 +163,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if np.Spec.NodeCount != nil {
 		replicas = *np.Spec.NodeCount
 	}
+	safeName := cluster.Spec.SafeName
+	if safeName == "" {
+		safeName = privatev1.DefaultSafeName(cluster.Name, cluster.UID)
+	}
 
 	manifests, err := manifest.Build(manifest.Input{
 		NodePoolID:         nodepoolID,
 		NodePoolName:       np.Name,
 		NodePoolGeneration: np.Generation,
 		ClusterID:          string(cluster.UID),
-		ClusterName:        cluster.Name,
+		ClusterName:        safeName,
 		Replicas:           replicas,
 		MachineType:        machineType,
 		GCPRegion:          gcpRegion,

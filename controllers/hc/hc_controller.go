@@ -115,6 +115,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	placement := cluster.Status.PlacementResult
 	vr := cluster.Status.VersionResolution
+	safeName := cluster.Spec.SafeName
+	if safeName == "" {
+		safeName = privatev1.DefaultSafeName(cluster.Name, cluster.UID)
+	}
 
 	// Extract platform fields.
 	var gcpProjectID, gcpRegion, gcpNetwork, gcpSubnet, gcpEndpointAccess string
@@ -145,7 +149,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// TODO: CreatedBy is not yet in the orlop ClusterSpec.
 	mwInput := manifest.Input{
 		ClusterID:            string(cluster.UID),
-		ClusterName:          cluster.Name,
+		ClusterName:          safeName,
 		Generation:           cluster.Generation,
 		CreatedBy:            cluster.Annotations[constants.AnnotationCreatedBy],
 		InfraID:              cluster.Spec.InfraID,
@@ -331,8 +335,12 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 
 	// Derive HostedClusterAvailable and HostedClusterResult fields from HC resource status.
 	clusterNS := fmt.Sprintf("clusters-%s", cluster.UID)
+	safeName := cluster.Spec.SafeName
+	if safeName == "" {
+		safeName = privatev1.DefaultSafeName(cluster.Name, cluster.UID)
+	}
 	hcKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "hostedclusters",
-		clusterNS, cluster.Name)
+		clusterNS, safeName)
 	availableStatus := string(metav1.ConditionFalse)
 	apiEndpoint := ""
 	version := ""

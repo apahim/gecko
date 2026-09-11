@@ -13,7 +13,7 @@ func TestBuild_HappyPath(t *testing.T) {
 		NodePoolName:       "my-nodepool",
 		NodePoolGeneration: 3,
 		ClusterID:          "550e8400-e29b-41d4-a716-446655440000",
-		ClusterName:        "my-cluster",
+		ClusterName:        "my-cluster-safe",
 		Replicas:           2,
 		MachineType:        "n2-standard-8",
 		GCPRegion:          "us-central1",
@@ -51,7 +51,7 @@ func TestBuild_HappyPath(t *testing.T) {
 	require.Equal(t, "3", metaAnnotations["gcp.managed.openshift.io/generation"])
 
 	spec := nodePool["spec"].(map[string]any)
-	require.Equal(t, "my-cluster", spec["clusterName"])
+	require.Equal(t, "my-cluster-safe", spec["clusterName"])
 	require.EqualValues(t, 2, spec["replicas"])
 	require.Equal(t, "amd64", spec["arch"])
 

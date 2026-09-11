@@ -183,8 +183,9 @@ func buildReadyCluster(clusterID, version string) *privatev1.Cluster {
 	c.SetGeneration(2)
 	c.SetFinalizers([]string{constants.FinalizerCluster})
 	c.Spec = privatev1.ClusterSpec{
-		InfraID: "infra-xyz",
-		Release: privatev1.ReleaseSpec{Version: version},
+		SafeName: privatev1.DefaultSafeName(clusterID, c.UID),
+		InfraID:  "infra-xyz",
+		Release:  privatev1.ReleaseSpec{Version: version},
 		Platform: privatev1.ClusterPlatformSpec{
 			Type: "GCP",
 			GCP: &privatev1.GCPClusterPlatform{
@@ -211,6 +212,10 @@ func buildReadyCluster(clusterID, version string) *privatev1.Cluster {
 
 func clusterResourceKey(cluster *privatev1.Cluster, resource, name string) string {
 	return fmt.Sprintf("hypershift.openshift.io/v1beta1/%s/clusters-%s/%s", resource, cluster.UID, name)
+}
+
+func hostedClusterResourceKey(cluster *privatev1.Cluster) string {
+	return clusterResourceKey(cluster, "hostedclusters", cluster.Spec.SafeName)
 }
 
 // buildReconciler wires up an hc.Reconciler backed by the given store and transport.
@@ -494,7 +499,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	hcKey := clusterResourceKey(cluster, "hostedclusters", cluster.Name)
+	hcKey := hostedClusterResourceKey(cluster)
 	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
@@ -526,7 +531,7 @@ func TestReconcile_EndpointAccessPropagated(t *testing.T) {
 	cluster.Spec.Platform.GCP.EndpointAccess = "PublicAndPrivate"
 
 	tr := mock.New()
-	hcKey := clusterResourceKey(cluster, "hostedclusters", cluster.Name)
+	hcKey := hostedClusterResourceKey(cluster)
 	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
@@ -553,18 +558,19 @@ func TestReconcile_EndpointAccessPropagated(t *testing.T) {
 
 // TestReconcile_UsesClusterUIDForHostedClusterIdentity verifies that the
 // management-cluster namespace, cluster-id label, and HostedCluster spec.clusterID
-// use the Gecko cluster UID while the HostedCluster object name uses metadata.name.
+// use the Gecko cluster UID while the HostedCluster object name uses spec.safeName.
 func TestReconcile_UsesClusterUIDForHostedClusterIdentity(t *testing.T) {
-	clusterID := "my-cluster"
+	clusterID := "my-cluster-with-a-very-long-name"
 	clusterUID := "550e8400-e29b-41d4-a716-446655440000"
 	mcName := "mc-cluster-1"
 	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.SetUID(types.UID(clusterUID))
+	cluster.Spec.SafeName = privatev1.DefaultSafeName(cluster.Name, cluster.UID)
 
 	tr := mock.New()
-	hcKey := clusterResourceKey(cluster, "hostedclusters", cluster.Name)
+	hcKey := hostedClusterResourceKey(cluster)
 	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
@@ -583,8 +589,10 @@ func TestReconcile_UsesClusterUIDForHostedClusterIdentity(t *testing.T) {
 	var obj map[string]any
 	require.NoError(t, json.Unmarshal(tr.ApplyCalls[0].Manifests[3], &obj))
 	metadata := obj["metadata"].(map[string]any)
-	require.Equal(t, "my-cluster", metadata["name"])
+	require.Equal(t, cluster.Spec.SafeName, metadata["name"])
+	require.Equal(t, "my-cluster-with-a", metadata["name"])
 	require.Equal(t, "clusters-"+clusterUID, metadata["namespace"])
+	require.LessOrEqual(t, len(metadata["namespace"].(string)+"-"+metadata["name"].(string)), 63)
 
 	labels := metadata["labels"].(map[string]any)
 	require.Equal(t, clusterUID, labels["gcp.managed.openshift.io/cluster-id"])
@@ -603,7 +611,7 @@ func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	hcKey := clusterResourceKey(cluster, "hostedclusters", cluster.Name)
+	hcKey := hostedClusterResourceKey(cluster)
 	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
@@ -643,7 +651,7 @@ func TestReconcile_CreatedByAnnotationPropagated(t *testing.T) {
 	})
 
 	tr := mock.New()
-	hcKey := clusterResourceKey(cluster, "hostedclusters", cluster.Name)
+	hcKey := hostedClusterResourceKey(cluster)
 	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},

@@ -221,6 +221,7 @@ func testCluster(placementReady, hcAvailable bool) *privatev1.Cluster {
 	c.SetNamespace("hyperfleet")
 	c.SetUID(types.UID("550e8400-e29b-41d4-a716-446655440000"))
 	c.Spec = privatev1.ClusterSpec{
+		SafeName: privatev1.DefaultSafeName("cluster-test", c.UID),
 		Platform: privatev1.ClusterPlatformSpec{
 			Type: "GCP",
 			GCP: &privatev1.GCPClusterPlatform{
@@ -486,13 +487,14 @@ func TestReconcile_NodeCountHonored(t *testing.T) {
 }
 
 // TestReconcile_UsesClusterUIDForNodePoolIdentity verifies that the NodePool is
-// applied into the UID-backed HostedCluster namespace while spec.clusterName still
-// references the parent Cluster object's metadata.name.
+// applied into the UID-backed HostedCluster namespace while spec.clusterName
+// references the parent Cluster object's private safeName.
 func TestReconcile_UsesClusterUIDForNodePoolIdentity(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 	clusterUID := "550e8400-e29b-41d4-a716-446655440000"
 	cluster.SetUID(types.UID(clusterUID))
+	cluster.Spec.SafeName = privatev1.DefaultSafeName(cluster.Name, cluster.UID)
 
 	tr := mock.New()
 	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
@@ -520,7 +522,7 @@ func TestReconcile_UsesClusterUIDForNodePoolIdentity(t *testing.T) {
 	require.Equal(t, clusterUID, labels["gcp.managed.openshift.io/cluster-id"])
 
 	spec := obj["spec"].(map[string]any)
-	require.Equal(t, cluster.Name, spec["clusterName"])
+	require.Equal(t, cluster.Spec.SafeName, spec["clusterName"])
 }
 
 // TestReconcile_DefaultNodeCount verifies that when Spec.NodeCount is nil, defaultReplicas is used.

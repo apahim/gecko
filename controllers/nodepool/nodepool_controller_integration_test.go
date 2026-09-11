@@ -81,6 +81,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	cluster := testCluster(true, true)
 	clusterUID := "550e8400-e29b-41d4-a716-446655440002"
 	cluster.SetUID(types.UID(clusterUID))
+	cluster.Spec.SafeName = privatev1.DefaultSafeName(cluster.Name, cluster.UID)
 	cluster.SetNamespace(np.Namespace)
 	cluster.Status.PlacementResult.ManagementClusterName = project
 	groupKey := mustNodePoolGroupKey(np.Namespace, cluster.Name, np.Name)
@@ -137,7 +138,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	require.Equal(t, "3", annotations["gcp.managed.openshift.io/generation"])
 	manifestSpec, ok := content["spec"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, cluster.Name, manifestSpec["clusterName"])
+	require.Equal(t, cluster.Spec.SafeName, manifestSpec["clusterName"])
 	require.EqualValues(t, 1, manifestSpec["replicas"])
 	release, ok := manifestSpec["release"].(map[string]any)
 	require.True(t, ok)
