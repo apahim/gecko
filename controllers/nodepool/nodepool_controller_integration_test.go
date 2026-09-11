@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
@@ -78,6 +79,8 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	np := testNodePool("4.16.0")
 	np.SetGeneration(3)
 	cluster := testCluster(true, true)
+	clusterUID := "550e8400-e29b-41d4-a716-446655440002"
+	cluster.SetUID(types.UID(clusterUID))
 	cluster.SetNamespace(np.Namespace)
 	cluster.Status.PlacementResult.ManagementClusterName = project
 	groupKey := mustNodePoolGroupKey(np.Namespace, cluster.Name, np.Name)
@@ -92,7 +95,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 		Group:     "hypershift.openshift.io",
 		Version:   "v1beta1",
 		Resource:  "nodepools",
-		Namespace: "clusters-cluster-test",
+		Namespace: "clusters-" + clusterUID,
 		Name:      "np-test",
 	}
 	expectedID := desireid.NewDocumentID(
@@ -127,7 +130,7 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	require.Equal(t, expectedTarget.Namespace, metadata["namespace"])
 	labels, ok := metadata["labels"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, np.Spec.ClusterID, labels["gcp.managed.openshift.io/cluster-id"])
+	require.Equal(t, clusterUID, labels["gcp.managed.openshift.io/cluster-id"])
 	require.Equal(t, np.Name, labels["gcp.managed.openshift.io/nodepool-id"])
 	annotations, ok := metadata["annotations"].(map[string]any)
 	require.True(t, ok)

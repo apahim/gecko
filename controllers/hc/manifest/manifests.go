@@ -16,7 +16,6 @@ type Input struct {
 	CreatedBy                    string
 	InfraID                      string
 	IssuerURL                    string
-	ClusterIDUUID                string // spec.clusterID (RFC4122 UUID)
 	GCPProjectID                 string
 	GCPRegion                    string
 	GCPNetwork                   string
@@ -268,7 +267,7 @@ func buildHostedCluster(input Input, clusterNS string) ([]byte, error) {
 			"annotations": annotations,
 		},
 		"spec": map[string]any{
-			"clusterID": input.ClusterIDUUID,
+			"clusterID": input.ClusterID,
 			"infraID":   input.InfraID,
 			"issuerURL": input.IssuerURL,
 			"release": map[string]any{
