@@ -1,3 +1,4 @@
+description: Cluster enables declarative management of OpenShift Clusters on GCP.
 properties:
   apiVersion:
     description: |-
@@ -17,67 +18,157 @@ properties:
   metadata:
     type: object
   spec:
-    description: ClusterSpec is user-defined input only.
+    description: ClusterSpec is defines the Cluster behavior.
     properties:
       dns:
+        description: DNSSpec specifies the DNS configuration for the cluster ingress.
         properties:
           baseDomain:
+            maxLength: 253
             type: string
+            x-kubernetes-validations:
+            - message: baseDomain must be a valid domain name (e.g., example, example.com,
+                sub.example.com)
+              rule: self == "" || self.matches('^(?:(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}|[a-zA-Z0-9-]+)$')
+            - message: baseDomain is immutable
+              rule: oldSelf == "" || self == oldSelf
+        required:
+        - baseDomain
         type: object
       infraID:
+        maxLength: 253
+        minLength: 1
         type: string
+        x-kubernetes-validations:
+        - message: infraID must consist of lowercase alphanumeric characters or '-',
+            start and end with an alphanumeric character, and be between 1 and 253
+            characters
+          rule: self.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+        - message: infraID is immutable
+          rule: oldSelf == "" || self == oldSelf
       issuerURL:
+        default: https://kubernetes.default.svc
+        maxLength: 255
         type: string
+        x-kubernetes-validations:
+        - message: issuerURL is immutable
+          rule: self == oldSelf
+        - message: issuerURL must be a valid absolute URL
+          rule: isURL(self)
       networking:
         properties:
           clusterNetwork:
+            default:
+            - cidr: 10.132.0.0/14
             items:
               properties:
                 cidr:
+                  maxLength: 43
                   type: string
+                  x-kubernetes-validations:
+                  - message: cidr must be a valid IPv4 or IPv6 CIDR notation (e.g.,
+                      192.168.1.0/24 or 2001:db8::/64)
+                    rule: self.matches('^((\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2})$') ||
+                      self.matches('^([0-9a-fA-F]{0,4}:){2,7}([0-9a-fA-F]{0,4})?/[0-9]{1,3}$')
                 hostPrefix:
                   format: int32
                   type: integer
+              required:
+              - cidr
               type: object
+            maxItems: 2
+            minItems: 1
             type: array
             x-kubernetes-list-type: atomic
+            x-kubernetes-validations:
+            - message: clusterNetwork is immutable and cannot be modified once set.
+              rule: self == oldSelf
           machineNetwork:
             items:
               properties:
                 cidr:
+                  maxLength: 43
                   type: string
+                  x-kubernetes-validations:
+                  - message: cidr must be a valid IPv4 or IPv6 CIDR notation (e.g.,
+                      192.168.1.0/24 or 2001:db8::/64)
+                    rule: self.matches('^((\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2})$') ||
+                      self.matches('^([0-9a-fA-F]{0,4}:){2,7}([0-9a-fA-F]{0,4})?/[0-9]{1,3}$')
               required:
               - cidr
               type: object
+            maxItems: 2
+            minItems: 1
             type: array
             x-kubernetes-list-type: atomic
+            x-kubernetes-validations:
+            - message: machineNetwork is immutable and cannot be modified once set.
+              rule: self == oldSelf
           networkType:
             default: OVNKubernetes
             enum:
             - OVNKubernetes
             - Other
             type: string
+            x-kubernetes-validations:
+            - message: networkType is immutable
+              rule: self == oldSelf
           serviceNetwork:
+            default:
+            - cidr: 172.31.0.0/16
             items:
               type: string
+            maxItems: 1
+            minItems: 1
             type: array
             x-kubernetes-list-type: atomic
+            x-kubernetes-validations:
+            - message: serviceNetwork is immutable and cannot be modified once set.
+              rule: self == oldSelf
         type: object
       platform:
+        description: ClusterPlatformSpec defines the behavor of the infrastructure
+          provider.
         properties:
           gcp:
+            description: GCPClusterPlatform defines the behavor of the GCP infrastructure
+              provider.
             properties:
               endpointAccess:
+                default: Private
                 enum:
                 - PublicAndPrivate
                 - Private
                 type: string
               network:
+                maxLength: 63
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: Network is immutable
+                  rule: self == oldSelf
+                - message: network must be a valid RFC 1035 label (e.g., my-pvc-network)
+                  rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
               projectID:
+                maxLength: 30
+                minLength: 6
                 type: string
+                x-kubernetes-validations:
+                - message: project must start with a lowercase letter, contain only
+                    lowercase letters, digits, or hyphens, and end with a letter or
+                    digit
+                  rule: self.matches('^[a-z][a-z0-9-]{4,28}[a-z0-9]$')
+                - message: Project is immutable
+                  rule: self == oldSelf
               region:
+                maxLength: 63
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: region must be a valid GCP region (e.g., us-central1, europe-west2)
+                  rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
+                - message: Region is immutable
+                  rule: self == oldSelf
               resourceLabels:
                 items:
                   description: GCPResourceLabel is a label applied to GCP resources
@@ -93,37 +184,114 @@ properties:
                   required:
                   - key
                   type: object
+                maxItems: 60
+                minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - key
                 x-kubernetes-list-type: map
               subnet:
+                maxLength: 63
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: Subnet is immutable
+                  rule: self == oldSelf
+                - message: subnet must be a valid RFC 1035 label (e.g., my-subnet)
+                  rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
               workloadIdentity:
+                description: WorkloadIdentitySpec defines Workload Identity Federation
+                  for the cluster.
                 properties:
                   poolID:
+                    maxLength: 32
+                    minLength: 4
                     type: string
+                    x-kubernetes-validations:
+                    - message: poolID must start with a lowercase letter, contain
+                        only lowercase letters, digits, or hyphens, and end with a
+                        letter or digit
+                      rule: self.matches('^[a-z][a-z0-9-]{2,30}[a-z0-9]$')
+                    - message: Pool ID cannot start with reserved prefix 'gcp-'
+                      rule: '!self.startsWith(''gcp-'')'
+                    - message: Pool ID is immutable
+                      rule: self == oldSelf
                   projectNumber:
+                    maxLength: 25
+                    minLength: 1
                     type: string
+                    x-kubernetes-validations:
+                    - message: projectNumber must contain only digits
+                      rule: self.matches('^[0-9]+$')
+                    - message: Project number is immutable
+                      rule: self == oldSelf
                   providerID:
+                    maxLength: 32
+                    minLength: 4
                     type: string
+                    x-kubernetes-validations:
+                    - message: providerID must start with a lowercase letter, contain
+                        only lowercase letters, digits, or hyphens, and end with a
+                        letter or digit
+                      rule: self.matches('^[a-z][a-z0-9-]{2,30}[a-z0-9]$')
+                    - message: Provider ID cannot start with reserved prefix 'gcp-'
+                      rule: '!self.startsWith(''gcp-'')'
+                    - message: Provider ID is immutable
+                      rule: self == oldSelf
                   serviceAccountsRef:
                     properties:
                       cloudControllerEmail:
                         type: string
+                        x-kubernetes-validations:
+                        - message: CloudControllerEmail is immutable
+                          rule: self == oldSelf
                       controlPlaneEmail:
                         type: string
+                        x-kubernetes-validations:
+                        - message: ControlPlaneEmail is immutable
+                          rule: self == oldSelf
                       imageRegistryEmail:
                         type: string
+                        x-kubernetes-validations:
+                        - message: ImageRegistryEmail is immutable
+                          rule: self == oldSelf
                       networkEmail:
                         type: string
+                        x-kubernetes-validations:
+                        - message: NetworkEmail is immutable
+                          rule: self == oldSelf
                       nodePoolEmail:
                         type: string
+                        x-kubernetes-validations:
+                        - message: NodePoolEmail is immutable
+                          rule: self == oldSelf
                       storageEmail:
                         type: string
+                        x-kubernetes-validations:
+                        - message: StorageEmail is immutable
+                          rule: self == oldSelf
+                    required:
+                    - cloudControllerEmail
+                    - controlPlaneEmail
+                    - imageRegistryEmail
+                    - networkEmail
+                    - nodePoolEmail
+                    - storageEmail
                     type: object
+                required:
+                - poolID
+                - projectNumber
+                - providerID
+                - serviceAccountsRef
                 type: object
+                x-kubernetes-validations:
+                - message: WorkloadIdentity is immutable
+                  rule: self == oldSelf
             required:
+            - network
+            - projectID
+            - region
+            - subnet
             - workloadIdentity
             type: object
           type:
@@ -131,6 +299,7 @@ properties:
             - GCP
             type: string
         required:
+        - gcp
         - type
         type: object
       release:
@@ -139,11 +308,17 @@ properties:
           The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
         properties:
           channelGroup:
+            maxLength: 63
             minLength: 1
             type: string
           version:
+            maxLength: 63
             minLength: 1
             type: string
+            x-kubernetes-validations:
+            - message: Version must be a valid semver v2 major.minor.patch. (e.g.,
+                4.14.9)
+              rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
         required:
         - channelGroup
         - version
@@ -226,4 +401,6 @@ properties:
             type: string
         type: object
     type: object
+required:
+- spec
 type: object

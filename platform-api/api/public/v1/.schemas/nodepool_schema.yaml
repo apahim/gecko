@@ -1,3 +1,4 @@
+description: NodePool enables declarative management of a pool of nodes.
 properties:
   apiVersion:
     description: |-
@@ -17,6 +18,7 @@ properties:
   metadata:
     type: object
   spec:
+    description: NodePoolSpec is defines the NodePool behavior.
     properties:
       autoscaling:
         properties:
@@ -30,12 +32,22 @@ properties:
             type: integer
         required:
         - max
+        - min
         type: object
         x-kubernetes-validations:
         - message: max must be greater than or equal to min
           rule: self.max >= self.min
       clusterID:
+        maxLength: 253
+        minLength: 1
         type: string
+        x-kubernetes-validations:
+        - message: ClusterName is immutable
+          rule: self == oldSelf
+        - message: clusterName must consist of lowercase alphanumeric characters or
+            '-', start and end with an alphanumeric character, and be between 1 and
+            253 characters
+          rule: self.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
       nodeCount:
         format: int32
         minimum: 0
@@ -43,34 +55,47 @@ properties:
       nodeLabels:
         additionalProperties:
           type: string
+        maxProperties: 50
         type: object
       platform:
         properties:
           gcp:
             properties:
               diskSizeGB:
+                default: 64
                 format: int64
+                maximum: 65536
                 minimum: 20
                 type: integer
               diskType:
+                default: pd-balanced
                 enum:
                 - pd-standard
                 - pd-ssd
                 - pd-balanced
                 type: string
               machineType:
+                maxLength: 255
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: machineType must start and end with a lowercase letter
+                    or digit, and contain only lowercase letters, digits, and hyphens
+                  rule: self.matches('^[a-z0-9]+(-[a-z0-9]+)*$')
               networkTags:
                 items:
                   type: string
+                maxItems: 64
+                minItems: 1
                 type: array
-                x-kubernetes-list-type: atomic
+                x-kubernetes-list-type: set
               onHostMaintenance:
                 enum:
                 - MIGRATE
                 - TERMINATE
                 type: string
               provisioningModel:
+                default: Standard
                 enum:
                 - Standard
                 - Spot
@@ -91,14 +116,34 @@ properties:
                   required:
                   - key
                   type: object
+                maxItems: 60
+                minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - key
                 x-kubernetes-list-type: map
               subnet:
+                maxLength: 63
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: Subnet is immutable
+                  rule: self == oldSelf
+                - message: subnet must be a valid RFC 1035 label (e.g., my-subnet)
+                  rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
               zone:
+                maxLength: 63
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: zone must be in the form of region-zone (e.g., us-central1-a)
+                  rule: self.matches('^[a-z]+(?:-[a-z0-9]+)*-[a-z]$')
+                - message: Zone is immutable
+                  rule: self == oldSelf
+            required:
+            - machineType
+            - subnet
+            - zone
             type: object
           type:
             enum:
@@ -113,17 +158,28 @@ properties:
           The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
         properties:
           channelGroup:
+            maxLength: 63
             minLength: 1
             type: string
           version:
+            maxLength: 63
             minLength: 1
             type: string
+            x-kubernetes-validations:
+            - message: Version must be a valid semver v2 major.minor.patch. (e.g.,
+                4.14.9)
+              rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
         required:
         - channelGroup
         - version
         type: object
       taints:
         items:
+          description: |-
+            TaintSpec is as v1 Core but without TimeAdded.
+            https://github.com/kubernetes/kubernetes/blob/ed8cad1e80d096257921908a52ac69cf1f41a098/staging/src/k8s.io/api/core/v1/types.go#L3037-L3053
+            Validation replicates the same validation as the upstream https://github.com/kubernetes/kubernetes/blob/9a2a7537f035969a68e432b4cc276dbce8ce1735/pkg/util/taints/taints.go#L273.
+            See also https://kubernetes.io/docs/concepts/overview/working-with-objects/names/.
           properties:
             effect:
               enum:
@@ -132,13 +188,25 @@ properties:
               - NoExecute
               type: string
             key:
+              maxLength: 253
+              minLength: 1
               type: string
+              x-kubernetes-validations:
+              - message: key must be a qualified name with an optional subdomain prefix
+                  e.g. example.com/MyName
+                rule: self.matches('^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\\/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$')
             value:
+              maxLength: 253
               type: string
+              x-kubernetes-validations:
+              - message: Value must start and end with alphanumeric characters and
+                  can only contain '-', '_', '.' in the middle
+                rule: self.matches('^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$')
           required:
           - effect
           - key
           type: object
+        maxItems: 50
         type: array
         x-kubernetes-list-map-keys:
         - key
@@ -215,4 +283,6 @@ properties:
         - type
         x-kubernetes-list-type: map
     type: object
+required:
+- spec
 type: object

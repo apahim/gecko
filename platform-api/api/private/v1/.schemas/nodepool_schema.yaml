@@ -1,3 +1,4 @@
+description: NodePool enables declarative management of a pool of nodes.
 properties:
   apiVersion:
     description: |-
@@ -17,66 +18,159 @@ properties:
   metadata:
     type: object
   spec:
+    description: spec defines the desired behavior of the NodePool.
     properties:
       autoscaling:
+        description: |-
+          autoScaling specifies auto-scaling behavior for the NodePool.
+          autoScaling is mutually exclusive with replicas. If replicas is set, this field must be omitted.
         properties:
           max:
+            description: max is the maximum number of nodes allowed in the pool. Must
+              be >= 1 and >= Min.
             format: int32
             minimum: 1
             type: integer
           min:
+            description: |-
+              min is the minimum number of nodes to maintain in the pool.
+              Can be set to 0 for scale-from-zero for AWS and Azure platforms.
+              Must be >= 0 and <= .Max.
             format: int32
             minimum: 0
             type: integer
         required:
         - max
+        - min
         type: object
         x-kubernetes-validations:
         - message: max must be greater than or equal to min
           rule: self.max >= self.min
       clusterID:
+        description: |-
+          clusterName is the name of the HostedCluster this NodePool belongs to.
+          If a HostedCluster with this name doesn't exist, the controller will no-op until it exists.
+        maxLength: 253
+        minLength: 1
         type: string
+        x-kubernetes-validations:
+        - message: ClusterName is immutable
+          rule: self == oldSelf
+        - message: clusterName must consist of lowercase alphanumeric characters or
+            '-', start and end with an alphanumeric character, and be between 1 and
+            253 characters
+          rule: self.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
       nodeCount:
+        description: |-
+          nodeCount is the desired number of nodes the pool should maintain. If unset, the controller default value is 0.
+          nodeCount is mutually exclusive with autoscaling. If autoscaling is configured, replicas must be omitted and autoscaling will control the NodePool size internally.
         format: int32
         minimum: 0
         type: integer
       nodeLabels:
         additionalProperties:
           type: string
+        description: |-
+          nodeLabels propagates a list of labels to Nodes, only once on creation.
+          Valid values are those in https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+        maxProperties: 50
         type: object
       platform:
+        description: |-
+          platform specifies the underlying infrastructure provider for the NodePool
+          and is used to configure platform specific behavior.
         properties:
           gcp:
             properties:
               diskSizeGB:
+                default: 64
+                description: |-
+                  diskSizeGB specifies the size of the boot disk in gigabytes.
+                  Must be at least 20 GB for RHCOS images.
                 format: int64
+                maximum: 65536
                 minimum: 20
                 type: integer
               diskType:
+                default: pd-balanced
+                description: |-
+                  diskType specifies the disk type for the boot disk.
+                  Valid values include:
+                    - "pd-standard" - Standard persistent disk (magnetic)
+                    - "pd-ssd" - SSD persistent disk
+                    - "pd-balanced" - Balanced persistent disk (recommended)
+                  If not specified, defaults to "pd-balanced".
                 enum:
                 - pd-standard
                 - pd-ssd
                 - pd-balanced
                 type: string
               machineType:
+                description: |-
+                  machineType is the GCP machine type for node instances (e.g. n2-standard-4).
+                  Must follow GCP machine type naming conventions as documented at:
+                  https://cloud.google.com/compute/docs/machine-resource#machine_type_comparison
+
+                  Valid machine type formats:
+                    - predefined: n1-standard-1, n2-highmem-4, c2-standard-8, etc.
+                    - custom: custom-{cpus}-{memory} (e.g. custom-4-8192)
+                    - custom with extended memory: custom-{cpus}-{memory}-ext (e.g. custom-2-13312-ext)
+                maxLength: 255
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: machineType must start and end with a lowercase letter
+                    or digit, and contain only lowercase letters, digits, and hyphens
+                  rule: self.matches('^[a-z0-9]+(-[a-z0-9]+)*$')
               networkTags:
+                description: |-
+                  networkTags is an optional list of network tags to apply to node instances.
+                  These tags are used by GCP firewall rules to control network access.
+                  Tags must conform to GCP naming conventions:
+                    - 1-63 characters
+                    - Lowercase letters, numbers, and hyphens only
+                    - Must start with lowercase letter
+                    - Cannot end with hyphen
                 items:
                   type: string
+                maxItems: 64
+                minItems: 1
                 type: array
-                x-kubernetes-list-type: atomic
+                x-kubernetes-list-type: set
               onHostMaintenance:
+                description: |-
+                  onHostMaintenance specifies the behavior when host maintenance occurs.
+                  For Spot and Preemptible instances, this must be "TERMINATE".
+                  For Standard instances, can be "MIGRATE" (live migrate) or "TERMINATE".
+                  If not specified, defaults to "MIGRATE" for Standard instances and "TERMINATE" for Spot/Preemptible.
                 enum:
                 - MIGRATE
                 - TERMINATE
                 type: string
               provisioningModel:
+                default: Standard
+                description: |-
+                  provisioningModel specifies the provisioning model for node instances.
+                  Spot and Preemptible instances cost less but can be terminated by GCP with 30 seconds notice.
+                  Spot instances are recommended over Preemptible as they have no maximum runtime limit.
+                  Standard instances are regular VMs that run until explicitly stopped.
+                  If not specified, defaults to "Standard".
                 enum:
                 - Standard
                 - Spot
                 - Preemptible
                 type: string
               resourceLabels:
+                description: |-
+                  resourceLabels is an optional list of additional labels to apply to GCP node
+                  instances and their associated resources (disks, etc.).
+                  Labels will be merged with cluster-level resource labels, with NodePool labels
+                  taking precedence in case of conflicts.
+
+                  Keys and values must conform to GCP labeling requirements:
+                    - Keys: 1–63 chars, must start with a lowercase letter; allowed [a-z0-9_-]
+                    - Values: empty or 1–63 chars; allowed [a-z0-9_-]
+                    - Maximum 60 user labels per resource (GCP limit is 64 total, with ~4 reserved)
                 items:
                   description: GCPResourceLabel is a label applied to GCP resources
                     created for the cluster.
@@ -91,14 +185,44 @@ properties:
                   required:
                   - key
                   type: object
+                maxItems: 60
+                minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - key
                 x-kubernetes-list-type: map
               subnet:
+                description: |-
+                  subnet is the name of the subnet where node instances will be created.
+                  Must be a subnet within the VPC network specified in the HostedCluster's
+                  networkConfig and located in the same region as the zone.
+                  The subnet must have enough IP addresses available for the expected number of nodes.
+                maxLength: 63
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: Subnet is immutable
+                  rule: self == oldSelf
+                - message: subnet must be a valid RFC 1035 label (e.g., my-subnet)
+                  rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
               zone:
+                description: |-
+                  zone is the GCP zone where node instances will be created.
+                  Must be a valid zone within the cluster's region.
+                  Format: {region}-{zone} (e.g. us-central1-a, europe-west2-b)
+                  See https://cloud.google.com/compute/docs/regions-zones for available zones.
+                maxLength: 63
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: zone must be in the form of region-zone (e.g., us-central1-a)
+                  rule: self.matches('^[a-z]+(?:-[a-z0-9]+)*-[a-z]$')
+                - message: Zone is immutable
+                  rule: self == oldSelf
+            required:
+            - machineType
+            - subnet
+            - zone
             type: object
           type:
             enum:
@@ -108,37 +232,71 @@ properties:
         - type
         type: object
       release:
-        description: |-
-          ReleaseSpec defines the target OCP release version.
-          The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
+        description: release specifies what OpenShift release to use for the node
+          pool.
         properties:
           channelGroup:
+            maxLength: 63
             minLength: 1
             type: string
           version:
+            description: |-
+              version is the OpenShift version to install.
+              Specified as semver v2 major, minor, patch without leading "v". (e.g., "4.14.9")
+            maxLength: 63
             minLength: 1
             type: string
+            x-kubernetes-validations:
+            - message: Version must be a valid semver v2 major.minor.patch. (e.g.,
+                4.14.9)
+              rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
         required:
         - channelGroup
         - version
         type: object
       taints:
+        description: |-
+          taints if specified, propagates a list of taints to Nodes, only once on creation.
+          These taints are additive to the ones applied by other controllers
         items:
+          description: |-
+            TaintSpec is as v1 Core but without TimeAdded.
+            https://github.com/kubernetes/kubernetes/blob/ed8cad1e80d096257921908a52ac69cf1f41a098/staging/src/k8s.io/api/core/v1/types.go#L3037-L3053
+            Validation replicates the same validation as the upstream https://github.com/kubernetes/kubernetes/blob/9a2a7537f035969a68e432b4cc276dbce8ce1735/pkg/util/taints/taints.go#L273.
+            See also https://kubernetes.io/docs/concepts/overview/working-with-objects/names/.
           properties:
             effect:
+              description: |-
+                effect is the effect of the taint on pods
+                that do not tolerate the taint.
+                Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
               enum:
               - NoSchedule
               - PreferNoSchedule
               - NoExecute
               type: string
             key:
+              description: key is the taint key to be applied to a node.
+              maxLength: 253
+              minLength: 1
               type: string
+              x-kubernetes-validations:
+              - message: key must be a qualified name with an optional subdomain prefix
+                  e.g. example.com/MyName
+                rule: self.matches('^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\\/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$')
             value:
+              description: value is the taint value corresponding to the taint key.
+              maxLength: 253
               type: string
+              x-kubernetes-validations:
+              - message: Value must start and end with alphanumeric characters and
+                  can only contain '-', '_', '.' in the middle
+                rule: self.matches('^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$')
           required:
           - effect
           - key
           type: object
+        maxItems: 50
         type: array
         x-kubernetes-list-map-keys:
         - key
@@ -153,9 +311,12 @@ properties:
     - message: nodeCount and autoscaling are mutually exclusive
       rule: '!has(self.nodeCount) || !has(self.autoscaling)'
   status:
-    description: NodePoolStatus is written by controllers only.
+    description: status is the most recently observed status of the NodePool.
     properties:
       conditions:
+        description: |-
+          conditions represents the latest available observations of the node pool's
+          current state.
         items:
           description: Condition contains details for one aspect of the current state
             of this API Resource.
@@ -237,4 +398,6 @@ properties:
             type: string
         type: object
     type: object
+required:
+- spec
 type: object
