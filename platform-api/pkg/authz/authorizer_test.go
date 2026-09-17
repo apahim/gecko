@@ -1,0 +1,143 @@
+package authz
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/go-logr/logr"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+func TestAuthorizerDefaultDenyAndNamespaceIsolation(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := privatev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	stores, err := NewStores(func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
+		return memory.NewMemoryStore(resourceType, scheme, gvk), nil
+	}, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	role := &privatev1.PlatformRole{
+		Spec: privatev1.PlatformRoleSpec{Permissions: []string{"cluster.list", "cluster.get"}},
+	}
+	role.Name = "cluster-viewer"
+	role.SetGroupVersionKind(privatev1.GroupVersion.WithKind("PlatformRole"))
+	if err := stores.PlatformRoles.Create(context.Background(), role); err != nil {
+		t.Fatal(err)
+	}
+	binding := &privatev1.RoleBinding{
+		Spec: privatev1.RoleBindingSpec{
+			Subject: "alice@example.com",
+			RoleRef: privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+		},
+	}
+	binding.Name = "alice-viewer"
+	binding.Namespace = "project-a"
+	binding.SetGroupVersionKind(privatev1.GroupVersion.WithKind("RoleBinding"))
+	if err := stores.RoleBindings.Create(context.Background(), binding); err != nil {
+		t.Fatal(err)
+	}
+
+	authorizer, err := NewAuthorizer(context.Background(), stores, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allowed, err := authorizer.Authorize(context.Background(), "alice@example.com", GetCluster, "project-a")
+	if err != nil || !allowed {
+		t.Fatalf("GetCluster project-a = allowed %v, err %v", allowed, err)
+	}
+	allowed, err = authorizer.Authorize(context.Background(), "alice@example.com", DeleteCluster, "project-a")
+	if err != nil || allowed {
+		t.Fatalf("DeleteCluster project-a = allowed %v, err %v", allowed, err)
+	}
+	allowed, err = authorizer.Authorize(context.Background(), "alice@example.com", GetCluster, "project-b")
+	if err != nil || allowed {
+		t.Fatalf("GetCluster project-b = allowed %v, err %v", allowed, err)
+	}
+	allowed, err = authorizer.Authorize(context.Background(), "bob@example.com", GetCluster, "project-a")
+	if err != nil || allowed {
+		t.Fatalf("GetCluster for unbound user = allowed %v, err %v", allowed, err)
+	}
+}
+
+func TestGeneratePolicySetIsPerBinding(t *testing.T) {
+	binding := privatev1.RoleBinding{
+		Spec: privatev1.RoleBindingSpec{
+			Subject: "alice@example.com",
+			RoleRef: privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+		},
+	}
+	binding.Name = "viewer"
+	binding.Namespace = "project-a"
+	role := privatev1.PlatformRole{Spec: privatev1.PlatformRoleSpec{Permissions: []string{"cluster.get"}}}
+	role.Name = "cluster-viewer"
+
+	policies, err := policyForBinding(binding, role.Spec.Permissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(policies.MarshalCedar()); got == "" {
+		t.Fatal("expected Cedar policy text")
+	}
+}
+
+func TestAuthorizerReloadsAfterRoleBindingChange(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := privatev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	stores, err := NewStores(func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
+		return memory.NewMemoryStore(resourceType, scheme, gvk), nil
+	}, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := &privatev1.PlatformRole{Spec: privatev1.PlatformRoleSpec{Permissions: []string{"cluster.get"}}}
+	role.Name = "cluster-viewer"
+	if err := stores.PlatformRoles.Create(context.Background(), role); err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := NewAuthorizer(context.Background(), stores, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopCh := make(chan struct{})
+	authorizer.StartWatching(stopCh)
+	defer close(stopCh)
+
+	binding := &privatev1.RoleBinding{
+		Spec: privatev1.RoleBindingSpec{
+			Subject: "alice@example.com",
+			RoleRef: privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+		},
+	}
+	binding.Name = "alice-viewer"
+	binding.Namespace = "project-a"
+	if err := stores.RoleBindings.Create(context.Background(), binding); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		allowed, err := authorizer.Authorize(context.Background(), "alice@example.com", GetCluster, "project-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if allowed {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("RoleBinding change did not become effective")
+}

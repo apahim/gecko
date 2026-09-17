@@ -130,6 +130,12 @@ linters:
       - linters:
           - kubeapilinter
         text: 'conditions: Conditions field .* has incorrect tags'
+      # The authn/authz implementation structs are runtime plumbing, not
+      # Kubernetes API objects. kubeapilinter otherwise treats their private
+      # synchronization fields as serialized API fields.
+      - linters:
+          - kubeapilinter
+        path: 'pkg/(authn|authz)/'
     paths:
       - api/public/
 
