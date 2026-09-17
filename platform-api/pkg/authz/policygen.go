@@ -1,0 +1,220 @@
+package authz
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/cedar-policy/cedar-go"
+
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
+
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
+	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+// GeneratePolicySet builds the complete Cedar policy set from the current
+// authorization resources. Each RoleBinding gets its own policy so bindings
+// for the same role cannot accidentally share conditions or principals when
+// ABAC support is added by GCP-1031.
+func GeneratePolicySet(ctx context.Context, stores Stores) (*cedar.PolicySet, error) {
+	roles, err := listRoles(ctx, stores)
+	if err != nil {
+		return nil, fmt.Errorf("list Roles: %w", err)
+	}
+	platformRoles, err := listPlatformRoles(ctx, stores)
+	if err != nil {
+		return nil, fmt.Errorf("list PlatformRoles: %w", err)
+	}
+	bindings, err := listRoleBindings(ctx, stores)
+	if err != nil {
+		return nil, fmt.Errorf("list RoleBindings: %w", err)
+	}
+
+	rolesByNamespace := make(map[string]privatev1.Role, len(roles))
+	for _, role := range roles {
+		rolesByNamespace[role.Namespace+"/"+role.Name] = role
+	}
+	platformRolesByName := make(map[string]privatev1.PlatformRole, len(platformRoles))
+	for _, role := range platformRoles {
+		platformRolesByName[role.Name] = role
+	}
+
+	sort.Slice(bindings, func(i, j int) bool {
+		if bindings[i].Namespace != bindings[j].Namespace {
+			return bindings[i].Namespace < bindings[j].Namespace
+		}
+		return bindings[i].Name < bindings[j].Name
+	})
+
+	policies := cedar.NewPolicySet()
+	for _, binding := range bindings {
+		permissions, err := permissionsForBinding(binding, rolesByNamespace, platformRolesByName)
+		if err != nil {
+			return nil, err
+		}
+		policyID := cedar.PolicyID(bindingPolicyID(binding))
+		policy, err := policyForBinding(binding, permissions)
+		if err != nil {
+			return nil, fmt.Errorf("parse policy %q: %w", policyID, err)
+		}
+		policies.Add(policyID, policy)
+	}
+
+	return policies, nil
+}
+
+func policyForBinding(binding privatev1.RoleBinding, permissions []string) (*cedar.Policy, error) {
+	actions := make([]string, 0, len(permissions))
+	for _, permission := range permissions {
+		action, ok := actionForPermission(permission)
+		if !ok {
+			return nil, fmt.Errorf("unknown permission %q", permission)
+		}
+		actions = append(actions, "Action::"+strconv.Quote(string(action)))
+	}
+	sort.Strings(actions)
+
+	roleID := fmt.Sprintf("%s/%s/%s", binding.Namespace, binding.Spec.RoleRef.Name, binding.Name)
+	policyText := fmt.Sprintf(`permit (
+    principal,
+    action in [%s],
+    resource
+)
+when {
+    principal in NamespaceRole::%s &&
+    resource in Namespace::%s
+};`, strings.Join(actions, ", "), strconv.Quote(roleID), strconv.Quote(binding.Namespace))
+
+	var policy cedar.Policy
+	if err := policy.UnmarshalCedar([]byte(policyText)); err != nil {
+		return nil, err
+	}
+	return &policy, nil
+}
+
+func permissionsForBinding(binding privatev1.RoleBinding, roles map[string]privatev1.Role, platformRoles map[string]privatev1.PlatformRole) ([]string, error) {
+	if binding.Spec.RoleRef.APIGroup != privatev1.GroupVersion.Group {
+		return nil, fmt.Errorf("RoleBinding %s/%s references unsupported API group %q", binding.Namespace, binding.Name, binding.Spec.RoleRef.APIGroup)
+	}
+	var permissions []string
+	switch binding.Spec.RoleRef.Kind {
+	case "PlatformRole":
+		role, ok := platformRoles[binding.Spec.RoleRef.Name]
+		if !ok {
+			return nil, fmt.Errorf("RoleBinding %s/%s references missing PlatformRole %q", binding.Namespace, binding.Name, binding.Spec.RoleRef.Name)
+		}
+		permissions = append(permissions, role.Spec.Permissions...)
+	case "Role":
+		role, ok := roles[binding.Namespace+"/"+binding.Spec.RoleRef.Name]
+		if !ok {
+			return nil, fmt.Errorf("RoleBinding %s/%s references missing Role %q", binding.Namespace, binding.Name, binding.Spec.RoleRef.Name)
+		}
+		permissions = append(permissions, role.Spec.Permissions...)
+	default:
+		return nil, fmt.Errorf("RoleBinding %s/%s has unsupported roleRef.kind %q", binding.Namespace, binding.Name, binding.Spec.RoleRef.Kind)
+	}
+	if len(permissions) == 0 {
+		return nil, fmt.Errorf("RoleBinding %s/%s references a role with no permissions", binding.Namespace, binding.Name)
+	}
+	return permissions, nil
+}
+
+func bindingPolicyID(binding privatev1.RoleBinding) string {
+	prefix := "role"
+	if binding.Spec.RoleRef.Kind == "PlatformRole" {
+		prefix = "platformrole"
+	}
+	return fmt.Sprintf("%s:%s:binding:%s/%s", prefix, binding.Spec.RoleRef.Name, binding.Namespace, binding.Name)
+}
+
+func listRoles(ctx context.Context, stores Stores) ([]privatev1.Role, error) {
+	objects, err := listObjects(ctx, stores.Roles, storage.ListOptions{}, stores.Scheme, privatev1.GroupVersion.WithKind("Role"))
+	if err != nil {
+		return nil, err
+	}
+	result := make([]privatev1.Role, 0, len(objects))
+	for _, object := range objects {
+		role, ok := object.(*privatev1.Role)
+		if !ok {
+			return nil, fmt.Errorf("role store returned %T", object)
+		}
+		result = append(result, *role)
+	}
+	return result, nil
+}
+
+func listPlatformRoles(ctx context.Context, stores Stores) ([]privatev1.PlatformRole, error) {
+	objects, err := listObjects(ctx, stores.PlatformRoles, storage.ListOptions{}, stores.Scheme, privatev1.GroupVersion.WithKind("PlatformRole"))
+	if err != nil {
+		return nil, err
+	}
+	result := make([]privatev1.PlatformRole, 0, len(objects))
+	for _, object := range objects {
+		role, ok := object.(*privatev1.PlatformRole)
+		if !ok {
+			return nil, fmt.Errorf("platform role store returned %T", object)
+		}
+		result = append(result, *role)
+	}
+	return result, nil
+}
+
+func listRoleBindings(ctx context.Context, stores Stores) ([]privatev1.RoleBinding, error) {
+	objects, err := listObjects(ctx, stores.RoleBindings, storage.ListOptions{}, stores.Scheme, privatev1.GroupVersion.WithKind("RoleBinding"))
+	if err != nil {
+		return nil, err
+	}
+	result := make([]privatev1.RoleBinding, 0, len(objects))
+	for _, object := range objects {
+		binding, ok := object.(*privatev1.RoleBinding)
+		if !ok {
+			return nil, fmt.Errorf("role binding store returned %T", object)
+		}
+		result = append(result, *binding)
+	}
+	return result, nil
+}
+
+func listObjects(ctx context.Context, store storage.ResourceStore, options storage.ListOptions, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) ([]client.Object, error) {
+	list, err := store.List(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	items, err := meta.ExtractList(list)
+	if err != nil {
+		return nil, err
+	}
+	objects := make([]client.Object, 0, len(items))
+	for _, item := range items {
+		object, ok := item.(client.Object)
+		if !ok {
+			return nil, fmt.Errorf("list item %T does not implement client.Object", item)
+		}
+		if scheme != nil {
+			typed, err := scheme.New(gvk)
+			if err != nil {
+				return nil, fmt.Errorf("create typed %s object: %w", gvk.Kind, err)
+			}
+			unstructuredObject, err := runtime.DefaultUnstructuredConverter.ToUnstructured(object)
+			if err != nil {
+				return nil, fmt.Errorf("convert %s object to unstructured: %w", gvk.Kind, err)
+			}
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(unstructuredObject, typed); err != nil {
+				return nil, fmt.Errorf("convert %s object to typed form: %w", gvk.Kind, err)
+			}
+			object, ok = typed.(client.Object)
+			if !ok {
+				return nil, fmt.Errorf("typed %s object does not implement client.Object", gvk.Kind)
+			}
+		}
+		objects = append(objects, object)
+	}
+	return objects, nil
+}
