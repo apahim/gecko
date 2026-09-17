@@ -1,0 +1,12 @@
+{{- if .Values.platformRoles.enabled }}
+apiVersion: gcp.managed.openshift.io/v1
+kind: PlatformRole
+metadata:
+  name: cluster-viewer
+spec:
+  permissions:
+    - cluster.list
+    - cluster.get
+    - nodepool.list
+    - nodepool.get
+{{- end }}

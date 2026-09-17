@@ -25,6 +25,14 @@ var (
 	//go:embed .schemas/nodepool_schema.yaml
 	NodePoolSchemaYAML string
 
+	// RoleBindingSchemaYAML contains the OpenAPI v3 schema for RoleBinding.
+	//go:embed .schemas/rolebinding_schema.yaml
+	RoleBindingSchemaYAML string
+
+	// RoleSchemaYAML contains the OpenAPI v3 schema for Role.
+	//go:embed .schemas/role_schema.yaml
+	RoleSchemaYAML string
+
 	// VersionSchemaYAML contains the OpenAPI v3 schema for Version.
 	//go:embed .schemas/version_schema.yaml
 	VersionSchemaYAML string
@@ -101,6 +109,24 @@ var NodePoolResourceInfo = types.ResourceInfo{
 	},
 }
 
+// RoleBindingResourceInfo describes the RoleBinding resource type.
+var RoleBindingResourceInfo = types.ResourceInfo{
+	GVK:        GroupVersion.WithKind("RoleBinding"),
+	Plural:     "rolebindings",
+	Singular:   "rolebinding",
+	Namespaced: true,
+	SchemaYAML: RoleBindingSchemaYAML,
+}
+
+// RoleResourceInfo describes the Role resource type.
+var RoleResourceInfo = types.ResourceInfo{
+	GVK:        GroupVersion.WithKind("Role"),
+	Plural:     "roles",
+	Singular:   "role",
+	Namespaced: true,
+	SchemaYAML: RoleSchemaYAML,
+}
+
 // VersionResourceInfo describes the Version resource type.
 var VersionResourceInfo = types.ResourceInfo{
 	GVK:        GroupVersion.WithKind("Version"),
@@ -118,6 +144,8 @@ func GetResourceInfos() []types.ResourceInfo {
 		ClusterResourceInfo,
 		ControlPlaneUpgradePolicyResourceInfo,
 		NodePoolResourceInfo,
+		RoleBindingResourceInfo,
+		RoleResourceInfo,
 		VersionResourceInfo,
 	}
 }
