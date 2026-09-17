@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,6 +21,9 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/postgres"
 	spannerbackend "github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/spanner"
+	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
+	"github.com/openshift-online/gecko/platform-api/pkg/authn"
+	"github.com/openshift-online/gecko/platform-api/pkg/authz"
 	"github.com/openshift-online/gecko/platform-api/pkg/featureflags"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,6 +33,7 @@ import (
 func main() {
 	var (
 		address         string
+		publicAddress   string
 		privatePort     int
 		publicPort      int
 		corsOrigins     string
@@ -38,10 +43,12 @@ func main() {
 		authnKubeconfig string
 		authzKubeconfig string
 		disableAuth     bool
+		devAuth         bool
 		migrateOnly     bool
 	)
 
 	flag.StringVar(&address, "address", "0.0.0.0", "address to bind to")
+	flag.StringVar(&publicAddress, "public-address", "", "address to bind the public API to (defaults to --address)")
 	flag.IntVar(&privatePort, "private-port", 8080, "port for private API")
 	flag.IntVar(&publicPort, "public-port", 8081, "port for public API")
 	flag.BoolVar(&enablePublic, "enable-public-api", true, "enable public API server")
@@ -51,6 +58,7 @@ func main() {
 	flag.StringVar(&authnKubeconfig, "authentication-kubeconfig", "", "kubeconfig for delegated authentication (in-cluster if empty)")
 	flag.StringVar(&authzKubeconfig, "authorization-kubeconfig", "", "kubeconfig for delegated authorization (in-cluster if empty)")
 	flag.BoolVar(&disableAuth, "disable-auth", false, "disable authentication/authorization (for testing/local dev)")
+	flag.BoolVar(&devAuth, "dev-auth", false, "accept X-Dev-User for public API authentication (local development only)")
 	flag.BoolVar(&migrateOnly, "migrate-only", false, "run Spanner DDL migrations and exit (for PreSync Jobs)")
 	flag.Parse()
 
@@ -176,6 +184,34 @@ func main() {
 	}
 
 	// Create server with resource configuration
+	publicMiddlewareFactory := func(factory apiserver.StorageFactory, privateScheme *runtime.Scheme, stopCh <-chan struct{}) ([]func(http.Handler) http.Handler, error) {
+		stores, err := authz.NewStores(factory, privateScheme)
+		if err != nil {
+			return nil, err
+		}
+
+		// API type validation uses these callbacks to verify RoleBinding
+		// references without importing the authz package into the API types.
+		privatev1.SetValidatorDeps(privatev1.ValidatorDeps{
+			RoleExists:         stores.RoleExists,
+			PlatformRoleExists: stores.PlatformRoleExists,
+		})
+
+		if disableAuth {
+			return nil, nil
+		}
+
+		authorizer, err := authz.NewAuthorizer(context.Background(), stores, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load authorization policy: %w", err)
+		}
+		authorizer.StartWatching(stopCh)
+		return []func(http.Handler) http.Handler{
+			authn.Middleware(authn.Config{AllowDevHeader: devAuth}),
+			authz.Middleware(authorizer, logger),
+		}, nil
+	}
+
 	opts := apiserver.Options{
 		Address: address,
 		Private: apiserver.PrivateAPIOptions{
@@ -189,10 +225,12 @@ func main() {
 			DisableAuth:              disableAuth,
 		},
 		Public: apiserver.PublicAPIOptions{
-			Enable:    enablePublic,
-			Port:      publicPort,
-			Resources: getPublicResources(),
-			Scheme:    getPublicScheme(),
+			Enable:            enablePublic,
+			Address:           publicAddress,
+			Port:              publicPort,
+			Resources:         getPublicResources(),
+			Scheme:            getPublicScheme(),
+			MiddlewareFactory: publicMiddlewareFactory,
 		},
 		StorageFactory: storageFactory,
 		CORSOrigins:    origins,

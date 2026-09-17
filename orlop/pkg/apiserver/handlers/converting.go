@@ -195,10 +195,18 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Extract the authenticated user email from the X-Endpoint-API-UserInfo header
-	// (set by ESPv2) and store it as a private annotation. The private prefix ensures
-	// it is automatically stripped from the public API and cannot be set by clients.
-	if email := extractUserEmail(r); email != "" {
+	// Prefer the identity validated by the public API authn middleware. Keep the
+	// header fallback for callers that use ConvertingResourceHandler directly
+	// (for example, the generic orlop integration tests); the production
+	// platform-api-server always installs the validating middleware first.
+	email, _ := AuthenticatedUserFromContext(r.Context())
+	if email == "" {
+		email = extractUserEmail(r)
+	}
+
+	// Store the identity as a private annotation. The private prefix ensures it
+	// is automatically stripped from the public API and cannot be set by clients.
+	if email != "" {
 		privateAccessor, err := meta.Accessor(privateObj)
 		if err == nil {
 			annotations := privateAccessor.GetAnnotations()
