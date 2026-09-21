@@ -104,4 +104,7 @@ Validate required values that must not remain as placeholders.
 {{- fail "spanner and alloydb cannot both be enabled; choose one storage backend" -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.publicApi.enabled (not .Values.esp.enabled) (not .Values.publicApi.bindAddress) -}}
+{{- fail "publicApi.bindAddress must be set when publicApi.enabled is true and esp.enabled is false" -}}
+{{- end -}}
 {{- end }}

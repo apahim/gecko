@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/cedar-policy/cedar-go"
@@ -13,6 +14,7 @@ import (
 // Cedar policy set and a per-user entity cache.
 type Authorizer struct {
 	stores   Stores
+	reloadMu sync.Mutex
 	policies atomic.Pointer[cedar.PolicySet]
 	cache    *EntityCache
 	logger   logr.Logger
@@ -38,6 +40,9 @@ func NewAuthorizer(ctx context.Context, stores Stores, logger logr.Logger) (*Aut
 // Reload rebuilds and atomically installs the policy set. On failure, the
 // previous set remains active.
 func (a *Authorizer) Reload(ctx context.Context) error {
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+
 	policies, err := GeneratePolicySet(ctx, a.stores)
 	if err != nil {
 		return err

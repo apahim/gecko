@@ -26,8 +26,9 @@ tls:
 publicApi:
   enabled: true
   port: 8081
-  # Leave empty to use the private API bind address when ESPv2 is disabled.
-  # ESPv2 deployments always bind the public listener to loopback.
+  # ESPv2 deployments always bind the public listener to loopback. When ESPv2
+  # is disabled and the public API is enabled, set this explicitly (for
+  # example, to 0.0.0.0) to expose the public Service port.
   bindAddress: ""
 
 platformRoles:

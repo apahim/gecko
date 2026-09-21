@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 
@@ -89,6 +90,57 @@ func TestGeneratePolicySetIsPerBinding(t *testing.T) {
 	}
 	if got := string(policies.MarshalCedar()); got == "" {
 		t.Fatal("expected Cedar policy text")
+	}
+}
+
+func TestGeneratePolicySetSkipsDanglingBinding(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := privatev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	stores, err := NewStores(func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
+		return memory.NewMemoryStore(resourceType, scheme, gvk), nil
+	}, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	role := &privatev1.PlatformRole{Spec: privatev1.PlatformRoleSpec{Permissions: []string{"cluster.get"}}}
+	role.Name = "cluster-viewer"
+	if err := stores.PlatformRoles.Create(context.Background(), role); err != nil {
+		t.Fatal(err)
+	}
+
+	validBinding := &privatev1.RoleBinding{
+		Spec: privatev1.RoleBindingSpec{
+			Subject: "alice@example.com",
+			RoleRef: privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+		},
+	}
+	validBinding.Name = "valid"
+	validBinding.Namespace = "project-a"
+	if err := stores.RoleBindings.Create(context.Background(), validBinding); err != nil {
+		t.Fatal(err)
+	}
+
+	danglingBinding := &privatev1.RoleBinding{
+		Spec: privatev1.RoleBindingSpec{
+			Subject: "bob@example.com",
+			RoleRef: privatev1.RoleRef{Kind: "PlatformRole", Name: "deleted-role", APIGroup: privatev1.GroupVersion.Group},
+		},
+	}
+	danglingBinding.Name = "dangling"
+	danglingBinding.Namespace = "project-a"
+	if err := stores.RoleBindings.Create(context.Background(), danglingBinding); err != nil {
+		t.Fatal(err)
+	}
+
+	policies, err := GeneratePolicySet(context.Background(), stores)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(maps.Collect(policies.All())); got != 1 {
+		t.Fatalf("policy count = %d, want 1 valid binding policy", got)
 	}
 }
 

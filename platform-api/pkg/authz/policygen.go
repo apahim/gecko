@@ -57,7 +57,9 @@ func GeneratePolicySet(ctx context.Context, stores Stores) (*cedar.PolicySet, er
 	for _, binding := range bindings {
 		permissions, err := permissionsForBinding(binding, rolesByNamespace, platformRolesByName)
 		if err != nil {
-			return nil, err
+			// A dangling or malformed binding must not block policy updates
+			// for every other binding. The invalid binding grants nothing.
+			continue
 		}
 		policyID := cedar.PolicyID(bindingPolicyID(binding))
 		policy, err := policyForBinding(binding, permissions)

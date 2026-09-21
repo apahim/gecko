@@ -79,7 +79,7 @@ curl -X POST http://localhost:8081/apis/gcp.managed.openshift.io/v1/namespaces/d
 | Flag | Default | Description |
 |---|---|---|
 | `--address` | `0.0.0.0` | Bind address |
-| `--public-address` | | Public API bind address (defaults to `--address`) |
+| `--public-address` | `127.0.0.1` | Public API bind address |
 | `--private-port` | `8080` | Private API port |
 | `--public-port` | `8081` | Public API port |
 | `--enable-public-api` | `true` | Enable public API server |

@@ -48,7 +48,7 @@ func main() {
 	)
 
 	flag.StringVar(&address, "address", "0.0.0.0", "address to bind to")
-	flag.StringVar(&publicAddress, "public-address", "", "address to bind the public API to (defaults to --address)")
+	flag.StringVar(&publicAddress, "public-address", "127.0.0.1", "address to bind the public API to")
 	flag.IntVar(&privatePort, "private-port", 8080, "port for private API")
 	flag.IntVar(&publicPort, "public-port", 8081, "port for public API")
 	flag.BoolVar(&enablePublic, "enable-public-api", true, "enable public API server")

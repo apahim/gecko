@@ -9,6 +9,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 )
 
+const policyReloadTimeout = 30 * time.Second
+
 // StartWatching starts one ResourceStore watcher per authorization resource.
 // Every event triggers a full policy rebuild and entity-cache invalidation;
 // this intentionally favors a simple, consistent snapshot over selective
@@ -17,9 +19,18 @@ func (a *Authorizer) StartWatching(stopCh <-chan struct{}) {
 	// Reconcile once immediately before the asynchronous watchers subscribe.
 	// This closes the startup race where a resource changes between the initial
 	// load and watcher creation.
-	if err := a.Reload(context.Background()); err != nil {
+	startupCtx, startupCancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-stopCh:
+			startupCancel()
+		case <-startupCtx.Done():
+		}
+	}()
+	if err := a.reloadWithTimeout(startupCtx); err != nil {
 		a.logger.Error(err, "authorization policy reload failed at watcher startup")
 	}
+	startupCancel()
 	for name, store := range map[string]storage.ResourceStore{
 		"PlatformRole": a.stores.PlatformRoles,
 		"Role":         a.stores.Roles,
@@ -71,7 +82,7 @@ func (a *Authorizer) watchStore(stopCh <-chan struct{}, resourceName string, sto
 			continue
 		}
 		backoff = 100 * time.Millisecond
-		if err := a.Reload(context.Background()); err != nil {
+		if err := a.reloadWithTimeout(ctx); err != nil {
 			a.logger.Error(err, "authorization policy reload failed after watcher connection", "resource", resourceName)
 		}
 
@@ -86,8 +97,7 @@ func (a *Authorizer) watchStore(stopCh <-chan struct{}, resourceName string, sto
 					watchClosed = true
 					break
 				}
-				a.cache.InvalidateAll()
-				if err := a.Reload(context.Background()); err != nil {
+				if err := a.reloadWithTimeout(ctx); err != nil {
 					// Keep the last-known-good policy set. The next event or
 					// reconnect will retry the rebuild.
 					a.logger.Error(err, "authorization policy reload failed", "resource", resourceName)
@@ -99,6 +109,12 @@ func (a *Authorizer) watchStore(stopCh <-chan struct{}, resourceName string, sto
 			return
 		}
 	}
+}
+
+func (a *Authorizer) reloadWithTimeout(ctx context.Context) error {
+	reloadCtx, cancel := context.WithTimeout(ctx, policyReloadTimeout)
+	defer cancel()
+	return a.Reload(reloadCtx)
 }
 
 func currentResourceVersion(ctx context.Context, store storage.ResourceStore) (string, error) {
