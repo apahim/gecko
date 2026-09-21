@@ -37,4 +37,23 @@ type ResourceInfo struct {
 	ParentResource *ParentResourceInfo
 	// PrinterColumns defines custom columns for kubectl get output.
 	PrinterColumns []PrinterColumn
+	// Verbs is the set of HTTP verbs exposed on the public API for this resource.
+	// Valid values are: create, get, list, update, patch, delete, watch.
+	// When nil or empty, all verbs are allowed (full backward compatibility).
+	// Populated from the // +orlop:public-verbs: annotation on the package doc comment.
+	Verbs []string
+}
+
+// VerbAllowed reports whether the given verb is permitted for this resource.
+// When Verbs is nil or empty, all verbs are allowed (backward-compatible default).
+func (r ResourceInfo) VerbAllowed(verb string) bool {
+	if len(r.Verbs) == 0 {
+		return true
+	}
+	for _, v := range r.Verbs {
+		if v == verb {
+			return true
+		}
+	}
+	return false
 }

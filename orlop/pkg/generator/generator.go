@@ -28,7 +28,8 @@ type Generator struct {
 	typesImportPath string
 	inputBasePath   string
 	outputBasePath  string
-	publicPackages  map[string]bool // tracks which packages have +orlop:public marker
+	publicPackages  map[string]bool     // tracks which packages have +orlop:public marker
+	typeVerbs       map[string][]string // tracks +orlop:public-verbs per type name
 }
 
 func NewGenerator(inputDir, outputDir string) (*Generator, error) {
@@ -48,6 +49,7 @@ func NewGenerator(inputDir, outputDir string) (*Generator, error) {
 		inputBasePath:   modulePath + "/" + inputDir,
 		outputBasePath:  modulePath + "/" + outputDir,
 		publicPackages:  make(map[string]bool),
+		typeVerbs:       make(map[string][]string),
 	}, nil
 }
 
@@ -111,15 +113,20 @@ func (g *Generator) Generate() error {
 		return err
 	}
 
-	// Pre-scan: collect +orlop:public package markers across all files
-	// so that analyzeFile doesn't skip files sorted before groupversion_info.go.
+	// Pre-scan: collect +orlop:public package markers and +orlop:public-verbs
+	// type markers across all files so that analyzeFile doesn't skip files
+	// sorted before groupversion_info.go.
 	for _, path := range files {
 		f, err := parser.ParseFile(g.fset, path, nil, parser.ParseComments)
 		if err != nil {
 			return fmt.Errorf("pre-scanning %s: %w", path, err)
 		}
+		pkgDir := filepath.Dir(path)
 		if g.hasPackagePublicMarker(f) {
-			g.publicPackages[filepath.Dir(path)] = true
+			g.publicPackages[pkgDir] = true
+		}
+		if err := g.scanTypeVerbs(f, path); err != nil {
+			return err
 		}
 	}
 
@@ -350,6 +357,121 @@ func (g *Generator) hasPackagePublicMarker(file *ast.File) bool {
 	}
 
 	return false
+}
+
+// validVerbs is the set of allowed verb tokens for +orlop:public-verbs.
+var validVerbs = map[string]bool{
+	"create": true,
+	"get":    true,
+	"list":   true,
+	"update": true,
+	"patch":  true,
+	"delete": true,
+	"watch":  true,
+}
+
+// parseVerbList parses a comma-separated verb list from the value after the
+// "+orlop:public-verbs:" prefix. It returns the deduplicated, validated verb
+// list or an error for unknown tokens.
+func parseVerbList(raw string) ([]string, error) {
+	tokens := strings.Split(raw, ",")
+	seen := make(map[string]bool)
+	var verbs []string
+	for _, t := range tokens {
+		v := strings.TrimSpace(t)
+		if v == "" {
+			continue
+		}
+		if !validVerbs[v] {
+			return nil, fmt.Errorf("unknown verb token %q in +orlop:public-verbs annotation (valid: create, get, list, update, patch, delete, watch)", v)
+		}
+		if !seen[v] {
+			seen[v] = true
+			verbs = append(verbs, v)
+		}
+	}
+	return verbs, nil
+}
+
+// extractPublicVerbsFromComments scans a comment list for a +orlop:public-verbs:
+// annotation and returns the parsed verb list. Returns nil when absent.
+func extractPublicVerbsFromComments(comments []*ast.Comment) ([]string, error) {
+	const prefix = "+orlop:public-verbs:"
+	for _, comment := range comments {
+		text := strings.TrimPrefix(comment.Text, "//")
+		text = strings.TrimSpace(text)
+		if !strings.HasPrefix(text, prefix) {
+			continue
+		}
+		return parseVerbList(strings.TrimPrefix(text, prefix))
+	}
+	return nil, nil
+}
+
+// scanTypeVerbs scans all type declarations in file for +orlop:public-verbs:
+// annotations on their doc comments, and populates g.typeVerbs. It also
+// validates that the annotation does not appear on struct fields or on the
+// package doc comment.
+func (g *Generator) scanTypeVerbs(file *ast.File, path string) error {
+	const marker = "+orlop:public-verbs"
+
+	// Validate: annotation must not appear on the package doc comment.
+	if file.Doc != nil {
+		for _, comment := range file.Doc.List {
+			if strings.Contains(comment.Text, marker) {
+				return fmt.Errorf("%s: +orlop:public-verbs annotation must be placed on a type declaration, not the package doc comment", path)
+			}
+		}
+	}
+
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+
+			structType, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+
+			// Validate: annotation must not appear on struct fields.
+			for _, field := range structType.Fields.List {
+				if field.Doc == nil {
+					continue
+				}
+				for _, comment := range field.Doc.List {
+					if strings.Contains(comment.Text, marker) {
+						return fmt.Errorf("%s: +orlop:public-verbs annotation must be placed on a type declaration, not on a struct field", path)
+					}
+				}
+			}
+
+			// Parse from the type's own doc comment. The doc comment may be
+			// on the GenDecl (shared for all specs) or on the TypeSpec itself.
+			var docComments []*ast.Comment
+			if typeSpec.Doc != nil {
+				docComments = typeSpec.Doc.List
+			} else if genDecl.Doc != nil {
+				docComments = genDecl.Doc.List
+			}
+
+			verbs, err := extractPublicVerbsFromComments(docComments)
+			if err != nil {
+				return fmt.Errorf("%s: type %s: %w", path, typeSpec.Name.Name, err)
+			}
+			if verbs != nil {
+				g.typeVerbs[typeSpec.Name.Name] = verbs
+			}
+		}
+	}
+	return nil
 }
 
 func (g *Generator) collectReferencedTypes(expr ast.Expr) {
