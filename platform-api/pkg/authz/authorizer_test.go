@@ -144,6 +144,66 @@ func TestGeneratePolicySetSkipsDanglingBinding(t *testing.T) {
 	}
 }
 
+func TestAuthorizerRevokesAccessAfterReferencedRoleDeletion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := privatev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	stores, err := NewStores(func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
+		return memory.NewMemoryStore(resourceType, scheme, gvk), nil
+	}, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	role := &privatev1.Role{
+		Spec: privatev1.RoleSpec{Permissions: []string{"cluster.get"}},
+	}
+	role.Name = "cluster-viewer"
+	role.Namespace = "project-a"
+	role.SetGroupVersionKind(privatev1.GroupVersion.WithKind("Role"))
+	if err := stores.Roles.Create(context.Background(), role); err != nil {
+		t.Fatal(err)
+	}
+
+	binding := &privatev1.RoleBinding{
+		Spec: privatev1.RoleBindingSpec{
+			Subject: "alice@example.com",
+			RoleRef: privatev1.RoleRef{Kind: "Role", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+		},
+	}
+	binding.Name = "alice-viewer"
+	binding.Namespace = "project-a"
+	binding.SetGroupVersionKind(privatev1.GroupVersion.WithKind("RoleBinding"))
+	if err := stores.RoleBindings.Create(context.Background(), binding); err != nil {
+		t.Fatal(err)
+	}
+
+	authorizer, err := NewAuthorizer(context.Background(), stores, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := authorizer.Authorize(context.Background(), "alice@example.com", GetCluster, "project-a")
+	if err != nil || !allowed {
+		t.Fatalf("GetCluster before Role deletion = allowed %v, err %v; want allowed", allowed, err)
+	}
+
+	if err := stores.Roles.Delete(context.Background(), "project-a", "cluster-viewer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := authorizer.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	allowed, err = authorizer.Authorize(context.Background(), "alice@example.com", GetCluster, "project-a")
+	if err != nil {
+		t.Fatalf("GetCluster after Role deletion returned error: %v", err)
+	}
+	if allowed {
+		t.Fatal("GetCluster after Role deletion = allowed, want denied")
+	}
+}
+
 func TestAuthorizerReloadsAfterRoleBindingChange(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := privatev1.AddToScheme(scheme); err != nil {
