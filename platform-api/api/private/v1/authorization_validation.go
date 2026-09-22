@@ -78,6 +78,9 @@ func NormalizeEmail(email string) (string, error) {
 // ValidatorDeps supplies storage-backed checks that cannot live in the API
 // types package without creating an import cycle with the authorization
 // implementation.
+// A nil callback means storage-backed existence validation is unavailable,
+// which is intentional for private-only or standalone server modes.
+// Structural RoleRef validation still applies in that case.
 //
 //nolint:kubeapilinter // runtime validation callbacks are not serialized API fields.
 type ValidatorDeps struct {
