@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -86,6 +87,10 @@ func main() {
 
 		log.Println("Spanner DDL migrations completed successfully")
 		os.Exit(0)
+	}
+
+	if err := validatePublicAuthAddress(enablePublic, address, publicAddress, devAuth, disableAuth); err != nil {
+		log.Fatal(err)
 	}
 
 	featureFlagEvaluator, err := featureflags.NewFromEnvironment()
@@ -266,4 +271,47 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+}
+
+func validatePublicAuthAddress(enablePublic bool, address, publicAddress string, devAuth, disableAuth bool) error {
+	if !enablePublic || (!devAuth && !disableAuth) {
+		return nil
+	}
+
+	effectiveAddress := publicAddress
+	if effectiveAddress == "" {
+		effectiveAddress = address
+		if disableAuth {
+			// aggregated.Config.Complete forces the private bind address to
+			// loopback when auth is disabled, and the public server defaults
+			// to that resolved address when --public-address is empty.
+			effectiveAddress = "127.0.0.1"
+		}
+		if effectiveAddress == "" {
+			effectiveAddress = "0.0.0.0"
+		}
+	}
+
+	if isLoopbackAddress(effectiveAddress) {
+		return nil
+	}
+
+	mode := "--dev-auth"
+	if disableAuth {
+		mode = "--disable-auth"
+		if devAuth {
+			mode = "--dev-auth and --disable-auth"
+		}
+	}
+	return fmt.Errorf("%s requires the public API to bind to a loopback address, refusing to bind to %q", mode, effectiveAddress)
+}
+
+func isLoopbackAddress(address string) bool {
+	address = strings.TrimSpace(address)
+	if strings.EqualFold(address, "localhost") {
+		return true
+	}
+	address = strings.Trim(address, "[]")
+	ip := net.ParseIP(address)
+	return ip != nil && ip.IsLoopback()
 }
