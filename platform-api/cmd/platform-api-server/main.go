@@ -303,7 +303,7 @@ func validatePublicAuthAddress(enablePublic bool, address, publicAddress string,
 			mode = "--dev-auth and --disable-auth"
 		}
 	}
-	return fmt.Errorf("%s requires the public API to bind to a loopback address, refusing to bind to %q", mode, effectiveAddress)
+	return fmt.Errorf("%s requires the public API to bind to a loopback address", mode)
 }
 
 func isLoopbackAddress(address string) bool {

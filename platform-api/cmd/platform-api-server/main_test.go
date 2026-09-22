@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidatePublicAuthAddress(t *testing.T) {
 	tests := []struct {
@@ -69,6 +72,13 @@ func TestValidatePublicAuthAddress(t *testing.T) {
 			err := validatePublicAuthAddress(tt.enablePublic, tt.address, tt.publicAddress, tt.devAuth, tt.disableAuth)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("validatePublicAuthAddress() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				for _, address := range []string{tt.address, tt.publicAddress} {
+					if address != "" && strings.Contains(err.Error(), address) {
+						t.Errorf("validation error exposes bind address %q: %v", address, err)
+					}
+				}
 			}
 		})
 	}
