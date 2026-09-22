@@ -6,8 +6,8 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // PlatformRole is cluster-scoped, but the binding itself remains scoped to the
 // namespace in which access is granted.
 //
-// Conditions and object-state filtering are intentionally left for GCP-1031;
-// accepting them here before the authorization engine evaluates them would be
+// Conditions and object-state filtering are not accepted until the
+// authorization engine evaluates them; accepting them before then would be
 // unsafe.
 //
 // +kubebuilder:object:root=true

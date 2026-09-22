@@ -12,9 +12,9 @@ import (
 )
 
 // Middleware enforces Cedar authorization for the public CRUD API. The
-// object-state-aware and per-item list phases are intentionally deferred to
-// GCP-1031; this foundation authorizes namespace-scoped operations and fails
-// closed for cross-namespace collection requests.
+// object-state-aware and per-item list phases are not part of this foundation;
+// it authorizes namespace-scoped operations and fails closed for
+// cross-namespace collection requests.
 func Middleware(authorizer *Authorizer, logger logr.Logger) func(http.Handler) http.Handler {
 	if logger.GetSink() == nil {
 		logger = logr.Discard()
@@ -39,8 +39,8 @@ func Middleware(authorizer *Authorizer, logger logr.Logger) func(http.Handler) h
 				return
 			}
 			if requestInfo.namespace == "" {
-				// Cross-namespace filtering is implemented in GCP-1031. Do
-				// not return all namespaces while that filtering is absent.
+				// Cross-namespace filtering is not implemented in this
+				// foundation. Do not return all namespaces while it is absent.
 				writeForbidden(w)
 				return
 			}

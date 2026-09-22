@@ -23,7 +23,7 @@ import (
 // GeneratePolicySet builds the complete Cedar policy set from the current
 // authorization resources. Each RoleBinding gets its own policy so bindings
 // for the same role cannot accidentally share conditions or principals when
-// ABAC support is added by GCP-1031.
+// condition-aware authorization is added.
 func GeneratePolicySet(ctx context.Context, stores Stores) (*cedar.PolicySet, error) {
 	return generatePolicySet(ctx, stores, logr.Discard())
 }
