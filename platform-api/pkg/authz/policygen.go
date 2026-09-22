@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cedar-policy/cedar-go"
+	"github.com/go-logr/logr"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -24,6 +25,10 @@ import (
 // for the same role cannot accidentally share conditions or principals when
 // ABAC support is added by GCP-1031.
 func GeneratePolicySet(ctx context.Context, stores Stores) (*cedar.PolicySet, error) {
+	return generatePolicySet(ctx, stores, logr.Discard())
+}
+
+func generatePolicySet(ctx context.Context, stores Stores, logger logr.Logger) (*cedar.PolicySet, error) {
 	roles, err := listRoles(ctx, stores)
 	if err != nil {
 		return nil, fmt.Errorf("list Roles: %w", err)
@@ -59,6 +64,12 @@ func GeneratePolicySet(ctx context.Context, stores Stores) (*cedar.PolicySet, er
 		if err != nil {
 			// A dangling or malformed binding must not block policy updates
 			// for every other binding. The invalid binding grants nothing.
+			logger.Error(err, "skipping invalid authorization binding",
+				"namespace", binding.Namespace,
+				"binding", binding.Name,
+				"roleKind", binding.Spec.RoleRef.Kind,
+				"roleName", binding.Spec.RoleRef.Name,
+			)
 			continue
 		}
 		policyID := cedar.PolicyID(bindingPolicyID(binding))

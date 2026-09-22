@@ -43,7 +43,7 @@ func (a *Authorizer) Reload(ctx context.Context) error {
 	a.reloadMu.Lock()
 	defer a.reloadMu.Unlock()
 
-	policies, err := GeneratePolicySet(ctx, a.stores)
+	policies, err := generatePolicySet(ctx, a.stores, a.logger)
 	if err != nil {
 		return err
 	}
