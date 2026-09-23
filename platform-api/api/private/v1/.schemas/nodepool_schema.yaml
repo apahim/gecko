@@ -22,19 +22,20 @@ properties:
     properties:
       autoscaling:
         description: |-
-          autoScaling specifies auto-scaling behavior for the NodePool.
-          autoScaling is mutually exclusive with replicas. If replicas is set, this field must be omitted.
+          autoscaling specifies auto-scaling behavior for the NodePool.
+          autoscaling is mutually exclusive with nodeCount. If nodeCount is set, this field must be omitted.
         properties:
           max:
             description: max is the maximum number of nodes allowed in the pool. Must
               be >= 1 and >= Min.
             format: int32
+            maximum: 500
             minimum: 1
             type: integer
           min:
             description: |-
               min is the minimum number of nodes to maintain in the pool.
-              Can be set to 0 for scale-from-zero for AWS and Azure platforms.
+              Can be set to 0 to allow the pool to scale down completely.
               Must be >= 0 and <= .Max.
             format: int32
             minimum: 0
@@ -48,22 +49,22 @@ properties:
           rule: self.max >= self.min
       clusterID:
         description: |-
-          clusterName is the name of the HostedCluster this NodePool belongs to.
-          If a HostedCluster with this name doesn't exist, the controller will no-op until it exists.
+          clusterID is the name of the Cluster this NodePool belongs to.
+          If a Cluster with this name doesn't exist, the controller will no-op until it exists.
         maxLength: 253
         minLength: 1
         type: string
         x-kubernetes-validations:
-        - message: ClusterName is immutable
+        - message: clusterID is immutable
           rule: self == oldSelf
-        - message: clusterName must consist of lowercase alphanumeric characters or
+        - message: clusterID must consist of lowercase alphanumeric characters or
             '-', start and end with an alphanumeric character, and be between 1 and
             253 characters
           rule: self.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
       nodeCount:
         description: |-
           nodeCount is the desired number of nodes the pool should maintain. If unset, the controller default value is 0.
-          nodeCount is mutually exclusive with autoscaling. If autoscaling is configured, replicas must be omitted and autoscaling will control the NodePool size internally.
+          nodeCount is mutually exclusive with autoscaling. If autoscaling is configured, nodeCount must be omitted and autoscaling will control the NodePool size internally.
         format: int32
         minimum: 0
         type: integer
@@ -172,8 +173,7 @@ properties:
                     - Values: empty or 1–63 chars; allowed [a-z0-9_-]
                     - Maximum 60 user labels per resource (GCP limit is 64 total, with ~4 reserved)
                 items:
-                  description: GCPResourceLabel is a label applied to GCP resources
-                    created for the cluster.
+                  description: GCPResourceLabel is a label applied to GCP resources.
                   properties:
                     key:
                       maxLength: 63
@@ -201,10 +201,12 @@ properties:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: Subnet is immutable
+                - message: subnet is immutable
                   rule: self == oldSelf
-                - message: subnet must be a valid RFC 1035 label (e.g., my-subnet)
-                  rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
+                - message: 'subnet must be a valid GCP subnet name: start with a lowercase
+                    letter, contain only lowercase letters, digits, or hyphens, and
+                    end with a letter or digit'
+                  rule: self.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')
               zone:
                 description: |-
                   zone is the GCP zone where node instances will be created.
@@ -217,7 +219,7 @@ properties:
                 x-kubernetes-validations:
                 - message: zone must be in the form of region-zone (e.g., us-central1-a)
                   rule: self.matches('^[a-z]+(?:-[a-z0-9]+)*-[a-z]$')
-                - message: Zone is immutable
+                - message: zone is immutable
                   rule: self == oldSelf
             required:
             - machineType
@@ -236,6 +238,13 @@ properties:
           pool.
         properties:
           channelGroup:
+            description: |-
+              channelGroup is the Cincinnati channel group used to resolve the release image.
+              Valid values are "stable", "fast", and "candidate".
+            enum:
+            - stable
+            - fast
+            - candidate
             maxLength: 63
             minLength: 1
             type: string
@@ -247,9 +256,9 @@ properties:
             minLength: 1
             type: string
             x-kubernetes-validations:
-            - message: Version must be a valid semver v2 major.minor.patch. (e.g.,
-                4.14.9)
-              rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
+            - message: version must be a valid semver major.minor.patch without leading
+                'v' (e.g., 4.14.9)
+              rule: self.matches('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
         required:
         - channelGroup
         - version
@@ -286,7 +295,7 @@ properties:
                 rule: self.matches('^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\\/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$')
             value:
               description: value is the taint value corresponding to the taint key.
-              maxLength: 253
+              maxLength: 63
               type: string
               x-kubernetes-validations:
               - message: Value must start and end with alphanumeric characters and

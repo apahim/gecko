@@ -43,24 +43,21 @@ type NodePoolList struct {
 	Items []NodePool `json:"items"`
 }
 
-// NodePoolSpec is defines the NodePool behavior.
+// NodePoolSpec defines the NodePool behavior.
 // +kubebuilder:validation:XValidation:rule="!has(self.nodeCount) || !has(self.autoscaling)",message="nodeCount and autoscaling are mutually exclusive"
 type NodePoolSpec struct {
-	// clusterName is the name of the HostedCluster this NodePool belongs to.
-	// If a HostedCluster with this name doesn't exist, the controller will no-op until it exists.
-	// TODO: Should this be ClusterName?
+	// clusterID is the name of the Cluster this NodePool belongs to.
+	// If a Cluster with this name doesn't exist, the controller will no-op until it exists.
 
-	// +immutable
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="ClusterName is immutable"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="clusterID is immutable"
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="clusterName must consist of lowercase alphanumeric characters or '-', start and end with an alphanumeric character, and be between 1 and 253 characters"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="clusterID must consist of lowercase alphanumeric characters or '-', start and end with an alphanumeric character, and be between 1 and 253 characters"
 	// +required
 	ClusterID string `json:"clusterID"`
 
 	// platform specifies the underlying infrastructure provider for the NodePool
 	// and is used to configure platform specific behavior.
-	// TODO: We only support GCP, can we collapse this?
 	//
 
 	// +required
@@ -73,16 +70,15 @@ type NodePoolSpec struct {
 	Release ReleaseSpec `json:"release"`
 
 	// nodeCount is the desired number of nodes the pool should maintain. If unset, the controller default value is 0.
-	// nodeCount is mutually exclusive with autoscaling. If autoscaling is configured, replicas must be omitted and autoscaling will control the NodePool size internally.
-	// TODO: Field called "replicas" in hypershift, rename?
+	// nodeCount is mutually exclusive with autoscaling. If autoscaling is configured, nodeCount must be omitted and autoscaling will control the NodePool size internally.
 	//
 
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	NodeCount *int32 `json:"nodeCount,omitempty"`
 
-	// autoScaling specifies auto-scaling behavior for the NodePool.
-	// autoScaling is mutually exclusive with replicas. If replicas is set, this field must be omitted.
+	// autoscaling specifies auto-scaling behavior for the NodePool.
+	// autoscaling is mutually exclusive with nodeCount. If nodeCount is set, this field must be omitted.
 	//
 
 	// +optional
@@ -156,7 +152,6 @@ type GCPNodePoolPlatform struct {
 	// +kubebuilder:validation:Enum=pd-standard;pd-ssd;pd-balanced
 
 	// +optional
-	// +kubebuilder:validation:Enum=pd-standard;pd-ssd;pd-balanced
 	DiskType string `json:"diskType,omitempty"`
 
 	// zone is the GCP zone where node instances will be created.
@@ -169,7 +164,7 @@ type GCPNodePoolPlatform struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z]+(?:-[a-z0-9]+)*-[a-z]$')",message="zone must be in the form of region-zone (e.g., us-central1-a)"
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Zone is immutable"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zone is immutable"
 	Zone string `json:"zone,omitempty"`
 
 	// subnet is the name of the subnet where node instances will be created.
@@ -179,10 +174,10 @@ type GCPNodePoolPlatform struct {
 	//
 
 	// +required
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Subnet is immutable"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="subnet is immutable"
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z]+-[a-z]+[0-9]+$')",message="subnet must be a valid RFC 1035 label (e.g., my-subnet)"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')",message="subnet must be a valid GCP subnet name: start with a lowercase letter, contain only lowercase letters, digits, or hyphens, and end with a letter or digit"
 	// +example="my-subnet"
 	Subnet string `json:"subnet,omitempty"`
 
@@ -261,7 +256,7 @@ type TaintSpec struct {
 
 	// +optional
 	// +kubebuilder:validation:XValidation:rule=`self.matches('^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$')`,message="Value must start and end with alphanumeric characters and can only contain '-', '_', '.' in the middle"
-	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:MaxLength=63
 	Value string `json:"value,omitempty"`
 
 	// effect is the effect of the taint on pods
@@ -277,7 +272,7 @@ type TaintSpec struct {
 // +kubebuilder:validation:XValidation:rule="self.max >= self.min",message="max must be greater than or equal to min"
 type AutoscalingSpec struct {
 	// min is the minimum number of nodes to maintain in the pool.
-	// Can be set to 0 for scale-from-zero for AWS and Azure platforms.
+	// Can be set to 0 to allow the pool to scale down completely.
 	// Must be >= 0 and <= .Max.
 	//
 
@@ -286,11 +281,11 @@ type AutoscalingSpec struct {
 	Min *int32 `json:"min,omitempty"`
 
 	// max is the maximum number of nodes allowed in the pool. Must be >= 1 and >= Min.
-	// TODO: Is there a max on GCP to enforce?
 	//
 
 	// +required
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=500
 	Max int32 `json:"max"`
 }
 

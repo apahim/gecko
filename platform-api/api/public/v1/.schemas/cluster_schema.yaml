@@ -18,7 +18,7 @@ properties:
   metadata:
     type: object
   spec:
-    description: ClusterSpec is defines the Cluster behavior.
+    description: ClusterSpec defines the Cluster behavior.
     properties:
       dns:
         description: DNSSpec specifies the DNS configuration for the cluster ingress.
@@ -58,8 +58,6 @@ properties:
       networking:
         properties:
           clusterNetwork:
-            default:
-            - cidr: 10.132.0.0/14
             items:
               properties:
                 cidr:
@@ -114,8 +112,6 @@ properties:
             - message: networkType is immutable
               rule: self == oldSelf
           serviceNetwork:
-            default:
-            - cidr: 172.31.0.0/16
             items:
               type: string
             maxItems: 1
@@ -127,11 +123,11 @@ properties:
               rule: self == oldSelf
         type: object
       platform:
-        description: ClusterPlatformSpec defines the behavor of the infrastructure
+        description: ClusterPlatformSpec defines the behavior of the infrastructure
           provider.
         properties:
           gcp:
-            description: GCPClusterPlatform defines the behavor of the GCP infrastructure
+            description: GCPClusterPlatform defines the behavior of the GCP infrastructure
               provider.
             properties:
               endpointAccess:
@@ -145,10 +141,12 @@ properties:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: Network is immutable
+                - message: network is immutable
                   rule: self == oldSelf
-                - message: network must be a valid RFC 1035 label (e.g., my-pvc-network)
-                  rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
+                - message: 'network must be a valid GCP network name: start with a
+                    lowercase letter, contain only lowercase letters, digits, or hyphens,
+                    and end with a letter or digit'
+                  rule: self.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')
               projectID:
                 maxLength: 30
                 minLength: 6
@@ -158,7 +156,7 @@ properties:
                     lowercase letters, digits, or hyphens, and end with a letter or
                     digit
                   rule: self.matches('^[a-z][a-z0-9-]{4,28}[a-z0-9]$')
-                - message: Project is immutable
+                - message: projectID is immutable
                   rule: self == oldSelf
               region:
                 maxLength: 63
@@ -167,12 +165,11 @@ properties:
                 x-kubernetes-validations:
                 - message: region must be a valid GCP region (e.g., us-central1, europe-west2)
                   rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
-                - message: Region is immutable
+                - message: region is immutable
                   rule: self == oldSelf
               resourceLabels:
                 items:
-                  description: GCPResourceLabel is a label applied to GCP resources
-                    created for the cluster.
+                  description: GCPResourceLabel is a label applied to GCP resources.
                   properties:
                     key:
                       maxLength: 63
@@ -195,10 +192,12 @@ properties:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: Subnet is immutable
+                - message: subnet is immutable
                   rule: self == oldSelf
-                - message: subnet must be a valid RFC 1035 label (e.g., my-subnet)
-                  rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
+                - message: 'subnet must be a valid GCP subnet name: start with a lowercase
+                    letter, contain only lowercase letters, digits, or hyphens, and
+                    end with a letter or digit'
+                  rule: self.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')
               workloadIdentity:
                 description: WorkloadIdentitySpec defines Workload Identity Federation
                   for the cluster.
@@ -212,9 +211,9 @@ properties:
                         only lowercase letters, digits, or hyphens, and end with a
                         letter or digit
                       rule: self.matches('^[a-z][a-z0-9-]{2,30}[a-z0-9]$')
-                    - message: Pool ID cannot start with reserved prefix 'gcp-'
+                    - message: poolID cannot start with reserved prefix 'gcp-'
                       rule: '!self.startsWith(''gcp-'')'
-                    - message: Pool ID is immutable
+                    - message: poolID is immutable
                       rule: self == oldSelf
                   projectNumber:
                     maxLength: 25
@@ -223,7 +222,7 @@ properties:
                     x-kubernetes-validations:
                     - message: projectNumber must contain only digits
                       rule: self.matches('^[0-9]+$')
-                    - message: Project number is immutable
+                    - message: projectNumber is immutable
                       rule: self == oldSelf
                   providerID:
                     maxLength: 32
@@ -234,41 +233,41 @@ properties:
                         only lowercase letters, digits, or hyphens, and end with a
                         letter or digit
                       rule: self.matches('^[a-z][a-z0-9-]{2,30}[a-z0-9]$')
-                    - message: Provider ID cannot start with reserved prefix 'gcp-'
+                    - message: providerID cannot start with reserved prefix 'gcp-'
                       rule: '!self.startsWith(''gcp-'')'
-                    - message: Provider ID is immutable
+                    - message: providerID is immutable
                       rule: self == oldSelf
                   serviceAccountsRef:
                     properties:
                       cloudControllerEmail:
                         type: string
                         x-kubernetes-validations:
-                        - message: CloudControllerEmail is immutable
+                        - message: cloudControllerEmail is immutable
                           rule: self == oldSelf
                       controlPlaneEmail:
                         type: string
                         x-kubernetes-validations:
-                        - message: ControlPlaneEmail is immutable
+                        - message: controlPlaneEmail is immutable
                           rule: self == oldSelf
                       imageRegistryEmail:
                         type: string
                         x-kubernetes-validations:
-                        - message: ImageRegistryEmail is immutable
+                        - message: imageRegistryEmail is immutable
                           rule: self == oldSelf
                       networkEmail:
                         type: string
                         x-kubernetes-validations:
-                        - message: NetworkEmail is immutable
+                        - message: networkEmail is immutable
                           rule: self == oldSelf
                       nodePoolEmail:
                         type: string
                         x-kubernetes-validations:
-                        - message: NodePoolEmail is immutable
+                        - message: nodePoolEmail is immutable
                           rule: self == oldSelf
                       storageEmail:
                         type: string
                         x-kubernetes-validations:
-                        - message: StorageEmail is immutable
+                        - message: storageEmail is immutable
                           rule: self == oldSelf
                     required:
                     - cloudControllerEmail
@@ -285,7 +284,7 @@ properties:
                 - serviceAccountsRef
                 type: object
                 x-kubernetes-validations:
-                - message: WorkloadIdentity is immutable
+                - message: workloadIdentity is immutable
                   rule: self == oldSelf
             required:
             - network
@@ -308,6 +307,10 @@ properties:
           The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
         properties:
           channelGroup:
+            enum:
+            - stable
+            - fast
+            - candidate
             maxLength: 63
             minLength: 1
             type: string
@@ -316,9 +319,9 @@ properties:
             minLength: 1
             type: string
             x-kubernetes-validations:
-            - message: Version must be a valid semver v2 major.minor.patch. (e.g.,
-                4.14.9)
-              rule: self.matches('^[a-z]+-[a-z]+[0-9]+$')
+            - message: version must be a valid semver major.minor.patch without leading
+                'v' (e.g., 4.14.9)
+              rule: self.matches('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
         required:
         - channelGroup
         - version
