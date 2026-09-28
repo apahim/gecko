@@ -10,8 +10,8 @@ cloud.google.com/go/firestore v1.25.0 h1:yY3rQKyQXNhnhETdseNayF6W1p4x0bdg9ZYS4hK
 cloud.google.com/go/firestore v1.25.0/go.mod h1:0PU6hj+r/QlhB6BLsRX+Kt/SYefTXrpYrBeHbYaSis8=
 cloud.google.com/go/iam v1.13.0 h1:ufT3FPT5rFFXu6UtLkNoxaOaV5EuA1dsSkmemCSTo6U=
 cloud.google.com/go/iam v1.13.0/go.mod h1:gHXdDEiPDvqd1q1KwBDGQlgZY/BwY760zU2LhOZS5w0=
-cloud.google.com/go/longrunning v1.2.0 h1:WjYH3YHBGCxGJP9M4dWGHBfXr/cFIjMkNgWcJj7/iMM=
-cloud.google.com/go/longrunning v1.2.0/go.mod h1:5KMQALFGOCtFoi2xSOA1u3H7WKlhmckgiyFw7+LGQp0=
+cloud.google.com/go/longrunning v1.3.0 h1:lZ6c8SJJBmILp/Wnr3vGnBLa0q+cYfSHRCcUfVI2hpI=
+cloud.google.com/go/longrunning v1.3.0/go.mod h1:wpgLxCn+UA3/TZ1bj/fW39mfDpwVlMPu1xKJyoMt7V0=
 cloud.google.com/go/secretmanager v1.21.0 h1:e56QQaKWRyzBdUz40AeZaio/ZHAl268cFx3QFAAw9CY=
 cloud.google.com/go/secretmanager v1.21.0/go.mod h1:+nlV+GYqTD8DM+x7Kk3UF7ZPYgdYMowrkZxAmMXORQ8=
 github.com/Masterminds/semver/v3 v3.4.0 h1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=
