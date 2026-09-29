@@ -275,3 +275,75 @@ func TestBuild_ResourceLabels(t *testing.T) {
 		require.False(t, hasLabels, "resourceLabels should not be present when ResourceLabels is nil")
 	})
 }
+
+func TestBuild_PullSecretGCPKey(t *testing.T) {
+	t.Run("custom key appears in ExternalSecret remoteRef", func(t *testing.T) {
+		input := testInput()
+		input.PullSecretGCPKey = "default-openshift-pull-secret-ci"
+
+		manifests, err := manifest.Build(input)
+		require.NoError(t, err)
+
+		// ExternalSecret is at index 1.
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal(manifests[1], &obj))
+		require.Equal(t, "ExternalSecret", obj["kind"])
+
+		spec := obj["spec"].(map[string]any)
+		data := spec["data"].([]any)
+		require.Len(t, data, 1)
+		entry := data[0].(map[string]any)
+		remoteRef := entry["remoteRef"].(map[string]any)
+		require.Equal(t, "default-openshift-pull-secret-ci", remoteRef["key"])
+	})
+
+	t.Run("default key used when empty", func(t *testing.T) {
+		input := testInput()
+		input.PullSecretGCPKey = ""
+
+		manifests, err := manifest.Build(input)
+		require.NoError(t, err)
+
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal(manifests[1], &obj))
+
+		spec := obj["spec"].(map[string]any)
+		data := spec["data"].([]any)
+		entry := data[0].(map[string]any)
+		remoteRef := entry["remoteRef"].(map[string]any)
+		require.Equal(t, "default-openshift-pull-secret", remoteRef["key"])
+	})
+}
+
+func TestBuild_PullSecretStoreName(t *testing.T) {
+	t.Run("custom store name appears in ExternalSecret secretStoreRef", func(t *testing.T) {
+		input := testInput()
+		input.PullSecretStoreName = "custom-store"
+
+		manifests, err := manifest.Build(input)
+		require.NoError(t, err)
+
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal(manifests[1], &obj))
+		require.Equal(t, "ExternalSecret", obj["kind"])
+
+		spec := obj["spec"].(map[string]any)
+		storeRef := spec["secretStoreRef"].(map[string]any)
+		require.Equal(t, "custom-store", storeRef["name"])
+	})
+
+	t.Run("default store name used when empty", func(t *testing.T) {
+		input := testInput()
+		input.PullSecretStoreName = ""
+
+		manifests, err := manifest.Build(input)
+		require.NoError(t, err)
+
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal(manifests[1], &obj))
+
+		spec := obj["spec"].(map[string]any)
+		storeRef := spec["secretStoreRef"].(map[string]any)
+		require.Equal(t, "gcp-secret-manager", storeRef["name"])
+	})
+}

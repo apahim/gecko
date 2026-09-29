@@ -12,6 +12,10 @@ fullnameOverride: ""
 orlopURL: ""
 logLevel: info
 
+pullSecret:
+  storeName: gcp-secret-manager
+  gcpKey: default-openshift-pull-secret
+
 # JSON-encoded customer-facing GCP resource labels (e.g., goog-partner-solution).
 # Injected by ArgoCD from the cluster secret meta_customer_labels.
 # Default to empty object if not provided.
