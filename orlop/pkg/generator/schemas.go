@@ -21,6 +21,7 @@ type schemaInfo struct {
 	namespaced     bool
 	schema         *apiextv1.JSONSchemaProps
 	printerColumns []printerColumn
+	verbs          []string // from +orlop:public-verbs annotation; nil means all verbs allowed
 }
 
 type printerColumn struct {
@@ -164,13 +165,15 @@ func (g *Generator) embedSchemas(crdDir string, targetDir string) error {
 			})
 		}
 
+		kindName := crd.Spec.Names.Kind
 		schemas = append(schemas, schemaInfo{
-			typeName:       crd.Spec.Names.Kind,
+			typeName:       kindName,
 			plural:         crd.Spec.Names.Plural,
 			singular:       crd.Spec.Names.Singular,
 			namespaced:     crd.Spec.Scope == apiextv1.NamespaceScoped,
 			schema:         version.Schema.OpenAPIV3Schema,
 			printerColumns: printerCols,
+			verbs:          g.typeVerbs[kindName],
 		})
 
 		// Remove the YAML file after extracting schema
@@ -267,6 +270,19 @@ func (g *Generator) generateSchemaGoFile(outputPath, packageDir string, schemas 
 				source.WriteString("\t\t},\n")
 			}
 			source.WriteString("\t},\n")
+		}
+
+		// Emit Verbs only when the annotation was present; nil means all verbs allowed.
+		if len(s.verbs) > 0 {
+			source.WriteString("\t// Generated from // +orlop:public-verbs annotation.\n")
+			source.WriteString("\tVerbs: []string{")
+			for i, v := range s.verbs {
+				if i > 0 {
+					source.WriteString(", ")
+				}
+				fmt.Fprintf(&source, "%q", v)
+			}
+			source.WriteString("},\n")
 		}
 
 		source.WriteString("}\n\n")

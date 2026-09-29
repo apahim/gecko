@@ -174,12 +174,20 @@ func (h *DiscoveryHandler) APIResourceList(w http.ResponseWriter, r *http.Reques
 	// Find resources for this group/version
 	for _, res := range h.resources {
 		if res.GVK.Group == group && res.GVK.Version == version {
+			// Build the advertised verb list. When +orlop:public-verbs is set on the
+			// resource's package, only those verbs are advertised; otherwise all
+			// standard verbs are included for full backward compatibility.
+			allVerbs := metav1.Verbs{"create", "delete", "get", "list", "patch", "update", "watch"}
+			advertiseVerbs := allVerbs
+			if len(res.Verbs) > 0 {
+				advertiseVerbs = metav1.Verbs(res.Verbs)
+			}
 			resource := metav1.APIResource{
 				Name:         res.Plural,
 				SingularName: res.Singular,
 				Kind:         res.GVK.Kind,
 				Namespaced:   res.Namespaced,
-				Verbs:        metav1.Verbs{"create", "delete", "get", "list", "patch", "update", "watch"},
+				Verbs:        advertiseVerbs,
 			}
 
 			// Add main resource
@@ -270,28 +278,76 @@ func v3OperationWithID(operationId, description, statusCode, statusDesc, schemaR
 	return op
 }
 
+// httpMethodToVerb maps HTTP methods used in OpenAPI paths to the corresponding
+// Kubernetes verb used in +orlop:public-verbs. "post" maps to "create",
+// "get" maps to both "get" and "list" depending on context — callers should
+// pass the appropriate verb directly when building collection vs. item paths.
+// This mapping is used to filter path entries by VerbAllowed.
+var httpMethodToVerb = map[string]string{
+	"post":   "create",
+	"put":    "update",
+	"patch":  "patch",
+	"delete": "delete",
+}
+
+// filterPathEntry removes HTTP method keys from a path entry map when the
+// corresponding verb is not permitted by res.VerbAllowed. The "get" key is
+// checked against the supplied listOrGet verb ("list" for collection paths,
+// "get" for item paths). "parameters" is always kept.
+func filterPathEntry(entry map[string]interface{}, res types.ResourceInfo, listOrGet string) map[string]interface{} {
+	if len(res.Verbs) == 0 {
+		return entry
+	}
+	filtered := make(map[string]interface{})
+	for k, v := range entry {
+		if k == "parameters" {
+			filtered[k] = v
+			continue
+		}
+		verb, ok := httpMethodToVerb[k]
+		if !ok {
+			// "get" — resolve to list or get depending on caller-supplied context
+			if k == "get" {
+				verb = listOrGet
+			} else {
+				// Unknown key, keep it
+				filtered[k] = v
+				continue
+			}
+		}
+		if res.VerbAllowed(verb) {
+			filtered[k] = v
+		}
+	}
+	return filtered
+}
+
 // v3ResourcePaths generates OpenAPI v3 collection, item, and status paths for a resource.
-func v3ResourcePaths(basePath string, params []interface{}, nameParam map[string]interface{}, kind, plural, schemaRef string) map[string]map[string]interface{} {
+// Verb entries for verbs not permitted by res.VerbAllowed are omitted.
+func v3ResourcePaths(basePath string, params []interface{}, nameParam map[string]interface{}, kind, plural, schemaRef string, res types.ResourceInfo) map[string]map[string]interface{} {
 	paths := make(map[string]map[string]interface{})
 
 	// Collection: list + create
-	paths[basePath] = map[string]interface{}{
+	collection := map[string]interface{}{
 		"parameters": params,
 		"get":        v3Operation("list "+plural, "200", "OK", schemaRef),
 		"post":       v3Operation("create a "+kind, "201", "Created", schemaRef),
 	}
+	paths[basePath] = filterPathEntry(collection, res, "list")
 
 	// Item: get + put + delete
 	itemPath := basePath + "/{name}"
 	itemParams := append(append([]interface{}{}, params...), nameParam)
-	paths[itemPath] = map[string]interface{}{
+	item := map[string]interface{}{
 		"parameters": itemParams,
 		"get":        v3Operation("read the specified "+kind, "200", "OK", schemaRef),
 		"put":        v3Operation("replace the specified "+kind, "200", "OK", schemaRef),
 		"delete":     v3Operation("delete a "+kind, "200", "OK", ""),
 	}
+	paths[itemPath] = filterPathEntry(item, res, "get")
 
-	// Status subresource: get + put
+	// Status subresource: get + put (not filtered by public-verbs — status is
+	// a separate concern; advertiseStatus already gates whether this appears)
 	statusPath := itemPath + "/status"
 	paths[statusPath] = map[string]interface{}{
 		"parameters": itemParams,
@@ -381,7 +437,7 @@ func (h *DiscoveryHandler) OpenAPIV3GroupVersion(w http.ResponseWriter, r *http.
 		}
 
 		basePath := "/apis/" + group + "/" + version + "/namespaces/{namespace}/" + res.Plural
-		for p, entry := range v3ResourcePaths(basePath, []interface{}{namespaceParam}, nameParam, res.GVK.Kind, res.Plural, schemaRef) {
+		for p, entry := range v3ResourcePaths(basePath, []interface{}{namespaceParam}, nameParam, res.GVK.Kind, res.Plural, schemaRef, res) {
 			paths[p] = entry
 		}
 
@@ -632,7 +688,7 @@ func (h *DiscoveryHandler) buildOpenAPIV2Spec() *openapispec.Swagger {
 			bodyParam := map[string]interface{}{"name": "body", "in": "body", "required": true, "schema": map[string]interface{}{"$ref": defRef}}
 
 			// Collection operations
-			paths[basePath] = map[string]interface{}{
+			collectionEntry := map[string]interface{}{
 				"get": v2Operation(fmt.Sprintf("list%s%s", ver, kind), fmt.Sprintf("list objects of kind %s", kind), jsonMime, nil, []interface{}{
 					nsParam,
 					map[string]interface{}{"name": "labelSelector", "in": "query", "type": "string", "description": "A selector to restrict the list of returned objects by their labels"},
@@ -644,6 +700,7 @@ func (h *DiscoveryHandler) buildOpenAPIV2Spec() *openapispec.Swagger {
 					bodyParam,
 				}, "201", "Created", defRef),
 			}
+			paths[basePath] = filterPathEntry(collectionEntry, res, "list")
 
 			// Item operations
 			itemPath := basePath + "/{name}"
@@ -651,11 +708,12 @@ func (h *DiscoveryHandler) buildOpenAPIV2Spec() *openapispec.Swagger {
 				map[string]interface{}{"name": "namespace", "in": "path", "required": true, "type": "string"},
 				nameParam,
 			}
-			paths[itemPath] = map[string]interface{}{
+			itemEntry := map[string]interface{}{
 				"get":    v2Operation(fmt.Sprintf("read%s%s", ver, kind), fmt.Sprintf("read the specified %s", kind), jsonMime, nil, itemParams, "200", "OK", defRef),
 				"put":    v2Operation(fmt.Sprintf("replace%s%s", ver, kind), fmt.Sprintf("replace the specified %s", kind), jsonMime, jsonMime, append(append([]interface{}{}, itemParams...), bodyParam), "200", "OK", defRef),
 				"delete": v2Operation(fmt.Sprintf("delete%s%s", ver, kind), fmt.Sprintf("delete a %s", kind), jsonMime, nil, itemParams, "200", "OK", ""),
 			}
+			paths[itemPath] = filterPathEntry(itemEntry, res, "get")
 
 			// Status subresource
 			statusPath := itemPath + "/status"
