@@ -22,7 +22,11 @@ import (
 
 // NewCommand returns the hc subcommand.
 func NewCommand(rf *setup.RootFlags) *cobra.Command {
-	var customerLabelsFile string
+	var (
+		customerLabelsFile  string
+		pullSecretStoreName string
+		pullSecretGCPKey    string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "hc",
@@ -55,7 +59,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("index nodepools by cluster ID: %w", err)
 			}
 
-			rec := hc.New(t, log, mgr.GetClient(), customerLabels)
+			rec := hc.New(t, log, mgr.GetClient(), customerLabels, pullSecretStoreName, pullSecretGCPKey)
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).
@@ -71,6 +75,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&customerLabelsFile, "customer-labels-file", "", "Path to JSON file containing customer-facing GCP resource labels (omit to disable)")
+	cmd.Flags().StringVar(&pullSecretStoreName, "pull-secret-store-name", "gcp-secret-manager", "External Secrets ClusterSecretStore name for HostedCluster pull secret")
+	cmd.Flags().StringVar(&pullSecretGCPKey, "pull-secret-gcp-key", "default-openshift-pull-secret", "GCP Secret Manager key used for HostedCluster pull secret")
 
 	return cmd
 }
