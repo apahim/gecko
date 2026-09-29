@@ -135,6 +135,76 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.ControlPlaneMaintenanceExclusion)(nil), (*ControlPlaneMaintenanceExclusion)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneMaintenanceExclusion_PrivateToPublic(a.(*privatev1.ControlPlaneMaintenanceExclusion), b.(*ControlPlaneMaintenanceExclusion), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ControlPlaneMaintenanceExclusion)(nil), (*privatev1.ControlPlaneMaintenanceExclusion)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneMaintenanceExclusion_PublicToPrivate(a.(*ControlPlaneMaintenanceExclusion), b.(*privatev1.ControlPlaneMaintenanceExclusion), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.ControlPlaneMaintenanceRecurrence)(nil), (*ControlPlaneMaintenanceRecurrence)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneMaintenanceRecurrence_PrivateToPublic(a.(*privatev1.ControlPlaneMaintenanceRecurrence), b.(*ControlPlaneMaintenanceRecurrence), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ControlPlaneMaintenanceRecurrence)(nil), (*privatev1.ControlPlaneMaintenanceRecurrence)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneMaintenanceRecurrence_PublicToPrivate(a.(*ControlPlaneMaintenanceRecurrence), b.(*privatev1.ControlPlaneMaintenanceRecurrence), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.ControlPlaneMaintenanceWindow)(nil), (*ControlPlaneMaintenanceWindow)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneMaintenanceWindow_PrivateToPublic(a.(*privatev1.ControlPlaneMaintenanceWindow), b.(*ControlPlaneMaintenanceWindow), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ControlPlaneMaintenanceWindow)(nil), (*privatev1.ControlPlaneMaintenanceWindow)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneMaintenanceWindow_PublicToPrivate(a.(*ControlPlaneMaintenanceWindow), b.(*privatev1.ControlPlaneMaintenanceWindow), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.ControlPlaneUpgradePolicy)(nil), (*ControlPlaneUpgradePolicy)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneUpgradePolicy_PrivateToPublic(a.(*privatev1.ControlPlaneUpgradePolicy), b.(*ControlPlaneUpgradePolicy), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ControlPlaneUpgradePolicy)(nil), (*privatev1.ControlPlaneUpgradePolicy)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneUpgradePolicy_PublicToPrivate(a.(*ControlPlaneUpgradePolicy), b.(*privatev1.ControlPlaneUpgradePolicy), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.ControlPlaneUpgradePolicyList)(nil), (*ControlPlaneUpgradePolicyList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneUpgradePolicyList_PrivateToPublic(a.(*privatev1.ControlPlaneUpgradePolicyList), b.(*ControlPlaneUpgradePolicyList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ControlPlaneUpgradePolicyList)(nil), (*privatev1.ControlPlaneUpgradePolicyList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneUpgradePolicyList_PublicToPrivate(a.(*ControlPlaneUpgradePolicyList), b.(*privatev1.ControlPlaneUpgradePolicyList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.ControlPlaneUpgradePolicySpec)(nil), (*ControlPlaneUpgradePolicySpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneUpgradePolicySpec_PrivateToPublic(a.(*privatev1.ControlPlaneUpgradePolicySpec), b.(*ControlPlaneUpgradePolicySpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ControlPlaneUpgradePolicySpec)(nil), (*privatev1.ControlPlaneUpgradePolicySpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneUpgradePolicySpec_PublicToPrivate(a.(*ControlPlaneUpgradePolicySpec), b.(*privatev1.ControlPlaneUpgradePolicySpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.ControlPlaneUpgradePolicyStatus)(nil), (*ControlPlaneUpgradePolicyStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneUpgradePolicyStatus_PrivateToPublic(a.(*privatev1.ControlPlaneUpgradePolicyStatus), b.(*ControlPlaneUpgradePolicyStatus), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ControlPlaneUpgradePolicyStatus)(nil), (*privatev1.ControlPlaneUpgradePolicyStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ControlPlaneUpgradePolicyStatus_PublicToPrivate(a.(*ControlPlaneUpgradePolicyStatus), b.(*privatev1.ControlPlaneUpgradePolicyStatus), scope)
+	}); err != nil {
+		return err
+	}
 	if err := s.AddGeneratedConversionFunc((*privatev1.DNSSpec)(nil), (*DNSSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_DNSSpec_PrivateToPublic(a.(*privatev1.DNSSpec), b.(*DNSSpec), scope)
 	}); err != nil {
@@ -586,6 +656,188 @@ func autoConvert_ClusterStatus_PublicToPrivate(in *ClusterStatus, out *privatev1
 // Convert_ClusterStatus_PublicToPrivate is an autogenerated conversion function.
 func Convert_ClusterStatus_PublicToPrivate(in *ClusterStatus, out *privatev1.ClusterStatus, s conversion.Scope) error {
 	return autoConvert_ClusterStatus_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_ControlPlaneMaintenanceExclusion_PrivateToPublic(in *privatev1.ControlPlaneMaintenanceExclusion, out *ControlPlaneMaintenanceExclusion, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneMaintenanceExclusion_PrivateToPublic is an autogenerated conversion function.
+func Convert_ControlPlaneMaintenanceExclusion_PrivateToPublic(in *privatev1.ControlPlaneMaintenanceExclusion, out *ControlPlaneMaintenanceExclusion, s conversion.Scope) error {
+	return autoConvert_ControlPlaneMaintenanceExclusion_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_ControlPlaneMaintenanceExclusion_PublicToPrivate(in *ControlPlaneMaintenanceExclusion, out *privatev1.ControlPlaneMaintenanceExclusion, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneMaintenanceExclusion_PublicToPrivate is an autogenerated conversion function.
+func Convert_ControlPlaneMaintenanceExclusion_PublicToPrivate(in *ControlPlaneMaintenanceExclusion, out *privatev1.ControlPlaneMaintenanceExclusion, s conversion.Scope) error {
+	return autoConvert_ControlPlaneMaintenanceExclusion_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_ControlPlaneMaintenanceRecurrence_PrivateToPublic(in *privatev1.ControlPlaneMaintenanceRecurrence, out *ControlPlaneMaintenanceRecurrence, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneMaintenanceRecurrence_PrivateToPublic is an autogenerated conversion function.
+func Convert_ControlPlaneMaintenanceRecurrence_PrivateToPublic(in *privatev1.ControlPlaneMaintenanceRecurrence, out *ControlPlaneMaintenanceRecurrence, s conversion.Scope) error {
+	return autoConvert_ControlPlaneMaintenanceRecurrence_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_ControlPlaneMaintenanceRecurrence_PublicToPrivate(in *ControlPlaneMaintenanceRecurrence, out *privatev1.ControlPlaneMaintenanceRecurrence, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneMaintenanceRecurrence_PublicToPrivate is an autogenerated conversion function.
+func Convert_ControlPlaneMaintenanceRecurrence_PublicToPrivate(in *ControlPlaneMaintenanceRecurrence, out *privatev1.ControlPlaneMaintenanceRecurrence, s conversion.Scope) error {
+	return autoConvert_ControlPlaneMaintenanceRecurrence_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_ControlPlaneMaintenanceWindow_PrivateToPublic(in *privatev1.ControlPlaneMaintenanceWindow, out *ControlPlaneMaintenanceWindow, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneMaintenanceWindow_PrivateToPublic is an autogenerated conversion function.
+func Convert_ControlPlaneMaintenanceWindow_PrivateToPublic(in *privatev1.ControlPlaneMaintenanceWindow, out *ControlPlaneMaintenanceWindow, s conversion.Scope) error {
+	return autoConvert_ControlPlaneMaintenanceWindow_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_ControlPlaneMaintenanceWindow_PublicToPrivate(in *ControlPlaneMaintenanceWindow, out *privatev1.ControlPlaneMaintenanceWindow, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneMaintenanceWindow_PublicToPrivate is an autogenerated conversion function.
+func Convert_ControlPlaneMaintenanceWindow_PublicToPrivate(in *ControlPlaneMaintenanceWindow, out *privatev1.ControlPlaneMaintenanceWindow, s conversion.Scope) error {
+	return autoConvert_ControlPlaneMaintenanceWindow_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_ControlPlaneUpgradePolicy_PrivateToPublic(in *privatev1.ControlPlaneUpgradePolicy, out *ControlPlaneUpgradePolicy, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneUpgradePolicy_PrivateToPublic is an autogenerated conversion function.
+func Convert_ControlPlaneUpgradePolicy_PrivateToPublic(in *privatev1.ControlPlaneUpgradePolicy, out *ControlPlaneUpgradePolicy, s conversion.Scope) error {
+	return autoConvert_ControlPlaneUpgradePolicy_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_ControlPlaneUpgradePolicy_PublicToPrivate(in *ControlPlaneUpgradePolicy, out *privatev1.ControlPlaneUpgradePolicy, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneUpgradePolicy_PublicToPrivate is an autogenerated conversion function.
+func Convert_ControlPlaneUpgradePolicy_PublicToPrivate(in *ControlPlaneUpgradePolicy, out *privatev1.ControlPlaneUpgradePolicy, s conversion.Scope) error {
+	return autoConvert_ControlPlaneUpgradePolicy_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_ControlPlaneUpgradePolicyList_PrivateToPublic(in *privatev1.ControlPlaneUpgradePolicyList, out *ControlPlaneUpgradePolicyList, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneUpgradePolicyList_PrivateToPublic is an autogenerated conversion function.
+func Convert_ControlPlaneUpgradePolicyList_PrivateToPublic(in *privatev1.ControlPlaneUpgradePolicyList, out *ControlPlaneUpgradePolicyList, s conversion.Scope) error {
+	return autoConvert_ControlPlaneUpgradePolicyList_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_ControlPlaneUpgradePolicyList_PublicToPrivate(in *ControlPlaneUpgradePolicyList, out *privatev1.ControlPlaneUpgradePolicyList, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneUpgradePolicyList_PublicToPrivate is an autogenerated conversion function.
+func Convert_ControlPlaneUpgradePolicyList_PublicToPrivate(in *ControlPlaneUpgradePolicyList, out *privatev1.ControlPlaneUpgradePolicyList, s conversion.Scope) error {
+	return autoConvert_ControlPlaneUpgradePolicyList_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_ControlPlaneUpgradePolicySpec_PrivateToPublic(in *privatev1.ControlPlaneUpgradePolicySpec, out *ControlPlaneUpgradePolicySpec, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneUpgradePolicySpec_PrivateToPublic is an autogenerated conversion function.
+func Convert_ControlPlaneUpgradePolicySpec_PrivateToPublic(in *privatev1.ControlPlaneUpgradePolicySpec, out *ControlPlaneUpgradePolicySpec, s conversion.Scope) error {
+	return autoConvert_ControlPlaneUpgradePolicySpec_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_ControlPlaneUpgradePolicySpec_PublicToPrivate(in *ControlPlaneUpgradePolicySpec, out *privatev1.ControlPlaneUpgradePolicySpec, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneUpgradePolicySpec_PublicToPrivate is an autogenerated conversion function.
+func Convert_ControlPlaneUpgradePolicySpec_PublicToPrivate(in *ControlPlaneUpgradePolicySpec, out *privatev1.ControlPlaneUpgradePolicySpec, s conversion.Scope) error {
+	return autoConvert_ControlPlaneUpgradePolicySpec_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_ControlPlaneUpgradePolicyStatus_PrivateToPublic(in *privatev1.ControlPlaneUpgradePolicyStatus, out *ControlPlaneUpgradePolicyStatus, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneUpgradePolicyStatus_PrivateToPublic is an autogenerated conversion function.
+func Convert_ControlPlaneUpgradePolicyStatus_PrivateToPublic(in *privatev1.ControlPlaneUpgradePolicyStatus, out *ControlPlaneUpgradePolicyStatus, s conversion.Scope) error {
+	return autoConvert_ControlPlaneUpgradePolicyStatus_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_ControlPlaneUpgradePolicyStatus_PublicToPrivate(in *ControlPlaneUpgradePolicyStatus, out *privatev1.ControlPlaneUpgradePolicyStatus, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ControlPlaneUpgradePolicyStatus_PublicToPrivate is an autogenerated conversion function.
+func Convert_ControlPlaneUpgradePolicyStatus_PublicToPrivate(in *ControlPlaneUpgradePolicyStatus, out *privatev1.ControlPlaneUpgradePolicyStatus, s conversion.Scope) error {
+	return autoConvert_ControlPlaneUpgradePolicyStatus_PublicToPrivate(in, out, s)
 }
 
 func autoConvert_DNSSpec_PrivateToPublic(in *privatev1.DNSSpec, out *DNSSpec, s conversion.Scope) error {

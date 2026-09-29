@@ -10,31 +10,35 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+var parentResourcesByKind = map[string]types.ParentResourceInfo{
+	"NodePool": {
+		Plural:    "clusters",
+		GroupKind: privatev1.GroupVersion.WithKind("Cluster").GroupKind(),
+		IDField:   "spec.clusterID",
+	},
+	"ControlPlaneUpgradePolicy": {
+		Plural:    "clusters",
+		GroupKind: privatev1.GroupVersion.WithKind("Cluster").GroupKind(),
+		IDField:   "spec.clusterID",
+	},
+}
+
 // getPrivateResources returns the resource definitions for the private API.
 func getPrivateResources() []types.ResourceInfo {
-	resources := privatev1.GetResourceInfos()
-	for i := range resources {
-		if resources[i].GVK.Kind == "NodePool" {
-			resources[i].ParentResource = &types.ParentResourceInfo{
-				Plural:    "clusters",
-				GroupKind: privatev1.GroupVersion.WithKind("Cluster").GroupKind(),
-				IDField:   "spec.clusterID",
-			}
-		}
-	}
-	return resources
+	return configureParentResources(privatev1.GetResourceInfos())
 }
 
 // getPublicResources returns the resource definitions for the public API.
 func getPublicResources() []types.ResourceInfo {
-	resources := publicv1.GetResourceInfos()
+	return configureParentResources(publicv1.GetResourceInfos())
+}
+
+func configureParentResources(resources []types.ResourceInfo) []types.ResourceInfo {
 	for i := range resources {
-		if resources[i].GVK.Kind == "NodePool" {
-			resources[i].ParentResource = &types.ParentResourceInfo{
-				Plural:    "clusters",
-				GroupKind: privatev1.GroupVersion.WithKind("Cluster").GroupKind(),
-				IDField:   "spec.clusterID",
-			}
+		parent, found := parentResourcesByKind[resources[i].GVK.Kind]
+		if found {
+			parentCopy := parent
+			resources[i].ParentResource = &parentCopy
 		}
 	}
 	return resources
