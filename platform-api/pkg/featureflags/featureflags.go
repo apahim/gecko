@@ -20,8 +20,8 @@ const defaultOfflinePollMs = 5000
 // remains independent of the consuming feature. With no flagd file path set,
 // evaluations return the caller's supplied defaults.
 type Evaluator struct {
-	client      *openfeature.Client
-	initialized bool
+	client      *openfeature.Client `json:"-"`
+	initialized bool                `json:"-"`
 }
 
 // NewFromEnvironment initializes the flagd file provider when
