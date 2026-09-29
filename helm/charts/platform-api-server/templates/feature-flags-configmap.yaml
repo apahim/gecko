@@ -1,0 +1,11 @@
+{{- if and .Values.featureFlags.enabled .Values.featureFlags.createConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ default (printf "%s-feature-flags" (include "platform-api-server.fullname" .)) .Values.featureFlags.configMapName }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+data:
+  flags.json: |
+    {{- dict "$schema" "https://flagd.dev/schema/v0/flags.json" "flags" .Values.featureFlags.flags | toJson | nindent 4 }}
+{{- end }}
