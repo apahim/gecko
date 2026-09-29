@@ -36,7 +36,6 @@ featureFlags:
   # ArgoCD feature-flags application.
   createConfigMap: true
   configMapName: ""
-  filePath: /etc/gecko/flags/flags.json
   mountPath: /etc/gecko/flags
   offlinePollMs: 5000
   flags: {}

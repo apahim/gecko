@@ -55,7 +55,7 @@ spec:
           env:
             {{- if .Values.featureFlags.enabled }}
             - name: FLAGD_OFFLINE_FLAG_SOURCE_PATH
-              value: {{ .Values.featureFlags.filePath | quote }}
+              value: {{ printf "%s/flags.json" (trimSuffix "/" .Values.featureFlags.mountPath) | quote }}
             - name: FLAGD_OFFLINE_POLL_MS
               value: {{ .Values.featureFlags.offlinePollMs | quote }}
             {{- end }}
