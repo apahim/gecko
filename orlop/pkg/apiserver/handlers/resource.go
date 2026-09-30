@@ -440,9 +440,21 @@ func (h *ResourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if spec changed and increment generation if so
+	// Check if spec changed and increment generation if so.
+	//
+	// Compare against a copy of existing that has gone through the same
+	// normalization as clientObj (above): schema prune/default processing AND
+	// custom defaulting. Without this, existing objects fetched as
+	// *unstructured.Unstructured (postgres/spanner backends) can look
+	// permanently different from an identically-specified clientObj purely
+	// because of asymmetric normalization, causing a spurious generation bump
+	// on every update. All mutation happens on the copy; raw existing is never
+	// modified. Fail-safe: on a processing error we fall back to raw existing
+	// (and skip custom defaulting, which must not mutate the shared object);
+	// that can cause a one-time spurious bump but never persists bad data.
 	existingAccessor, _ := meta.Accessor(existing)
-	if specChanged(existing, clientObj) {
+	existingForCmp := existingForCompare(r.Context(), h.processor, existing, h.logger)
+	if specChanged(existingForCmp, clientObj) {
 		accessor.SetGeneration(existingAccessor.GetGeneration() + 1)
 	} else {
 		accessor.SetGeneration(existingAccessor.GetGeneration())

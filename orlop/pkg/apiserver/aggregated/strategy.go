@@ -1,7 +1,6 @@
 package aggregated
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -170,7 +170,37 @@ func (s *ResourceStrategy) PrepareForUpdate(ctx context.Context, obj, old runtim
 		}
 	}
 
-	if specChanged(old, obj) {
+	// Compare against a copy of old that has gone through the same
+	// normalization as new: schema processing (pruning/defaulting) AND custom
+	// defaulting. Without this, an old object that hasn't been re-processed can
+	// look different from an identically-specified new object purely because of
+	// asymmetric normalization, causing a spurious generation bump. All
+	// mutation happens on the copy; the raw old object is never modified.
+	//
+	// Fail-safe: if schema processing of the copy errors we fall back to the
+	// raw old object (and skip custom defaulting, which must not mutate the
+	// shared old). That reintroduces the asymmetry and can cause a one-time
+	// spurious bump, but only on an unexpected processing error, and it never
+	// persists incorrect data — oldForCompare is used only for the comparison.
+	oldForCompare := old
+	oldCopy := old.DeepCopyObject()
+	processed := true
+	if s.processor != nil {
+		if err := s.applyProcessing(ctx, oldCopy); err != nil {
+			s.logger.Error(err, "failed to apply schema processing to old object for comparison")
+			processed = false
+		}
+	}
+	if processed {
+		if defaulter, ok := oldCopy.(types.CustomDefaulter); ok {
+			if err := defaulter.Default(ctx); err != nil {
+				s.logger.Error(err, "custom defaulter failed on old object for comparison")
+			}
+		}
+		oldForCompare = oldCopy
+	}
+
+	if specChanged(oldForCompare, obj) {
 		newObj.SetGeneration(oldObj.GetGeneration() + 1)
 	} else {
 		newObj.SetGeneration(oldObj.GetGeneration())
@@ -310,21 +340,43 @@ func validateOwnerReferencesNamespace(obj client.Object) field.ErrorList {
 
 // specChanged checks if the spec field has changed between two objects.
 // All gecko resource types must serialize their spec under the JSON key "spec".
+//
+// Comparison is done on the unstructured form of each object rather than raw
+// marshaled bytes: old and new may be different Go representations of the
+// same content (e.g. a typed struct vs. an *unstructured.Unstructured loaded
+// from storage), which marshal to JSON with different key ordering even when
+// semantically identical. runtime.DefaultUnstructuredConverter normalizes
+// both sides to map[string]interface{} before the comparison, and
+// apiequality.Semantic.DeepEqual is the standard Kubernetes idiom for
+// semantic (not byte-level) equality.
+//
+// Numeric invariant: extractSpec reduces both operands to
+// map[string]interface{} of JSON primitives, so apiequality.Semantic's
+// type-specific equality funcs (Quantity, Time, ...) never fire here —
+// Semantic.DeepEqual effectively behaves as reflect.DeepEqual on the
+// unstructured tree. Correctness therefore depends on both sides decoding
+// numbers as the same Go type. This holds today: typed objects convert to
+// int64 via ToUnstructured, and the postgres/spanner stores' unstructured
+// Get also yields int64. If a future Get path decodes numbers as float64,
+// numeric spec fields would churn — normalize numbers here if that changes.
 func specChanged(old, new runtime.Object) bool {
-	oldData, err := json.Marshal(old)
+	oldSpec, err := extractSpec(old)
+	if err != nil {
+		return true // fail safe: treat unreadable state as changed
+	}
+	newSpec, err := extractSpec(new)
 	if err != nil {
 		return true
 	}
-	newData, err := json.Marshal(new)
+	return !apiequality.Semantic.DeepEqual(oldSpec, newSpec)
+}
+
+// extractSpec converts obj to its unstructured map representation and
+// returns the value of its "spec" field.
+func extractSpec(obj runtime.Object) (interface{}, error) {
+	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {
-		return true
+		return nil, err
 	}
-	var oldRaw, newRaw map[string]json.RawMessage
-	if err := json.Unmarshal(oldData, &oldRaw); err != nil {
-		return true
-	}
-	if err := json.Unmarshal(newData, &newRaw); err != nil {
-		return true
-	}
-	return !bytes.Equal(oldRaw["spec"], newRaw["spec"])
+	return u["spec"], nil
 }

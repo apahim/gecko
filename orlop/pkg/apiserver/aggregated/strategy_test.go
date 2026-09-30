@@ -9,12 +9,19 @@ import (
 
 	testv1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
+	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
 
+	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	extschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
+
+	"sigs.k8s.io/yaml"
 )
 
 func newTestScheme(t *testing.T) *runtime.Scheme {
@@ -553,5 +560,144 @@ func TestPrepareForUpdate_PreservesCreatedByAnnotation(t *testing.T) {
 	got := newObj.GetAnnotations()[constants.AnnotationCreatedBy]
 	if got != "original@example.com" {
 		t.Errorf("created-by annotation = %q, want %q", got, "original@example.com")
+	}
+}
+
+// newObjectSchemaProcessor builds a real (non-nil) schema.Processor from
+// testv1.Object's generated OpenAPI schema, mirroring how ResourceStrategy
+// is actually constructed in production (apiserver.go's createProcessor).
+// Existing specChanged tests all pass a nil processor, which skips
+// applyProcessing entirely and never exercises pruning/defaulting.
+func newObjectSchemaProcessor(t *testing.T) *pkgschema.Processor {
+	t.Helper()
+
+	var propsV1 apiextv1.JSONSchemaProps
+	if err := yaml.Unmarshal([]byte(testv1.ObjectSchemaYAML), &propsV1); err != nil {
+		t.Fatalf("failed to unmarshal schema YAML: %v", err)
+	}
+
+	var props apiext.JSONSchemaProps
+	if err := apiextv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(&propsV1, &props, nil); err != nil {
+		t.Fatalf("failed to convert schema: %v", err)
+	}
+
+	structural, err := extschema.NewStructural(&props)
+	if err != nil {
+		t.Fatalf("failed to create structural schema: %v", err)
+	}
+
+	processor, err := pkgschema.NewProcessor(structural, &props)
+	if err != nil {
+		t.Fatalf("failed to create processor: %v", err)
+	}
+
+	return processor
+}
+
+// TestPrepareForUpdate_SpecUnchanged_TypeMismatch reproduces the
+// representation mismatch that the postgres (and spanner) storage backends
+// hit in production: Get() returns an *unstructured.Unstructured (a
+// map[string]interface{}, which encoding/json always marshals with
+// alphabetically-sorted keys), while the incoming update is a typed struct
+// (marshaled in Go struct-declaration order). ObjectSpec's declared order is
+// publicField, internalField, nested, defaultField — not alphabetical — so a
+// raw byte comparison of old vs. new would differ even for identical
+// content. specChanged must compare semantically, not byte-for-byte, so this
+// must not bump generation.
+func TestPrepareForUpdate_SpecUnchanged_TypeMismatch(t *testing.T) {
+	strategy := newTestStrategy(t, true)
+	ctx := context.Background()
+
+	oldObj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": testv1.GroupVersion.String(),
+			"kind":       "Object",
+			"metadata": map[string]interface{}{
+				"name":       "test-obj",
+				"namespace":  "default",
+				"uid":        "old-uid",
+				"generation": int64(3),
+			},
+			"spec": map[string]interface{}{
+				"publicField":   "value",
+				"internalField": "internal",
+				"nested": map[string]interface{}{
+					"publicField":   "n-value",
+					"internalField": "n-internal",
+				},
+				"defaultField": "default-value",
+			},
+		},
+	}
+
+	newObj := &testv1.Object{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-obj",
+			Namespace: "default",
+		},
+		Spec: testv1.ObjectSpec{
+			PublicField:   "value",
+			InternalField: "internal",
+			Nested: testv1.ObjectNested{
+				PublicField:   "n-value",
+				InternalField: "n-internal",
+			},
+			DefaultField: "default-value",
+		},
+	}
+
+	strategy.PrepareForUpdate(ctx, newObj, oldObj)
+
+	if newObj.Generation != 3 {
+		t.Errorf("expected Generation to remain 3 (spec semantically unchanged despite unstructured-vs-typed representation mismatch), got %d", newObj.Generation)
+	}
+}
+
+// TestPrepareForUpdate_SymmetricProcessing_DefaultingDoesNotCauseChurn uses a
+// real (non-nil) schema processor, unlike the other PrepareForUpdate tests in
+// this file. old and new both omit defaultField, relying on the schema's
+// default. applyProcessing is only invoked on new inside PrepareForUpdate; if
+// old isn't processed the same way before comparison, new ends up with
+// defaultField populated while old does not, making an otherwise-unchanged
+// apply look like a permanent spec change on every single reapply.
+func TestPrepareForUpdate_SymmetricProcessing_DefaultingDoesNotCauseChurn(t *testing.T) {
+	processor := newObjectSchemaProcessor(t)
+	strategy := NewResourceStrategy(newTestScheme(t), processor, true, testGVK, logr.Discard())
+	ctx := context.Background()
+
+	spec := testv1.ObjectSpec{
+		PublicField:   "value",
+		InternalField: "internal",
+		Nested: testv1.ObjectNested{
+			PublicField:   "n-value",
+			InternalField: "n-internal",
+		},
+		// DefaultField intentionally omitted on both sides.
+	}
+
+	oldObj := &testv1.Object{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-obj",
+			Namespace:  "default",
+			Generation: 7,
+		},
+		Spec: spec,
+	}
+
+	newObj := &testv1.Object{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-obj",
+			Namespace: "default",
+		},
+		Spec: spec,
+	}
+
+	strategy.PrepareForUpdate(ctx, newObj, oldObj)
+
+	if newObj.Spec.DefaultField != "default-value" {
+		t.Fatalf("expected DefaultField to be defaulted to %q, got %q", "default-value", newObj.Spec.DefaultField)
+	}
+	if newObj.Generation != 7 {
+		t.Errorf("expected Generation to remain 7 (defaulting applied symmetrically to old and new), got %d", newObj.Generation)
 	}
 }

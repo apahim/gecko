@@ -596,8 +596,17 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// Check if spec changed and increment generation if so
-	if specChanged(existingPrivate, privateObj) {
+	// Check if spec changed and increment generation if so.
+	//
+	// Compare against a copy of existingPrivate normalized the same way as
+	// privateObj (custom defaulting), so identical content compares equal and
+	// generation does not churn. The copy is comparison-only; existingPrivate
+	// is never modified. Note: the public-schema prune/default applied to the
+	// incoming object is not mirrored here — doing so would require a
+	// public<->private round-trip. That asymmetry converges after one write and
+	// is tracked as a follow-up.
+	oldForCompare := existingForCompare(r.Context(), nil, existingPrivate, h.logger)
+	if specChanged(oldForCompare, privateObj) {
 		privateAccessor.SetGeneration(existingAccessor.GetGeneration() + 1)
 	} else {
 		privateAccessor.SetGeneration(existingAccessor.GetGeneration())
@@ -783,8 +792,17 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 		privateAccessor.SetDeletionTimestamp(dt)
 	}
 
-	// Check if spec changed and increment generation if so
-	if specChanged(existingPrivate, privateObj) {
+	// Check if spec changed and increment generation if so.
+	//
+	// Compare against a copy of existingPrivate normalized the same way as
+	// privateObj (custom defaulting), so identical content compares equal and
+	// generation does not churn. The copy is comparison-only; existingPrivate
+	// is never modified. Note: the public-schema prune/default applied to the
+	// incoming object is not mirrored here — doing so would require a
+	// public<->private round-trip. That asymmetry converges after one write and
+	// is tracked as a follow-up.
+	oldForCompare := existingForCompare(r.Context(), nil, existingPrivate, h.logger)
+	if specChanged(oldForCompare, privateObj) {
 		privateAccessor.SetGeneration(existingAccessor.GetGeneration() + 1)
 	} else {
 		privateAccessor.SetGeneration(existingAccessor.GetGeneration())
