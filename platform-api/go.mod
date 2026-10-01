@@ -27,7 +27,7 @@ require (
 	cloud.google.com/go/monitoring v1.31.0 // indirect
 	cloud.google.com/go/spanner v1.95.1 // indirect
 	connectrpc.com/connect v1.21.0 // indirect
-	connectrpc.com/otelconnect v0.9.0 // indirect
+	connectrpc.com/otelconnect v0.10.0 // indirect
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.6.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.38.0 // indirect
 	github.com/NYTimes/gziphandler v1.1.1 // indirect
