@@ -20,6 +20,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/postgres"
 	spannerbackend "github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/spanner"
+	"github.com/openshift-online/gecko/platform-api/pkg/featureflags"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -78,6 +79,12 @@ func main() {
 		log.Println("Spanner DDL migrations completed successfully")
 		os.Exit(0)
 	}
+
+	featureFlagEvaluator, err := featureflags.NewFromEnvironment()
+	if err != nil {
+		log.Fatalf("failed to initialize feature flags: %v", err)
+	}
+	defer featureFlagEvaluator.Shutdown()
 
 	// Parse CORS origins
 	origins := []string{}

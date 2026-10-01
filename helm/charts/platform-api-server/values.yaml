@@ -29,6 +29,17 @@ publicApi:
 
 corsOrigins: []
 
+featureFlags:
+  # Mount a flagd-compatible configuration file when enabled.
+  enabled: false
+  # Set createConfigMap=false when the ConfigMap is managed by a separate
+  # ArgoCD feature-flags application.
+  createConfigMap: true
+  configMapName: ""
+  mountPath: /etc/gecko/flags
+  offlinePollMs: 5000
+  flags: {}
+
 serviceAccount:
   create: true
   annotations: {}

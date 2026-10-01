@@ -51,8 +51,14 @@ spec:
             {{- if .Values.corsOrigins }}
             - --cors-origins={{ join "," .Values.corsOrigins }}
             {{- end }}
-          {{- if or .Values.spanner.enabled .Values.alloydb.enabled }}
+          {{- if or .Values.featureFlags.enabled .Values.spanner.enabled .Values.alloydb.enabled }}
           env:
+            {{- if .Values.featureFlags.enabled }}
+            - name: FLAGD_OFFLINE_FLAG_SOURCE_PATH
+              value: {{ printf "%s/flags.json" (trimSuffix "/" .Values.featureFlags.mountPath) | quote }}
+            - name: FLAGD_OFFLINE_POLL_MS
+              value: {{ .Values.featureFlags.offlinePollMs | quote }}
+            {{- end }}
             {{- if .Values.spanner.enabled }}
             - name: SPANNER_DATABASE
               value: {{ printf "projects/%s/instances/%s/databases/%s" .Values.spanner.projectId .Values.spanner.instanceId .Values.spanner.databaseId | quote }}
@@ -109,6 +115,11 @@ spec:
             - name: tls
               mountPath: /etc/tls
               readOnly: true
+            {{- if .Values.featureFlags.enabled }}
+            - name: feature-flags
+              mountPath: {{ .Values.featureFlags.mountPath | quote }}
+              readOnly: true
+            {{- end }}
         {{- if .Values.esp.enabled }}
         - name: esp
           image: {{ .Values.esp.image }}
@@ -166,6 +177,11 @@ spec:
         - name: tls
           secret:
             secretName: {{ include "platform-api-server.fullname" . }}-tls
+        {{- if .Values.featureFlags.enabled }}
+        - name: feature-flags
+          configMap:
+            name: {{ default (printf "%s-feature-flags" (include "platform-api-server.fullname" .)) .Values.featureFlags.configMapName }}
+        {{- end }}
         {{- if .Values.esp.enabled }}
         - name: esp-tmp
           emptyDir:
