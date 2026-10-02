@@ -3,6 +3,8 @@ package conversion
 import (
 	"testing"
 
+	testv1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -1029,5 +1031,79 @@ func TestConverter_PublicToPrivate_PreservesNonPublicConditions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TypedOldObject upholds the types.CustomValidator contract: validators are
+// written against their concrete type, but every storage backend decodes
+// stored rows into *unstructured.Unstructured.
+func TestTypedOldObject_ConvertsUnstructured(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := testv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add test scheme: %v", err)
+	}
+	gvk := schema.GroupVersionKind{
+		Group:   testv1.GroupVersion.Group,
+		Version: testv1.GroupVersion.Version,
+		Kind:    "Object",
+	}
+
+	in := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": testv1.GroupVersion.String(),
+		"kind":       "Object",
+		"metadata": map[string]interface{}{
+			"name":      "test-obj",
+			"namespace": "default",
+		},
+		"spec": map[string]interface{}{
+			"publicField": "old-value",
+		},
+	}}
+
+	out, err := TypedOldObject(scheme, gvk, in)
+	if err != nil {
+		t.Fatalf("TypedOldObject() error = %v", err)
+	}
+
+	typed, ok := out.(*testv1.Object)
+	if !ok {
+		t.Fatalf("TypedOldObject() returned %T, want *testv1.Object", out)
+	}
+	if typed.Spec.PublicField != "old-value" {
+		t.Errorf("spec not preserved: PublicField = %q, want %q", typed.Spec.PublicField, "old-value")
+	}
+	if typed.Name != "test-obj" || typed.Namespace != "default" {
+		t.Errorf("metadata not preserved: got %s/%s, want default/test-obj", typed.Namespace, typed.Name)
+	}
+}
+
+func TestTypedOldObject_PassesThroughAlreadyTypedObject(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := testv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add test scheme: %v", err)
+	}
+	gvk := schema.GroupVersionKind{
+		Group:   testv1.GroupVersion.Group,
+		Version: testv1.GroupVersion.Version,
+		Kind:    "Object",
+	}
+
+	in := &testv1.Object{Spec: testv1.ObjectSpec{PublicField: "already-typed"}}
+
+	out, err := TypedOldObject(scheme, gvk, in)
+	if err != nil {
+		t.Fatalf("TypedOldObject() error = %v", err)
+	}
+	if out != runtime.Object(in) {
+		t.Error("TypedOldObject() returned a different object for an already-typed input")
+	}
+}
+
+func TestTypedOldObject_ErrorsOnUnregisteredKind(t *testing.T) {
+	scheme := runtime.NewScheme()
+	gvk := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Nope"}
+
+	if _, err := TypedOldObject(scheme, gvk, &unstructured.Unstructured{Object: map[string]interface{}{}}); err == nil {
+		t.Fatal("expected an error for a kind missing from the scheme, got nil")
 	}
 }
