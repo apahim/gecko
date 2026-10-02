@@ -151,3 +151,91 @@ func TestResourceHandlerPatch_ValidatorReceivesTypedOldObject(t *testing.T) {
 		t.Fatalf("Patch status = %d, want %d, body: %s", rr.Code, http.StatusOK, rr.Body.String())
 	}
 }
+
+var validatingObjectStorageGVK = schema.GroupVersionKind{
+	Group:   "test.orlop.gcp.managed.openshift.io",
+	Version: "v2",
+	Kind:    "ValidatingObject",
+}
+
+// validatingObjectStorage is the stored version of validatingObject, used to
+// exercise the handler's serving-vs-storage version split.
+type validatingObjectStorage struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              mockSpec `json:"spec"`
+}
+
+func (o *validatingObjectStorage) DeepCopyObject() runtime.Object {
+	if o == nil {
+		return nil
+	}
+	out := &validatingObjectStorage{}
+	*out = *o
+	out.TypeMeta = o.TypeMeta
+	o.DeepCopyInto(&out.ObjectMeta)
+	out.Spec = o.Spec
+	return out
+}
+
+func newVersionedValidatingObjectHandler(t *testing.T) (*ResourceHandler, *memory.MemoryStore) {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	scheme.AddKnownTypeWithName(validatingObjectGVK, &validatingObject{})
+	scheme.AddKnownTypeWithName(validatingObjectStorageGVK, &validatingObjectStorage{})
+	metav1.AddToGroupVersion(scheme, validatingObjectGVK.GroupVersion())
+	metav1.AddToGroupVersion(scheme, validatingObjectStorageGVK.GroupVersion())
+
+	store := memory.NewMemoryStore("validatingobjects", scheme, validatingObjectStorageGVK)
+	handler := NewResourceHandler(
+		store,
+		newPermissiveProcessor(t),
+		validatingObjectGVK,
+		"validatingobjects",
+		scheme,
+		logr.Discard(),
+	)
+	handler.SetStorageGVK(validatingObjectStorageGVK)
+	return handler, store
+}
+
+// When the handler serves a different version than it stores, the old object
+// handed to the validator must be the serving version. Patch already converts
+// before validating; Update must do the same, otherwise a serving-version
+// validator is handed the storage-version object.
+func TestResourceHandlerUpdate_ValidatorReceivesServingVersionOldObject(t *testing.T) {
+	handler, store := newVersionedValidatingObjectHandler(t)
+
+	existing := &validatingObjectStorage{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: validatingObjectStorageGVK.GroupVersion().String(),
+			Kind:       validatingObjectStorageGVK.Kind,
+		},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-obj", Namespace: "default"},
+		Spec:       mockSpec{Field: "old-value"},
+	}
+	if err := store.Create(context.Background(), existing); err != nil {
+		t.Fatalf("failed to seed existing object: %v", err)
+	}
+
+	body, err := json.Marshal(map[string]interface{}{
+		"apiVersion": validatingObjectGVK.GroupVersion().String(),
+		"kind":       validatingObjectGVK.Kind,
+		"metadata": map[string]interface{}{
+			"name":            "test-obj",
+			"namespace":       "default",
+			"resourceVersion": existing.GetResourceVersion(),
+		},
+		"spec": map[string]interface{}{"field": "new-value"},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal body: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler.Update(rr, newRouteRequest(t, http.MethodPut, string(body)))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Update status = %d, want %d, body: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}

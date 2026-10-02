@@ -420,7 +420,15 @@ func (h *ResourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if v, ok := obj.(types.CustomValidator); ok {
-		existingTyped, err := conversion.TypedOldObject(h.scheme, h.gvk, existing)
+		// Validators are written against the serving version, but the store
+		// returns the storage version. Convert for validation only; the raw
+		// existing object is what the generation comparison below works from.
+		existingServing, err := h.convertToServingVersion(existing)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("converting old object to serving version: %v", err))
+			return
+		}
+		existingTyped, err := conversion.TypedOldObject(h.scheme, h.gvk, existingServing)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("converting old object: %v", err))
 			return
