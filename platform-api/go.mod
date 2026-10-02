@@ -11,8 +11,10 @@ require (
 	github.com/open-feature/go-sdk-contrib/providers/flagd v0.7.0
 	github.com/openshift-online/gecko/orlop v0.0.0-00010101000000-000000000000
 	golang.org/x/text v0.42.0
+	k8s.io/apiextensions-apiserver v0.37.1
 	k8s.io/apimachinery v0.37.1
 	sigs.k8s.io/controller-runtime v0.25.1
+	sigs.k8s.io/yaml v1.6.0
 )
 
 replace github.com/openshift-online/gecko/orlop => ../orlop
@@ -146,7 +148,6 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/api v0.37.1 // indirect
-	k8s.io/apiextensions-apiserver v0.37.1 // indirect
 	k8s.io/apiserver v0.37.1 // indirect
 	k8s.io/client-go v0.37.1 // indirect
 	k8s.io/component-base v0.37.1 // indirect
@@ -160,5 +161,4 @@ require (
 	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
 )
