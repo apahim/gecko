@@ -3,6 +3,10 @@ apiVersion: gcp.managed.openshift.io/v1
 kind: PlatformRole
 metadata:
   name: cluster-admin
+  annotations:
+    # PlatformRole is served by the platform-api-server aggregated API.
+    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   permissions:
     - cluster.create
