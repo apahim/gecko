@@ -172,9 +172,9 @@ properties:
             minLength: 1
             type: string
             x-kubernetes-validations:
-            - message: version must be a valid semver major.minor.patch without leading
-                'v' (e.g., 4.14.9)
-              rule: self.matches('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+            - message: version must be a valid semantic version with an optional prerelease
+                and without a leading 'v' (e.g., 4.14.9 or 5.0.0-ec.6)
+              rule: self.matches('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$')
         required:
         - channelGroup
         - version

@@ -394,13 +394,13 @@ type GCPResourceLabel struct {
 // The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
 type ReleaseSpec struct {
 	// version is the OpenShift version to install.
-	// Specified as semver v2 major, minor, patch without leading "v". (e.g., "4.14.9")
+	// Specified as semver v2 major, minor, patch with an optional prerelease and without a leading "v". (e.g., "4.14.9" or "5.0.0-ec.6")
 	//
 
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:XValidation:rule="self.matches('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$')",message="version must be a valid semver major.minor.patch without leading 'v' (e.g., 4.14.9)"
+	// +kubebuilder:validation:XValidation:rule=`self.matches('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$')`,message="version must be a valid semantic version with an optional prerelease and without a leading 'v' (e.g., 4.14.9 or 5.0.0-ec.6)"
 	// +example="4.14.9"
 	Version string `json:"version"`
 
