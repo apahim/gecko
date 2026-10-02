@@ -701,3 +701,73 @@ func TestPrepareForUpdate_SymmetricProcessing_DefaultingDoesNotCauseChurn(t *tes
 		t.Errorf("expected Generation to remain 7 (defaulting applied symmetrically to old and new), got %d", newObj.Generation)
 	}
 }
+
+// typedOldValidatorObject mirrors the real private API validators, which
+// type-assert the old object to their own concrete type before using it.
+type typedOldValidatorObject struct {
+	testv1.Object
+	gotOld runtime.Object
+}
+
+func (v *typedOldValidatorObject) ValidateCreate(_ context.Context) error { return nil }
+
+func (v *typedOldValidatorObject) ValidateUpdate(_ context.Context, oldObj runtime.Object) error {
+	v.gotOld = oldObj
+	if _, ok := oldObj.(*testv1.Object); !ok {
+		return fmt.Errorf("expected old object to be *testv1.Object, got %T", oldObj)
+	}
+	return nil
+}
+
+func (v *typedOldValidatorObject) ValidateDelete(_ context.Context) error { return nil }
+
+func (v *typedOldValidatorObject) DeepCopyObject() runtime.Object {
+	cp := *v
+	cp.Object = *v.DeepCopy()
+	return &cp
+}
+
+// The storage layer always decodes rows into *unstructured.Unstructured, so the
+// old object handed to a CustomValidator must be converted back to the typed
+// object before the validator runs. Without that conversion every validator
+// that asserts its concrete type rejects every update.
+func TestValidateUpdate_ConvertsUnstructuredOldObjectToTyped(t *testing.T) {
+	strategy := newTestStrategy(t, true)
+	ctx := context.Background()
+
+	oldObj := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": testv1.GroupVersion.String(),
+		"kind":       "Object",
+		"metadata": map[string]interface{}{
+			"name":      "test-obj",
+			"namespace": "default",
+		},
+		"spec": map[string]interface{}{
+			"publicField": "old-value",
+		},
+	}}
+
+	obj := &typedOldValidatorObject{
+		Object: testv1.Object{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-obj", Namespace: "default"},
+			Spec:       testv1.ObjectSpec{PublicField: "new-value"},
+		},
+	}
+
+	errs := strategy.ValidateUpdate(ctx, obj, oldObj)
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors, got %v", errs)
+	}
+
+	typedOld, ok := obj.gotOld.(*testv1.Object)
+	if !ok {
+		t.Fatalf("validator received old object of type %T, want *testv1.Object", obj.gotOld)
+	}
+	if typedOld.Spec.PublicField != "old-value" {
+		t.Errorf("converted old object lost spec data: PublicField = %q, want %q",
+			typedOld.Spec.PublicField, "old-value")
+	}
+	if typedOld.Name != "test-obj" {
+		t.Errorf("converted old object lost metadata: Name = %q, want %q", typedOld.Name, "test-obj")
+	}
+}

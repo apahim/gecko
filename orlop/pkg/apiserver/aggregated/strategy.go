@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
@@ -221,7 +222,11 @@ func (s *ResourceStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.
 	allErrs = append(allErrs, validateOwnerReferences(obj)...)
 
 	if validator, ok := obj.(types.CustomValidator); ok {
-		if err := validator.ValidateUpdate(ctx, old); err != nil {
+		oldTyped, err := conversion.TypedOldObject(s.scheme, s.gvk, old)
+		if err != nil {
+			return append(allErrs, field.InternalError(field.NewPath(""), err))
+		}
+		if err := validator.ValidateUpdate(ctx, oldTyped); err != nil {
 			allErrs = append(allErrs, field.InternalError(field.NewPath(""), err))
 		}
 	}

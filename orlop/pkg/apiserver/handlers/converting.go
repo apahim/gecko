@@ -589,7 +589,12 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 	}
 
 	if v, ok := privateObj.(types.CustomValidator); ok {
-		if err := v.ValidateUpdate(r.Context(), existingPrivate); err != nil {
+		existingTyped, err := conversion.TypedOldObject(h.privateScheme, h.gvk, existingPrivate)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("converting old object: %v", err))
+			return
+		}
+		if err := v.ValidateUpdate(r.Context(), existingTyped); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))
 			return
 		}
@@ -768,7 +773,12 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 	}
 
 	if v, ok := privateObj.(types.CustomValidator); ok {
-		if err := v.ValidateUpdate(r.Context(), existingPrivate); err != nil {
+		existingTyped, err := conversion.TypedOldObject(h.privateScheme, h.gvk, existingPrivate)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("converting old object: %v", err))
+			return
+		}
+		if err := v.ValidateUpdate(r.Context(), existingTyped); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))
 			return
 		}

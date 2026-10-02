@@ -14,6 +14,7 @@ import (
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/apply"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
@@ -419,7 +420,12 @@ func (h *ResourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if v, ok := obj.(types.CustomValidator); ok {
-		if err := v.ValidateUpdate(r.Context(), existing); err != nil {
+		existingTyped, err := conversion.TypedOldObject(h.scheme, h.gvk, existing)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("converting old object: %v", err))
+			return
+		}
+		if err := v.ValidateUpdate(r.Context(), existingTyped); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))
 			return
 		}
