@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -355,62 +354,20 @@ func TestConvertingResourceHandler_Update_PreservesDeletionTimestamp(t *testing.
 // not exposed on the public API. Controllers remove finalizers via the private API.
 // The integration test finalizer_public_api_test.go verifies this correctly.
 
-func TestExtractUserEmail(t *testing.T) {
-	tests := []struct {
-		name      string
-		header    string
-		wantEmail string
-	}{
-		{
-			name:      "valid header with email",
-			header:    base64.RawURLEncoding.EncodeToString([]byte(`{"email":"user@example.com","sub":"12345"}`)),
-			wantEmail: "user@example.com",
-		},
-		{
-			name:      "empty header",
-			header:    "",
-			wantEmail: "",
-		},
-		{
-			name:      "invalid base64",
-			header:    "not-valid-base64!!!",
-			wantEmail: "",
-		},
-		{
-			name:      "valid base64 but invalid JSON",
-			header:    base64.RawURLEncoding.EncodeToString([]byte(`not json`)),
-			wantEmail: "",
-		},
-		{
-			name:      "valid JSON but no email field",
-			header:    base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"12345"}`)),
-			wantEmail: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/test", nil)
-			if tt.header != "" {
-				req.Header.Set(constants.HeaderEndpointAPIUserInfo, tt.header)
-			}
-			got := extractUserEmail(req)
-			if got != tt.wantEmail {
-				t.Errorf("extractUserEmail() = %q, want %q", got, tt.wantEmail)
-			}
-		})
+func TestAuthenticatedUserContextDoesNotTrustRawHeader(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/test", nil)
+	req.Header.Set(constants.HeaderEndpointAPIUserInfo, "spoofed-header-value")
+	if email, ok := AuthenticatedUserFromContext(req.Context()); ok || email != "" {
+		t.Fatalf("raw identity header populated context with %q", email)
 	}
 }
 
-func TestCreate_SetsCreatedByAnnotation_NoHeader(t *testing.T) {
-	// Verify that without the X-Endpoint-API-UserInfo header, the created-by
-	// annotation is NOT set. This tests the extractUserEmail → annotation flow
-	// indirectly via the absence case, since the full Create handler requires a
-	// properly configured schema processor to preserve metadata.name.
+func TestAuthenticatedUserContext(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/test", nil)
-	email := extractUserEmail(req)
-	if email != "" {
-		t.Errorf("expected empty email without header, got %q", email)
+	req = req.WithContext(WithAuthenticatedUser(req.Context(), "trusted@example.com"))
+	email, ok := AuthenticatedUserFromContext(req.Context())
+	if !ok || email != "trusted@example.com" {
+		t.Fatalf("authenticated context = %q, ok = %v", email, ok)
 	}
 }
 

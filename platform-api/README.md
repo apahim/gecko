@@ -28,7 +28,7 @@ curl -sk https://localhost:8080/openapi/v3
 kubectl --server https://localhost:8080 --insecure-skip-tls-verify api-resources
 ```
 
-### With delegated auth
+### With delegated private-API auth
 
 For testing authn/authz delegation against a real cluster (kind, minikube, GKE):
 
@@ -38,7 +38,7 @@ go run ./cmd/platform-api-server \
   --authorization-kubeconfig ~/.kube/config
 ```
 
-Tokens are validated via `TokenReview` and permissions checked via `SubjectAccessReview` against the target cluster's kube-apiserver.
+Private-API tokens are validated via `TokenReview` and permissions checked via `SubjectAccessReview` against the target cluster's kube-apiserver. Public-API identity is supplied by ESPv2 and authorization is evaluated in-process with Cedar.
 
 ### On a cluster (Phase 5 — not yet implemented)
 
@@ -79,6 +79,7 @@ curl -X POST http://localhost:8081/apis/gcp.managed.openshift.io/v1/namespaces/d
 | Flag | Default | Description |
 |---|---|---|
 | `--address` | `0.0.0.0` | Bind address |
+| `--public-address` | `127.0.0.1` | Public API bind address |
 | `--private-port` | `8080` | Private API port |
 | `--public-port` | `8081` | Public API port |
 | `--enable-public-api` | `true` | Enable public API server |
@@ -88,6 +89,7 @@ curl -X POST http://localhost:8081/apis/gcp.managed.openshift.io/v1/namespaces/d
 | `--authentication-kubeconfig` | | Kubeconfig for delegated authn (in-cluster if empty) |
 | `--authorization-kubeconfig` | | Kubeconfig for delegated authz (in-cluster if empty) |
 | `--disable-auth` | `false` | Skip authn/authz (for testing/local dev) |
+| `--dev-auth` | `false` | Accept `X-Dev-User` for public API local development only |
 
 ## Storage
 

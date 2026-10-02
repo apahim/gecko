@@ -48,10 +48,19 @@ type PrivateAPIOptions struct {
 // PublicAPIOptions holds configuration for the public API server.
 type PublicAPIOptions struct {
 	Enable     bool
+	Address    string
 	Port       int
 	Resources  []ResourceInfo
 	Scheme     *runtime.Scheme
 	Middleware []func(http.Handler) http.Handler
+
+	// MiddlewareFactory is called after the shared storage factory has been
+	// created. It allows an application-specific public API middleware stack
+	// to use the exact same ResourceStore instances as the API handlers.
+	//
+	// The stop channel is closed by Server.Shutdown. Factories that start
+	// background watchers should stop them when it is closed.
+	MiddlewareFactory func(StorageFactory, *runtime.Scheme, <-chan struct{}) ([]func(http.Handler) http.Handler, error)
 }
 
 // Options holds server configuration.
@@ -176,13 +185,22 @@ func New(opts Options) (*Server, error) {
 			}
 		}
 
+		publicMiddleware := append([]func(http.Handler) http.Handler(nil), opts.Public.Middleware...)
+		if opts.Public.MiddlewareFactory != nil {
+			factoryMiddleware, err := opts.Public.MiddlewareFactory(sharedFactory, opts.Private.Scheme, server.stopCh)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create public middleware: %w", err)
+			}
+			publicMiddleware = append(publicMiddleware, factoryMiddleware...)
+		}
+
 		// Build health checker for the public API using the same storage probe as the private API.
 		publicHealthCheck := func() error {
 			return healthCheckers[0].Check(nil)
 		}
 
 		converter := conversion.NewConverter(opts.Public.Scheme, opts.Private.Scheme, opts.Private.Prefix)
-		publicRouter, err := setupConvertingRouter(publicRegistry, privateRegistry, converter, opts.Private.Scheme, opts.CORSOrigins, opts.Public.Middleware, publicHealthCheck)
+		publicRouter, err := setupConvertingRouter(publicRegistry, privateRegistry, converter, opts.Private.Scheme, opts.CORSOrigins, publicMiddleware, publicHealthCheck)
 		if err != nil {
 			return nil, fmt.Errorf("failed to configure public API router: %w", err)
 		}
@@ -192,8 +210,13 @@ func New(opts Options) (*Server, error) {
 		protocols.SetHTTP1(true)
 		protocols.SetHTTP2(true)
 
+		publicAddress := opts.Public.Address
+		if publicAddress == "" {
+			publicAddress = bindAddress
+		}
+
 		publicServer := &http.Server{
-			Addr:              fmt.Sprintf("%s:%d", bindAddress, opts.Public.Port),
+			Addr:              fmt.Sprintf("%s:%d", publicAddress, opts.Public.Port),
 			Handler:           publicRouter,
 			Protocols:         &protocols,
 			ReadHeaderTimeout: 30 * time.Second, // prevent slow loris

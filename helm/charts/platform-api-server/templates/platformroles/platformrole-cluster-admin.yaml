@@ -1,0 +1,18 @@
+{{- if .Values.platformRoles.enabled }}
+apiVersion: gcp.managed.openshift.io/v1
+kind: PlatformRole
+metadata:
+  name: cluster-admin
+spec:
+  permissions:
+    - cluster.create
+    - cluster.list
+    - cluster.get
+    - cluster.update
+    - cluster.delete
+    - nodepool.create
+    - nodepool.list
+    - nodepool.get
+    - nodepool.update
+    - nodepool.delete
+{{- end }}

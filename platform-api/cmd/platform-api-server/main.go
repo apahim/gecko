@@ -6,12 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/go-logr/stdr"
 	_ "github.com/lib/pq"
 
@@ -20,6 +23,9 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/postgres"
 	spannerbackend "github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/spanner"
+	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
+	"github.com/openshift-online/gecko/platform-api/pkg/authn"
+	"github.com/openshift-online/gecko/platform-api/pkg/authz"
 	"github.com/openshift-online/gecko/platform-api/pkg/featureflags"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,6 +35,7 @@ import (
 func main() {
 	var (
 		address         string
+		publicAddress   string
 		privatePort     int
 		publicPort      int
 		corsOrigins     string
@@ -38,10 +45,12 @@ func main() {
 		authnKubeconfig string
 		authzKubeconfig string
 		disableAuth     bool
+		devAuth         bool
 		migrateOnly     bool
 	)
 
 	flag.StringVar(&address, "address", "0.0.0.0", "address to bind to")
+	flag.StringVar(&publicAddress, "public-address", "127.0.0.1", "address to bind the public API to")
 	flag.IntVar(&privatePort, "private-port", 8080, "port for private API")
 	flag.IntVar(&publicPort, "public-port", 8081, "port for public API")
 	flag.BoolVar(&enablePublic, "enable-public-api", true, "enable public API server")
@@ -51,6 +60,7 @@ func main() {
 	flag.StringVar(&authnKubeconfig, "authentication-kubeconfig", "", "kubeconfig for delegated authentication (in-cluster if empty)")
 	flag.StringVar(&authzKubeconfig, "authorization-kubeconfig", "", "kubeconfig for delegated authorization (in-cluster if empty)")
 	flag.BoolVar(&disableAuth, "disable-auth", false, "disable authentication/authorization (for testing/local dev)")
+	flag.BoolVar(&devAuth, "dev-auth", false, "accept X-Dev-User for public API authentication (local development only)")
 	flag.BoolVar(&migrateOnly, "migrate-only", false, "run Spanner DDL migrations and exit (for PreSync Jobs)")
 	flag.Parse()
 
@@ -78,6 +88,10 @@ func main() {
 
 		log.Println("Spanner DDL migrations completed successfully")
 		os.Exit(0)
+	}
+
+	if err := validatePublicAuthAddress(enablePublic, address, publicAddress, devAuth, disableAuth); err != nil {
+		log.Fatal(err)
 	}
 
 	featureFlagEvaluator, err := featureflags.NewFromEnvironment()
@@ -176,6 +190,35 @@ func main() {
 	}
 
 	// Create server with resource configuration
+	publicMiddlewareFactory := func(factory apiserver.StorageFactory, privateScheme *runtime.Scheme, stopCh <-chan struct{}) ([]func(http.Handler) http.Handler, error) {
+		stores, err := authz.NewStores(factory, privateScheme)
+		if err != nil {
+			return nil, err
+		}
+
+		// API type validation uses these callbacks to verify RoleBinding
+		// references without importing the authz package into the API types.
+		privatev1.SetValidatorDeps(privatev1.ValidatorDeps{
+			RoleExists:         stores.RoleExists,
+			PlatformRoleExists: stores.PlatformRoleExists,
+		})
+
+		if disableAuth {
+			return nil, nil
+		}
+
+		authorizer, err := authz.NewAuthorizer(context.Background(), stores, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load authorization policy: %w", err)
+		}
+		authorizer.StartWatching(stopCh)
+		authorization := authz.Middleware(authorizer, logger)
+		return []func(http.Handler) http.Handler{
+			authn.Middleware(authn.Config{AllowDevHeader: devAuth}),
+			conditionalAuthorizationMiddleware(featureFlagEvaluator, authorization, logger),
+		}, nil
+	}
+
 	opts := apiserver.Options{
 		Address: address,
 		Private: apiserver.PrivateAPIOptions{
@@ -189,10 +232,12 @@ func main() {
 			DisableAuth:              disableAuth,
 		},
 		Public: apiserver.PublicAPIOptions{
-			Enable:    enablePublic,
-			Port:      publicPort,
-			Resources: getPublicResources(),
-			Scheme:    getPublicScheme(),
+			Enable:            enablePublic,
+			Address:           publicAddress,
+			Port:              publicPort,
+			Resources:         getPublicResources(),
+			Scheme:            getPublicScheme(),
+			MiddlewareFactory: publicMiddlewareFactory,
 		},
 		StorageFactory: storageFactory,
 		CORSOrigins:    origins,
@@ -228,4 +273,71 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+}
+
+const publicAuthorizationEnabledFlag = "gecko.public-api.authorization.enabled"
+
+type booleanFeatureFlagEvaluator interface {
+	Boolean(context.Context, string, bool) (bool, error)
+}
+
+func conditionalAuthorizationMiddleware(evaluator booleanFeatureFlagEvaluator, authorization func(http.Handler) http.Handler, logger logr.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		enforced := authorization(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			enforce, err := evaluator.Boolean(r.Context(), publicAuthorizationEnabledFlag, true)
+			if err != nil {
+				logger.Error(err, "authorization feature flag evaluation failed; enforcing authorization")
+				enforce = true
+			}
+			if enforce {
+				enforced.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func validatePublicAuthAddress(enablePublic bool, address, publicAddress string, devAuth, disableAuth bool) error {
+	if !enablePublic || (!devAuth && !disableAuth) {
+		return nil
+	}
+
+	effectiveAddress := publicAddress
+	if effectiveAddress == "" {
+		effectiveAddress = address
+		if disableAuth {
+			// aggregated.Config.Complete forces the private bind address to
+			// loopback when auth is disabled, and the public server defaults
+			// to that resolved address when --public-address is empty.
+			effectiveAddress = "127.0.0.1"
+		}
+		if effectiveAddress == "" {
+			effectiveAddress = "0.0.0.0"
+		}
+	}
+
+	if isLoopbackAddress(effectiveAddress) {
+		return nil
+	}
+
+	mode := "--dev-auth"
+	if disableAuth {
+		mode = "--disable-auth"
+		if devAuth {
+			mode = "--dev-auth and --disable-auth"
+		}
+	}
+	return fmt.Errorf("%s requires the public API to bind to a loopback address", mode)
+}
+
+func isLoopbackAddress(address string) bool {
+	address = strings.TrimSpace(address)
+	if strings.EqualFold(address, "localhost") {
+		return true
+	}
+	address = strings.Trim(address, "[]")
+	ip := net.ParseIP(address)
+	return ip != nil && ip.IsLoopback()
 }
