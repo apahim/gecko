@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/go-logr/stdr"
 	_ "github.com/lib/pq"
 
@@ -211,9 +212,10 @@ func main() {
 			return nil, fmt.Errorf("failed to load authorization policy: %w", err)
 		}
 		authorizer.StartWatching(stopCh)
+		authorization := authz.Middleware(authorizer, logger)
 		return []func(http.Handler) http.Handler{
 			authn.Middleware(authn.Config{AllowDevHeader: devAuth}),
-			authz.Middleware(authorizer, logger),
+			conditionalAuthorizationMiddleware(featureFlagEvaluator, authorization, logger),
 		}, nil
 	}
 
@@ -271,6 +273,30 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+}
+
+const publicAuthorizationEnabledFlag = "gecko.public-api.authorization.enabled"
+
+type booleanFeatureFlagEvaluator interface {
+	Boolean(context.Context, string, bool) (bool, error)
+}
+
+func conditionalAuthorizationMiddleware(evaluator booleanFeatureFlagEvaluator, authorization func(http.Handler) http.Handler, logger logr.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		enforced := authorization(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			enforce, err := evaluator.Boolean(r.Context(), publicAuthorizationEnabledFlag, true)
+			if err != nil {
+				logger.Error(err, "authorization feature flag evaluation failed; enforcing authorization")
+				enforce = true
+			}
+			if enforce {
+				enforced.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func validatePublicAuthAddress(enablePublic bool, address, publicAddress string, devAuth, disableAuth bool) error {
