@@ -240,8 +240,8 @@ github.com/open-feature/flagd/core v0.18.0 h1:T5i1vXsUimNpecQxfWuZyKupTUSXf4YCy4
 github.com/open-feature/flagd/core v0.18.0/go.mod h1:YACAIM+aoqKZzFzgIgyHqq6kU05WK133dw9MYld1k0Y=
 github.com/open-feature/go-sdk v1.19.0 h1:vahRSX/kYzLny7bUuxssNiiHOGqHlDIG47z+jJ/DCEY=
 github.com/open-feature/go-sdk v1.19.0/go.mod h1:JlS8ClrWUzfywMOOeFo0Ro3BeT8cS5O/KbZUOOjwtyQ=
-github.com/open-feature/go-sdk-contrib/providers/flagd v0.7.0 h1:QS0kOXLamHWU3/ukiIzfFdvEdcCfJeRiWO2+tv5gRUI=
-github.com/open-feature/go-sdk-contrib/providers/flagd v0.7.0/go.mod h1:9urgDzn6YbfSYxTNT9QUjRByn/50G4wUGEtYKNyPJIo=
+github.com/open-feature/go-sdk-contrib/providers/flagd v0.7.1 h1:Wl3RYIgicj/Vib48AAuzHOarnyv+xxkG1lJjZafWJgI=
+github.com/open-feature/go-sdk-contrib/providers/flagd v0.7.1/go.mod h1:Y5bJdt5AuPfEXJ6HiFMZ35UsA7ZUjICNiM5OqOR4v6k=
 github.com/planetscale/vtprotobuf v0.6.1-0.20260702190614-8ae5a48058df h1:x2ymdov8jnZLDPfI+VVcf/ZvzuZ2u36ieXTuQASMkWI=
 github.com/planetscale/vtprotobuf v0.6.1-0.20260702190614-8ae5a48058df/go.mod h1:araspv2uYKozbi5lrKaqpv1/Uei7eQSml8JCw2A3IRg=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
