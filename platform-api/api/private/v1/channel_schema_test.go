@@ -3,7 +3,6 @@ package v1_test
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,28 +19,16 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-func TestChannelReleaseStreamSchema(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		streams     []string
-		wantInvalid bool
-	}{
-		{name: "existing production channel"},
-		{name: "explicit CI stream", streams: []string{"4.22.0-0.nightly"}},
-		{name: "multiple explicit CI streams", streams: []string{"4.22.0-0.nightly", "4.23.0-0.nightly"}},
-		{name: "empty stream name", streams: []string{""}, wantInvalid: true},
-		{name: "duplicate streams", streams: []string{"4.22.0-0.nightly", "4.22.0-0.nightly"}, wantInvalid: true},
+func TestChannelWithoutStatus(t *testing.T) {
+	object := channelAsMap(t, channelForSchemaTest())
+	delete(object, "status")
+	for _, schema := range []struct{ name, value string }{
+		{"private", privatev1.ChannelSchemaYAML},
+		{"public", publicv1.ChannelSchemaYAML},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			channel := channelForSchemaTest()
-			channel.Spec.ReleaseStreams = tc.streams
-			errs := channelSchemaProcessor(t, privatev1.ChannelSchemaYAML).Process(context.Background(), channelAsMap(t, channel))
-			if tc.wantInvalid {
-				if len(errs) == 0 || !strings.Contains(errs.ToAggregate().Error(), "releaseStreams") {
-					t.Fatalf("expected releaseStreams validation error, got %v", errs)
-				}
-			} else if len(errs) != 0 {
-				t.Fatalf("expected valid Channel, got %v", errs)
+		t.Run(schema.name, func(t *testing.T) {
+			if errs := channelSchemaProcessor(t, schema.value).Process(context.Background(), object); len(errs) != 0 {
+				t.Fatalf("Channel without status failed validation: %v", errs)
 			}
 		})
 	}
@@ -51,7 +38,6 @@ func TestChannelStatusPublicConversion(t *testing.T) {
 	for _, status := range []metav1.ConditionStatus{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionUnknown} {
 		t.Run(string(status), func(t *testing.T) {
 			channel := channelForSchemaTest()
-			channel.Spec.ReleaseStreams = []string{"4.22.0-0.nightly"}
 			channel.Status.Conditions = []metav1.Condition{{
 				Type:               privatev1.ChannelDefaultVersionAvailable,
 				Status:             status,
@@ -65,9 +51,6 @@ func TestChannelStatusPublicConversion(t *testing.T) {
 				t.Fatal(err)
 			}
 			object := channelAsMap(t, public)
-			if _, exposed := object["spec"].(map[string]any)["releaseStreams"]; exposed {
-				t.Fatal("public Channel exposes private stream configuration")
-			}
 			for _, schema := range []struct {
 				name, value string
 				object      map[string]any

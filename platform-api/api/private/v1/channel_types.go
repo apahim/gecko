@@ -34,18 +34,6 @@ type ChannelList struct {
 
 // ChannelSpec contains platform-managed controls for a channel group.
 type ChannelSpec struct {
-	// ReleaseStreams lists the exact CI release-stream names whose accepted
-	// releases populate this Channel. The version-sync controller configuration
-	// selects the source type and endpoint for the environment. Omit this field
-	// for production Cincinnati; CI synchronization requires at least one stream.
-	// Stream selection is platform configuration and is not exposed publicly.
-	// +optional
-	// +listType=set
-	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:UniqueItems=true
-	// +kubebuilder:validation:items:MinLength=1
-	ReleaseStreams []string `json:"releaseStreams,omitempty"`
-
 	// InstallDefaultVersion is the exact release selected when a client does
 	// not provide a version during cluster creation.
 	// +orlop:public

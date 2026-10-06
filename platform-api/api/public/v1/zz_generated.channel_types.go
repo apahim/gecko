@@ -31,7 +31,6 @@ type ChannelList struct {
 
 // ChannelSpec contains platform-managed controls for a channel group.
 type ChannelSpec struct {
-
 	// InstallDefaultVersion is the exact release selected when a client does
 	// not provide a version during cluster creation.
 

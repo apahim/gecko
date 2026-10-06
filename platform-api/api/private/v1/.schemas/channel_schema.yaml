@@ -35,20 +35,6 @@ properties:
           not provide a version during cluster creation.
         minLength: 1
         type: string
-      releaseStreams:
-        description: |-
-          ReleaseStreams lists the exact CI release-stream names whose accepted
-          releases populate this Channel. The version-sync controller configuration
-          selects the source type and endpoint for the environment. Omit this field
-          for production Cincinnati; CI synchronization requires at least one stream.
-          Stream selection is platform configuration and is not exposed publicly.
-        items:
-          minLength: 1
-          type: string
-        minItems: 1
-        type: array
-        uniqueItems: true
-        x-kubernetes-list-type: set
     required:
     - fleetMinorVersion
     - installDefaultVersion
