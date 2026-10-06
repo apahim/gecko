@@ -6,6 +6,10 @@ metadata:
   labels:
     {{- include "gecko-version-sync.labels" $ | nindent 4 }}
 spec:
+  {{- with $channel.releaseStreams }}
+  releaseStreams:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   installDefaultVersion: {{ $channel.installDefaultVersion | quote }}
   fleetMinorVersion: {{ $channel.fleetMinorVersion | quote }}
 ---

@@ -20,6 +20,10 @@ cincinnati:
 # Channel CRs created by this map also define the Cincinnati channel groups that
 # version-sync probes. For example, prod may use stable/fast/candidate/eus while
 # non-prod may use stable/prerelease/nightly with the CI Cincinnati endpoint.
+# A CI Channel can additionally set releaseStreams to exact stream names, e.g.
+# ["4.22.0-0.nightly"]. Omit releaseStreams for production Cincinnati.
+# This field configures the API contract; CI catalog synchronization is delivered
+# separately. installDefaultVersion remains explicitly pinned by the operator.
 channels: {}
 
 serviceAccount:
