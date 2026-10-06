@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 	publicv1 "github.com/openshift-online/gecko/platform-api/api/public/v1"
@@ -15,6 +16,7 @@ import (
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"sigs.k8s.io/yaml"
 )
@@ -34,7 +36,15 @@ func TestChannelWithoutStatus(t *testing.T) {
 	}
 }
 
-func TestChannelStatusPublicConversion(t *testing.T) {
+func TestChannelDefaultAvailabilityIsPrivate(t *testing.T) {
+	privateScheme, publicScheme := runtime.NewScheme(), runtime.NewScheme()
+	if err := privatev1.AddToScheme(privateScheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := publicv1.AddToScheme(publicScheme); err != nil {
+		t.Fatal(err)
+	}
+	converter := conversion.NewConverter(publicScheme, privateScheme, "")
 	for _, status := range []metav1.ConditionStatus{metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionUnknown} {
 		t.Run(string(status), func(t *testing.T) {
 			channel := channelForSchemaTest()
@@ -46,9 +56,18 @@ func TestChannelStatusPublicConversion(t *testing.T) {
 				Reason:             "CatalogEvaluated",
 				Message:            "Availability of the pinned install default in the synchronized catalog.",
 			}}
-			var public publicv1.Channel
-			if err := publicv1.Convert_Channel_PrivateToPublic(&channel, &public, nil); err != nil {
+			// The API's runtime converter applies the condition allowlist after
+			// field filtering. Generated type conversion alone does not do this.
+			converted, err := converter.PrivateToPublic(&channel)
+			if err != nil {
 				t.Fatal(err)
+			}
+			public := converted.(*publicv1.Channel)
+			if len(public.Status.Conditions) != 0 {
+				t.Fatalf("public Channel exposes private conditions: %#v", public.Status.Conditions)
+			}
+			if len(channel.Status.Conditions) != 1 {
+				t.Fatal("public conversion removed the private condition from the source")
 			}
 			object := channelAsMap(t, public)
 			for _, schema := range []struct {
@@ -62,12 +81,33 @@ func TestChannelStatusPublicConversion(t *testing.T) {
 					t.Fatalf("%s Channel status failed validation: %v", schema.name, errs)
 				}
 			}
-			var roundTrip privatev1.Channel
-			if err := publicv1.Convert_Channel_PublicToPrivate(&public, &roundTrip, nil); err != nil {
+			roundTrip, err := converter.PublicToPrivate(public, &channel)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if !equality.Semantic.DeepEqual(channel.Status, roundTrip.Status) {
-				t.Fatalf("status changed during public conversion: got %#v, want %#v", roundTrip.Status, channel.Status)
+			if !equality.Semantic.DeepEqual(channel.Status, roundTrip.(*privatev1.Channel).Status) {
+				t.Fatal("public round trip did not preserve the existing private condition")
+			}
+			// A public client cannot inject or overwrite the private condition.
+			public.Status.Conditions = []metav1.Condition{{
+				Type:   privatev1.ChannelDefaultVersionAvailable,
+				Status: metav1.ConditionFalse,
+				Reason: "ClientInjected",
+			}}
+			forged := public.DeepCopy()
+			updated, err := converter.PublicToPrivate(public, &channel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !equality.Semantic.DeepEqual(channel.Status, updated.(*privatev1.Channel).Status) {
+				t.Fatal("public input overwrote the existing private condition")
+			}
+			created, err := converter.PublicToPrivate(forged, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(created.(*privatev1.Channel).Status.Conditions) != 0 {
+				t.Fatal("public input injected a private condition")
 			}
 		})
 	}

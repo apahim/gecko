@@ -51,16 +51,18 @@ type ChannelSpec struct {
 
 // ChannelDefaultVersionAvailable reports whether the pinned install default is
 // present in this Channel's latest successfully synchronized release catalog.
+// True means present, False means absent after a successful sync, and Unknown
+// means availability could not be determined. A missing condition is unevaluated.
+// Consumers must check observedGeneration after spec changes. An unavailable
+// default does not prevent synchronization of other releases.
+// This condition is private: it is not in Orlop's public-condition allowlist.
 const ChannelDefaultVersionAvailable = "DefaultVersionAvailable"
 
 // ChannelStatus contains observations made by the version-sync controller.
 type ChannelStatus struct {
-	// Conditions include DefaultVersionAvailable: True when the pinned default
-	// is present in this Channel's catalog, False when a successful sync finds
-	// it absent, and Unknown when availability cannot be determined. A missing
-	// condition means availability has not yet been evaluated. Consumers must
-	// check observedGeneration before interpreting a condition after spec changes.
-	// An unavailable default does not prevent synchronization of other releases.
+	// Conditions contains observations made by the version-sync controller.
+	// Individual condition types are private unless explicitly allowlisted by
+	// Orlop for exposure in public API responses.
 	// +orlop:public
 	// +optional
 	// +listType=map

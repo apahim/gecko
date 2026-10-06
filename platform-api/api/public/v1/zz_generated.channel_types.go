@@ -48,12 +48,9 @@ type ChannelSpec struct {
 
 // ChannelStatus contains observations made by the version-sync controller.
 type ChannelStatus struct {
-	// Conditions include DefaultVersionAvailable: True when the pinned default
-	// is present in this Channel's catalog, False when a successful sync finds
-	// it absent, and Unknown when availability cannot be determined. A missing
-	// condition means availability has not yet been evaluated. Consumers must
-	// check observedGeneration before interpreting a condition after spec changes.
-	// An unavailable default does not prevent synchronization of other releases.
+	// Conditions contains observations made by the version-sync controller.
+	// Individual condition types are private unless explicitly allowlisted by
+	// Orlop for exposure in public API responses.
 
 	// +optional
 	// +listType=map
