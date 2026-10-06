@@ -23,8 +23,6 @@ import (
 const (
 	syncInterval = 15 * time.Minute
 
-	minimumSupportedVersion = "4.22"
-
 	// Stop probing a major after this many missing minor channels.
 	maxConsecutiveMissingMinors = 3
 
@@ -81,18 +79,18 @@ func (c *Controller) NeedLeaderElection() bool {
 
 // sync fetches the desired version snapshot from Cincinnati and applies it to the API.
 func (c *Controller) sync(ctx context.Context, log logger.Logger) {
-	channelGroups, err := c.channelGroups(ctx)
+	channels, err := c.channels(ctx)
 	if err != nil {
 		log.Errorf(ctx, "list channels failed, preserving previous version snapshot: %v", err)
 		return
 	}
 
-	if len(channelGroups) == 0 {
+	if len(channels) == 0 {
 		log.Error(ctx, "no Channel resources found, preserving previous version snapshot")
 		return
 	}
 
-	desired, err := c.fetchVersions(ctx, log, channelGroups)
+	desired, err := c.fetchVersions(ctx, log, channels)
 	if err != nil {
 		log.Errorf(ctx, "fetch failed, preserving previous version snapshot: %v", err)
 		return
@@ -106,18 +104,18 @@ func (c *Controller) sync(ctx context.Context, log logger.Logger) {
 func (c *Controller) fetchVersions(
 	ctx context.Context,
 	log logger.Logger,
-	channelGroups []string,
+	channels []privatev1.Channel,
 ) (map[string]privatev1.VersionSpec, error) {
-	minimumMajor, minimumMinor, valid := parseMajorMinor(minimumSupportedVersion)
-	if !valid {
-		return nil, fmt.Errorf("invalid minimum supported version %q", minimumSupportedVersion)
-	}
-
 	versions := make(map[string]privatev1.VersionSpec)
 	channelCount := 0
 	probeCount := 0
 
-	for _, group := range channelGroups {
+	for _, configuredChannel := range channels {
+		minimumMajor, minimumMinor, err := channelMinimum(configuredChannel)
+		if err != nil {
+			return nil, err
+		}
+		group := configuredChannel.Name
 		emptyMajorCount := 0
 
 		for major := minimumMajor; emptyMajorCount < maxMajorGap; major++ {
@@ -158,7 +156,7 @@ func (c *Controller) fetchVersions(
 				channelCount++
 
 				for _, release := range releases {
-					if !isSupportedVersion(release.Version) {
+					if !isSupportedVersion(release.Version, minimumMajor, minimumMinor) {
 						continue
 					}
 					if release.Payload == "" {
@@ -207,19 +205,14 @@ func (c *Controller) fetchVersions(
 	return versions, nil
 }
 
-func (c *Controller) channelGroups(ctx context.Context) ([]string, error) {
+func (c *Controller) channels(ctx context.Context) ([]privatev1.Channel, error) {
 	var channels privatev1.ChannelList
 	if err := c.apiClient.List(ctx, &channels); err != nil {
 		return nil, fmt.Errorf("list channels: %w", err)
 	}
 
-	groups := make([]string, 0, len(channels.Items))
-	for i := range channels.Items {
-		groups = append(groups, channels.Items[i].Name)
-	}
-	sort.Strings(groups)
-
-	return groups, nil
+	sort.Slice(channels.Items, func(i, j int) bool { return channels.Items[i].Name < channels.Items[j].Name })
+	return channels.Items, nil
 }
 
 func (c *Controller) apply(
@@ -310,7 +303,18 @@ func parseMajorMinor(version string) (int, int, bool) {
 	return major, minor, true
 }
 
-func isSupportedVersion(version string) bool {
+// channelMinimum uses the Channel's fleet policy as the inclusive catalog floor.
+// Discovery continues beyond this minor, including subsequent major versions.
+func channelMinimum(channel privatev1.Channel) (int, int, error) {
+	value := channel.Spec.FleetMinorVersion
+	major, minor, valid := parseMajorMinor(value)
+	if !valid || major < 0 || minor < 0 || fmt.Sprintf("%d.%d", major, minor) != value {
+		return 0, 0, fmt.Errorf("channel %q has invalid fleetMinorVersion %q", channel.Name, value)
+	}
+	return major, minor, nil
+}
+
+func isSupportedVersion(version string, minimumMajor, minimumMinor int) bool {
 	semanticVersion, err := utilversion.ParseSemantic(version)
 	if err != nil || semanticVersion.String() != version {
 		return false
@@ -323,8 +327,6 @@ func isSupportedVersion(version string) bool {
 	if !valid {
 		return false
 	}
-
-	minimumMajor, minimumMinor, _ := parseMajorMinor(minimumSupportedVersion)
 
 	return major > minimumMajor ||
 		(major == minimumMajor && minor >= minimumMinor)

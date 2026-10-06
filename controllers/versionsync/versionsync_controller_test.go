@@ -175,7 +175,7 @@ func TestFetchVersions(t *testing.T) {
 	defer server.Close()
 
 	controller := newController(t, server, &mockStoreClient{})
-	versions, err := controller.fetchVersions(context.Background(), newTestLogger(t), []string{"stable", "fast"})
+	versions, err := controller.fetchVersions(context.Background(), newTestLogger(t), []privatev1.Channel{fleetChannel("stable", "4.22"), fleetChannel("fast", "4.22")})
 
 	require.NoError(t, err)
 	require.Len(t, versions, 2)
@@ -208,7 +208,7 @@ func TestFetchVersionsRejectsConflictingPayloads(t *testing.T) {
 	defer server.Close()
 
 	controller := newController(t, server, &mockStoreClient{})
-	_, err := controller.fetchVersions(context.Background(), newTestLogger(t), []string{"stable", "fast"})
+	_, err := controller.fetchVersions(context.Background(), newTestLogger(t), []privatev1.Channel{fleetChannel("stable", "4.22"), fleetChannel("fast", "4.22")})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "conflicting release payloads")
@@ -226,7 +226,7 @@ func TestFetchVersionsRejectsEmptyPayload(t *testing.T) {
 	defer server.Close()
 
 	controller := newController(t, server, &mockStoreClient{})
-	_, err := controller.fetchVersions(context.Background(), newTestLogger(t), []string{"stable"})
+	_, err := controller.fetchVersions(context.Background(), newTestLogger(t), []privatev1.Channel{fleetChannel("stable", "4.22")})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "has no payload")
@@ -239,7 +239,7 @@ func TestSyncPreservesSnapshotOnFetchFailure(t *testing.T) {
 	defer server.Close()
 
 	store := &mockStoreClient{
-		channels: []privatev1.Channel{{ObjectMeta: objectMeta("stable")}},
+		channels: []privatev1.Channel{fleetChannel("stable", "4.22")},
 		versions: []privatev1.Version{
 			{ObjectMeta: objectMeta("4.22.11")},
 		},
@@ -275,18 +275,18 @@ func TestSyncPreservesSnapshotWhenNoChannelsExist(t *testing.T) {
 	assert.Empty(t, store.deleted)
 }
 
-func TestChannelGroupsAreReadFromChannelResources(t *testing.T) {
+func TestChannelsIncludeFleetPolicy(t *testing.T) {
 	store := &mockStoreClient{channels: []privatev1.Channel{
-		{ObjectMeta: objectMeta("nightly")},
-		{ObjectMeta: objectMeta("prerelease")},
-		{ObjectMeta: objectMeta("stable")},
+		fleetChannel("nightly", "4.22"),
+		fleetChannel("prerelease", "4.22"),
+		fleetChannel("stable", "4.22"),
 	}}
 	controller := &Controller{apiClient: store}
 
-	groups, err := controller.channelGroups(context.Background())
+	channels, err := controller.channels(context.Background())
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"nightly", "prerelease", "stable"}, groups)
+	assert.Equal(t, store.channels, channels)
 	assert.True(t, store.listedChannels)
 }
 
