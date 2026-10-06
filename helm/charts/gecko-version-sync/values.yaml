@@ -24,9 +24,9 @@ cincinnati:
   url: "https://api.openshift.com/api/upgrades_info/v1/graph"
   arch: amd64
 
-# Channels define catalog membership. Cincinnati probes <Channel name>-<major.minor>.
-# With release-controller, each Channel must set releaseStreams to explicit stream
-# names, whose accepted releases form its catalog. No Channel names are built in.
+# Channels define catalog membership, starting at each Channel's fleetMinorVersion.
+# Cincinnati probes <Channel name>-<major.minor>; release-controller discovers
+# matching <major>-<Channel name> and <major>.<minor>.0-0.<Channel name> streams.
 # installDefaultVersion remains operator-pinned even when unavailable.
 channels: {}
 

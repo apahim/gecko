@@ -104,11 +104,7 @@ func (c *Controller) sync(ctx context.Context, log logger.Logger) {
 	if c.releaseControllerClient != nil {
 		desired, err = c.fetchCIVersions(ctx, channels.Items)
 	} else {
-		groups := make([]string, 0, len(channels.Items))
-		for _, channel := range channels.Items {
-			groups = append(groups, channel.Name)
-		}
-		desired, err = c.fetchVersions(ctx, log, groups)
+		desired, err = c.fetchVersions(ctx, log, channels.Items)
 	}
 	if err != nil {
 		log.Errorf(ctx, "fetch failed, preserving previous version snapshot: %v", err)
@@ -125,13 +121,23 @@ func (c *Controller) sync(ctx context.Context, log logger.Logger) {
 
 // fetchCIVersions gathers the complete snapshot before any Version is changed.
 func (c *Controller) fetchCIVersions(ctx context.Context, channels []privatev1.Channel) (map[string]privatev1.VersionSpec, error) {
+	availableStreams, err := c.releaseControllerClient.ListStreams(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("discover CI streams: %w", err)
+	}
 	versions := make(map[string]privatev1.VersionSpec)
 	streams := make(map[string][]versionresolution.ReleaseInfo)
 	for _, channel := range channels {
-		if len(channel.Spec.ReleaseStreams) == 0 {
-			return nil, fmt.Errorf("CI Channel %q requires releaseStreams", channel.Name)
+		minimumMajor, minimumMinor, err := channelMinimum(channel)
+		if err != nil {
+			return nil, err
 		}
-		for _, stream := range channel.Spec.ReleaseStreams {
+		matched := false
+		for _, stream := range availableStreams {
+			if !streamMatchesChannel(stream, channel.Name, minimumMajor, minimumMinor) {
+				continue
+			}
+			matched = true
 			releases, found := streams[stream]
 			if !found {
 				var err error
@@ -142,7 +148,7 @@ func (c *Controller) fetchCIVersions(ctx context.Context, channels []privatev1.C
 				streams[stream] = releases
 			}
 			for _, release := range releases {
-				if !isSupportedVersion(release.Version) {
+				if !isSupportedVersion(release.Version, minimumMajor, minimumMinor) {
 					continue
 				}
 				spec, exists := versions[release.Version]
@@ -157,9 +163,12 @@ func (c *Controller) fetchCIVersions(ctx context.Context, channels []privatev1.C
 				versions[release.Version] = spec
 			}
 		}
+		if !matched {
+			return nil, fmt.Errorf("channel %q has no matching CI streams at or above fleetMinorVersion %q", channel.Name, channel.Spec.FleetMinorVersion)
+		}
 	}
 	if len(versions) == 0 {
-		return nil, fmt.Errorf("no configured CI streams returned supported accepted releases")
+		return nil, fmt.Errorf("no discovered CI streams returned supported accepted releases")
 	}
 	return versions, nil
 }
