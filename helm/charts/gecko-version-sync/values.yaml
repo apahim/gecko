@@ -13,13 +13,21 @@ orlopURL: ""
 logLevel: info
 logFormat: json
 
+# Configure one catalog source for the whole environment. For CI, set type to
+# release-controller and url to its architecture-specific base URL (without /graph).
+# An empty Cincinnati source URL uses the legacy cincinnati.url setting below.
+source:
+  type: cincinnati
+  url: ""
+
 cincinnati:
   url: "https://api.openshift.com/api/upgrades_info/v1/graph"
   arch: amd64
 
-# Channel CRs created by this map also define the Cincinnati channel groups that
-# version-sync probes. For example, prod may use stable/fast/candidate/eus while
-# non-prod may use stable/prerelease/nightly with the CI Cincinnati endpoint.
+# Channels define catalog membership. Cincinnati probes <Channel name>-<major.minor>.
+# With release-controller, each Channel must set releaseStreams to explicit stream
+# names, whose accepted releases form its catalog. No Channel names are built in.
+# installDefaultVersion remains operator-pinned even when unavailable.
 channels: {}
 
 serviceAccount:

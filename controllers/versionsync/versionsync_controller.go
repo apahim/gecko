@@ -12,7 +12,9 @@ import (
 	"github.com/openshift-online/gecko/controllers/versionresolution"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
@@ -35,11 +37,12 @@ const (
 	maxChannelProbes = 256
 )
 
-// Controller synchronizes Version resources from Cincinnati.
+// Controller synchronizes Version resources from the environment's catalog source.
 type Controller struct {
-	cincinnatiClient *versionresolution.CincinnatiClient
-	log              logger.Logger
-	apiClient        client.Client
+	releaseControllerClient *ReleaseControllerClient
+	cincinnatiClient        *versionresolution.CincinnatiClient
+	log                     logger.Logger
+	apiClient               client.Client
 }
 
 func NewController(
@@ -52,6 +55,11 @@ func NewController(
 		log:              log,
 		apiClient:        apiClient,
 	}
+}
+
+// NewCIController synchronizes the accepted releases selected by each Channel.
+func NewCIController(source *ReleaseControllerClient, log logger.Logger, apiClient client.Client) *Controller {
+	return &Controller{releaseControllerClient: source, log: log, apiClient: apiClient}
 }
 
 // Start implements manager.Runnable.
@@ -79,27 +87,114 @@ func (c *Controller) NeedLeaderElection() bool {
 	return true
 }
 
-// sync fetches the desired version snapshot from Cincinnati and applies it to the API.
+// sync fetches the desired version snapshot and applies it to the API.
 func (c *Controller) sync(ctx context.Context, log logger.Logger) {
-	channelGroups, err := c.channelGroups(ctx)
-	if err != nil {
+	var channels privatev1.ChannelList
+	if err := c.apiClient.List(ctx, &channels); err != nil {
 		log.Errorf(ctx, "list channels failed, preserving previous version snapshot: %v", err)
 		return
 	}
-
-	if len(channelGroups) == 0 {
+	if len(channels.Items) == 0 {
 		log.Error(ctx, "no Channel resources found, preserving previous version snapshot")
 		return
 	}
-
-	desired, err := c.fetchVersions(ctx, log, channelGroups)
+	sort.Slice(channels.Items, func(i, j int) bool { return channels.Items[i].Name < channels.Items[j].Name })
+	var desired map[string]privatev1.VersionSpec
+	var err error
+	if c.releaseControllerClient != nil {
+		desired, err = c.fetchCIVersions(ctx, channels.Items)
+	} else {
+		groups := make([]string, 0, len(channels.Items))
+		for _, channel := range channels.Items {
+			groups = append(groups, channel.Name)
+		}
+		desired, err = c.fetchVersions(ctx, log, groups)
+	}
 	if err != nil {
 		log.Errorf(ctx, "fetch failed, preserving previous version snapshot: %v", err)
+		c.reportDefaults(ctx, log, channels.Items, nil, "FetchFailed")
 		return
 	}
-
 	if err := c.apply(ctx, log, desired); err != nil {
 		log.Errorf(ctx, "apply failed: %v", err)
+		c.reportDefaults(ctx, log, channels.Items, nil, "ApplyFailed")
+		return
+	}
+	c.reportDefaults(ctx, log, channels.Items, desired, "")
+}
+
+// fetchCIVersions gathers the complete snapshot before any Version is changed.
+func (c *Controller) fetchCIVersions(ctx context.Context, channels []privatev1.Channel) (map[string]privatev1.VersionSpec, error) {
+	versions := make(map[string]privatev1.VersionSpec)
+	streams := make(map[string][]versionresolution.ReleaseInfo)
+	for _, channel := range channels {
+		if len(channel.Spec.ReleaseStreams) == 0 {
+			return nil, fmt.Errorf("CI Channel %q requires releaseStreams", channel.Name)
+		}
+		for _, stream := range channel.Spec.ReleaseStreams {
+			releases, found := streams[stream]
+			if !found {
+				var err error
+				releases, err = c.releaseControllerClient.ListReleases(ctx, stream)
+				if err != nil {
+					return nil, fmt.Errorf("channel %q: %w", channel.Name, err)
+				}
+				streams[stream] = releases
+			}
+			for _, release := range releases {
+				if !isSupportedVersion(release.Version) {
+					continue
+				}
+				spec, exists := versions[release.Version]
+				if exists && spec.ReleaseImage != release.Payload {
+					return nil, fmt.Errorf("version %q has conflicting release payloads", release.Version)
+				}
+				spec.ReleaseImage = release.Payload
+				if !containsString(spec.ChannelGroups, channel.Name) {
+					spec.ChannelGroups = append(spec.ChannelGroups, channel.Name)
+					sort.Strings(spec.ChannelGroups)
+				}
+				versions[release.Version] = spec
+			}
+		}
+	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("no configured CI streams returned supported accepted releases")
+	}
+	return versions, nil
+}
+
+// reportDefaults never changes the operator's pinned default. A default must
+// belong to its own Channel, not merely exist elsewhere in the catalog.
+func (c *Controller) reportDefaults(ctx context.Context, log logger.Logger, channels []privatev1.Channel, desired map[string]privatev1.VersionSpec, failureReason string) {
+	for i := range channels {
+		channel := &channels[i]
+		before := channel.DeepCopy()
+		condition := metav1.Condition{
+			Type:               privatev1.ChannelDefaultVersionAvailable,
+			ObservedGeneration: channel.Generation,
+			Status:             metav1.ConditionUnknown,
+			Reason:             failureReason,
+			Message:            "Catalog synchronization failed; default availability could not be determined",
+		}
+		if failureReason == "" {
+			condition.Status = metav1.ConditionFalse
+			condition.Reason = "DefaultVersionUnavailable"
+			condition.Message = fmt.Sprintf("Pinned default %q is not in this Channel's synchronized catalog", channel.Spec.InstallDefaultVersion)
+			if spec, ok := desired[channel.Spec.InstallDefaultVersion]; ok && containsString(spec.ChannelGroups, channel.Name) {
+				condition.Status = metav1.ConditionTrue
+				condition.Reason = "DefaultVersionAvailable"
+				condition.Message = fmt.Sprintf("Pinned default %q is in this Channel's synchronized catalog", channel.Spec.InstallDefaultVersion)
+			}
+		}
+		meta.SetStatusCondition(&channel.Status.Conditions, condition)
+		if equality.Semantic.DeepEqual(before.Status, channel.Status) {
+			continue
+		}
+		// ResourceVersion from the list prevents reporting against a newer spec.
+		if err := c.apiClient.Status().Update(ctx, channel); err != nil {
+			log.Errorf(ctx, "update Channel %q default availability failed: %v", channel.Name, err)
+		}
 	}
 }
 
@@ -207,21 +302,6 @@ func (c *Controller) fetchVersions(
 	return versions, nil
 }
 
-func (c *Controller) channelGroups(ctx context.Context) ([]string, error) {
-	var channels privatev1.ChannelList
-	if err := c.apiClient.List(ctx, &channels); err != nil {
-		return nil, fmt.Errorf("list channels: %w", err)
-	}
-
-	groups := make([]string, 0, len(channels.Items))
-	for i := range channels.Items {
-		groups = append(groups, channels.Items[i].Name)
-	}
-	sort.Strings(groups)
-
-	return groups, nil
-}
-
 func (c *Controller) apply(
 	ctx context.Context,
 	log logger.Logger,
@@ -274,7 +354,7 @@ func (c *Controller) apply(
 		log.Infof(ctx, "created Version %s", name)
 	}
 
-	// Delete stale Versions last. If cincinnati is not returning a version, it is considered stale.
+	// Delete stale Versions only after the complete snapshot has been applied.
 	for i := range current.Items {
 		version := &current.Items[i]
 		if _, found := desired[version.Name]; found {

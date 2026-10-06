@@ -23,7 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// mockStatusWriter is unused by the controller but satisfies client.Client.
+// mockStatusWriter discards status; status persistence is covered by ci_sync_test.go.
 type mockStatusWriter struct{}
 
 func (m *mockStatusWriter) Update(_ context.Context, _ client.Object, _ ...client.SubResourceUpdateOption) error {
@@ -281,12 +281,19 @@ func TestChannelGroupsAreReadFromChannelResources(t *testing.T) {
 		{ObjectMeta: objectMeta("prerelease")},
 		{ObjectMeta: objectMeta("stable")},
 	}}
-	controller := &Controller{apiClient: store}
-
-	groups, err := controller.channelGroups(context.Background())
-
-	require.NoError(t, err)
-	assert.Equal(t, []string{"nightly", "prerelease", "stable"}, groups)
+	server := newCincinnatiServer(t, func(channel string) ([]versionresolution.ReleaseInfo, int) {
+		switch channel {
+		case "nightly-4.22", "prerelease-4.22", "stable-4.22":
+			return []versionresolution.ReleaseInfo{{Version: "4.22.1", Payload: "image"}}, http.StatusOK
+		default:
+			return nil, http.StatusOK
+		}
+	})
+	defer server.Close()
+	controller := newController(t, server, store)
+	controller.sync(context.Background(), newTestLogger(t))
+	require.Len(t, store.created, 1)
+	assert.Equal(t, []string{"nightly", "prerelease", "stable"}, store.created[0].Spec.ChannelGroups)
 	assert.True(t, store.listedChannels)
 }
 
