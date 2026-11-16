@@ -168,23 +168,32 @@ func feedbackTarget(completed, desired string) (bool, string) {
 	return a != nil || b != nil || current.LessThan(target), desired
 }
 
+// preparationFailureActive reports whether a condition that blocks release
+// preparation is still failing for the current generation. Catalog rejection is
+// transient: once version resolution recovers, automatic selection must retry
+// without requiring a customer spec edit.
+func preparationFailureActive(cluster *privatev1.Cluster) bool {
+	for _, typ := range []string{"VersionResolved", "ResourcesApplied"} {
+		condition := meta.FindStatusCondition(cluster.Status.Conditions, typ)
+		if condition != nil && condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == cluster.Generation &&
+			(typ == "VersionResolved" || condition.Reason == "ManifestBuildFailed") {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {
 	result := c.Status.ControlPlaneUpgrade.DeepCopy()
 	if result == nil || result.TargetVersion != c.Spec.Release.Version {
 		return reconcile.Result{}, fmt.Errorf("approved release does not match persisted upgrade target")
 	}
 	hc := c.Status.HostedClusterResult
-	if hc.Version != result.TargetVersion && !privatev1.ClusterUpgradeSubmissionStarted(c) {
-		for _, typ := range []string{"VersionResolved", "ResourcesApplied"} {
-			condition := meta.FindStatusCondition(c.Status.Conditions, typ)
-			if condition != nil && condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == c.Generation &&
-				(typ == "VersionResolved" || condition.Reason == "ManifestBuildFailed") {
-				if result.TargetSource == targetSourceAutomatic {
-					return r.cancelAutomaticPreparation(ctx, c)
-				}
-				return r.block(ctx, c, "PreparationFailed", "The release could not be prepared before dispatch; release settings can be corrected", true)
-			}
+	if hc.Version != result.TargetVersion && !privatev1.ClusterUpgradeSubmissionStarted(c) && preparationFailureActive(c) {
+		if result.TargetSource == targetSourceAutomatic {
+			return r.cancelAutomaticPreparation(ctx, c)
 		}
+		return r.block(ctx, c, "PreparationFailed", "The release could not be prepared before dispatch; release settings can be corrected", true)
 	}
 	healthy, _, _ := healthOK(c.Status.Conditions, hc.ObservedConditions, false)
 	if hc.Version == result.TargetVersion && healthy && !meta.IsStatusConditionTrue(hc.ObservedConditions, "ClusterVersionProgressing") {

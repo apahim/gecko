@@ -87,7 +87,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if active, target := feedbackTarget(completed, desired); active {
 		return r.observeExisting(ctx, &cluster, target)
 	}
-	if degraded := meta.FindStatusCondition(cluster.Status.Conditions, conditionDegraded); degraded != nil && degraded.Status == metav1.ConditionTrue && degraded.ObservedGeneration == cluster.Generation && degraded.Reason == "PreparationFailed" {
+	if degraded := meta.FindStatusCondition(cluster.Status.Conditions, conditionDegraded); degraded != nil && degraded.Status == metav1.ConditionTrue && degraded.ObservedGeneration == cluster.Generation && degraded.Reason == "PreparationFailed" && preparationFailureActive(&cluster) {
 		return reconcile.Result{RequeueAfter: requeueStable}, nil
 	}
 	result := recordCompletion(cluster.Status.ControlPlaneUpgrade, completed)
