@@ -219,7 +219,7 @@ func TestReconciler_CatalogUnavailable(t *testing.T) {
 			r, store := buildReconciler(t, cluster, tc.release)
 			result, err := r.Reconcile(context.Background(), clusterReq("cluster"))
 			require.NoError(t, err)
-			require.Equal(t, requeueStable, result.RequeueAfter)
+			require.Equal(t, reconcile.Result{}, result)
 			updated := store.statusWriter.captured.(*privatev1.Cluster)
 			require.Nil(t, updated.Status.VersionResolution)
 			condition := meta.FindStatusCondition(updated.Status.Conditions, "VersionResolved")
@@ -290,12 +290,54 @@ func TestReconciler_CatalogChangesPreservePinnedImage(t *testing.T) {
 	require.Equal(t, "original", cluster.Status.VersionResolution.ReleaseImage)
 }
 
-func TestReconciler_CatalogRejectionRecoversWhenCatalogChanges(t *testing.T) {
+func TestReconciler_CustomerCatalogRejectionRequiresResubmission(t *testing.T) {
+	ctx := context.Background()
+	cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet", Generation: 1}}
+	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: "dev-preview"}
+	release := catalogVersion("5.0.0-ec.6", "ci-image", "stable")
+	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithStatusSubresource(cluster).WithObjects(cluster).Build()
+	r := NewReconciler(newTestLogger(t), apiClient)
+	result, err := r.Reconcile(ctx, clusterReq("cluster"))
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result, "customer catalog rejection must not schedule a retry")
+	require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
+	require.Nil(t, cluster.Status.VersionResolution)
+	rejected := *meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved")
+	require.Equal(t, metav1.ConditionFalse, rejected.Status)
+
+	release.Spec.ChannelGroups = []string{"dev-preview"}
+	require.NoError(t, apiClient.Create(ctx, release))
+	r = NewReconciler(newTestLogger(t), apiClient)
+	result, err = r.Reconcile(ctx, clusterReq("cluster"))
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+	require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
+	require.Nil(t, cluster.Status.VersionResolution, "publishing the release must not revive a customer-rejected request")
+	require.Equal(t, rejected, *meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"))
+
+	// A spec change starts a new resolution attempt.
+	cluster.Spec.Release.ChannelGroup = "nightly"
+	cluster.Generation++
+	require.NoError(t, apiClient.Update(ctx, cluster))
+	release.Spec.ChannelGroups = append(release.Spec.ChannelGroups, "nightly")
+	require.NoError(t, apiClient.Update(ctx, release))
+	result, err = r.Reconcile(ctx, clusterReq("cluster"))
+	require.NoError(t, err)
+	require.Equal(t, requeueStable, result.RequeueAfter)
+	require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
+	require.Equal(t, "ci-image", cluster.Status.VersionResolution.ReleaseImage)
+	require.True(t, meta.IsStatusConditionTrue(cluster.Status.Conditions, "VersionResolved"))
+}
+
+func TestReconciler_AutomaticCatalogRejectionRecoversWhenCatalogChanges(t *testing.T) {
 	for _, missing := range []bool{true, false} {
 		t.Run(fmt.Sprintf("missing=%t", missing), func(t *testing.T) {
 			ctx := context.Background()
 			cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet", Generation: 1}}
 			cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: "dev-preview"}
+			cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{
+				TargetVersion: "5.0.0-ec.6", TargetSource: "automatic",
+			}
 			release := catalogVersion("5.0.0-ec.6", "ci-image", "stable")
 			objects := []client.Object{cluster}
 			if !missing {
@@ -305,7 +347,7 @@ func TestReconciler_CatalogRejectionRecoversWhenCatalogChanges(t *testing.T) {
 			r := NewReconciler(newTestLogger(t), apiClient)
 			result, err := r.Reconcile(ctx, clusterReq("cluster"))
 			require.NoError(t, err)
-			require.Equal(t, requeueStable, result.RequeueAfter, "catalog rejection must schedule a retry")
+			require.Equal(t, requeueStable, result.RequeueAfter, "automatic catalog rejection must schedule a retry")
 			require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
 			require.Nil(t, cluster.Status.VersionResolution)
 			rejected := *meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved")

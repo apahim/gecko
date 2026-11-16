@@ -66,6 +66,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 		return reconcile.Result{}, nil
 	}
+	// Catalog rejection stays terminal for customer-selected versions: the spec
+	// must change to start a new attempt. Automatic upgrade targets are selected
+	// from HostedCluster AvailableUpdates, so their rejection reflects transient
+	// catalog state and is retried until the catalog catches up.
+	if catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) &&
+		!automaticUpgradeTarget(&cluster, version) {
+		return reconcile.Result{}, nil
+	}
+
 	channelGroup := channelutil.DefaultChannelGroup
 	if cluster.Spec.Release.ChannelGroup != "" {
 		channelGroup = cluster.Spec.Release.ChannelGroup
@@ -128,8 +137,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				return reconcile.Result{}, fmt.Errorf("vr: update cluster status %s: %w", clusterID, err)
 			}
 		}
-		// Requeue so a rejected Cluster converges even if a catalog event is missed.
-		return reconcile.Result{RequeueAfter: requeueStable}, nil
+		if automaticUpgradeTarget(&cluster, version) {
+			// Requeue so a rejected automatic target converges even if a catalog event is missed.
+			return reconcile.Result{RequeueAfter: requeueStable}, nil
+		}
+		return reconcile.Result{}, nil
 	}
 
 	// Write VR result and VersionResolved condition to status.
@@ -159,6 +171,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 // buildChannel constructs the Cincinnati channel name from a version string and channel group.
 // e.g. "4.22.0-ec.4" + "stable" → "stable-4.22"
+// automaticUpgradeTarget reports whether version is a pending automatic
+// upgrade target. Automatic targets are selected from HostedCluster
+// AvailableUpdates, so a catalog rejection reflects transient catalog state
+// rather than an invalid customer request.
+func automaticUpgradeTarget(cluster *privatev1.Cluster, version string) bool {
+	result := cluster.Status.ControlPlaneUpgrade
+	return result != nil && result.TargetSource == "automatic" &&
+		result.TargetVersion == version && result.CompletedTime == nil
+}
+
 func buildChannel(version, channelGroup string) (string, error) {
 	parts := strings.Split(version, ".")
 	if len(parts) < 2 {
