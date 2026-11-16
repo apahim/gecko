@@ -1316,3 +1316,37 @@ func TestReconcile_CatalogRepairRetriesAutomaticUpgrade(t *testing.T) {
 	require.True(t, privatev1.ClusterAutomaticReleasePreparing(store.cluster),
 		"catalog repair must retry the automatic upgrade without a spec edit")
 }
+
+func TestReconcile_ConfigurationPreparationFailureDoesNotRetry(t *testing.T) {
+	cluster := readyCluster("4.23.8", []string{"4.23.9"})
+	r, store := buildReconciler(t, cluster)
+	store.persistUpdates = true
+	for range 2 {
+		_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+	}
+	require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version)
+
+	// A configuration failure must cancel the unsubmitted automatic upgrade.
+	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionFalse, Reason: "ManifestBuildFailed",
+		ObservedGeneration: store.cluster.Generation})
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	r = NewReconciler(store, testLogger(t))
+	_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.False(t, privatev1.ClusterUpgradeActive(store.cluster))
+	require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+
+	// Repeated reconciles must not re-approve the failed preparation.
+	for range 3 {
+		r = NewReconciler(store, testLogger(t))
+		_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+	}
+	require.False(t, privatev1.ClusterAutomaticReleasePreparing(store.cluster),
+		"configuration failures must stay blocked until corrected")
+	require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+	require.Equal(t, "PreparationFailed", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionDegraded).Reason)
+}

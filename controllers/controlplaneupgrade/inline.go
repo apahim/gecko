@@ -18,6 +18,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const (
+	// preparationFailureReason marks a configuration failure that stays terminal
+	// for the Cluster generation until the release settings are corrected.
+	preparationFailureReason = "PreparationFailed"
+	// versionResolutionFailureReason marks a catalog-caused cancellation. It may
+	// retry because target selection re-validates catalog membership first.
+	versionResolutionFailureReason = "VersionResolutionFailed"
+)
+
 func releaseGroup(c *privatev1.Cluster) string {
 	if c.Spec.Release.ChannelGroup == "" {
 		return channelutil.DefaultChannelGroup
@@ -191,9 +200,9 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 	hc := c.Status.HostedClusterResult
 	if hc.Version != result.TargetVersion && !privatev1.ClusterUpgradeSubmissionStarted(c) && preparationFailureActive(c) {
 		if result.TargetSource == targetSourceAutomatic {
-			return r.cancelAutomaticPreparation(ctx, c)
+			return r.cancelAutomaticPreparation(ctx, c, automaticPreparationFailureReason(c))
 		}
-		return r.block(ctx, c, "PreparationFailed", "The release could not be prepared before dispatch; release settings can be corrected", true)
+		return r.block(ctx, c, preparationFailureReason, "The release could not be prepared before dispatch; release settings can be corrected", true)
 	}
 	healthy, _, _ := healthOK(c.Status.Conditions, hc.ObservedConditions, false)
 	if hc.Version == result.TargetVersion && healthy && !meta.IsStatusConditionTrue(hc.ObservedConditions, "ClusterVersionProgressing") {
@@ -258,14 +267,25 @@ func (r *Reconciler) eligibleUpdates(ctx context.Context, c *privatev1.Cluster) 
 // cancelAutomaticPreparation keeps ownership until the unsubmitted automatic
 // target is removed from spec. Otherwise an unrelated spec repair could make a
 // later retry look like a new customer request and bypass maintenance.
-func (r *Reconciler) cancelAutomaticPreparation(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {
+func (r *Reconciler) cancelAutomaticPreparation(ctx context.Context, c *privatev1.Cluster, failureReason string) (reconcile.Result, error) {
 	result := c.Status.ControlPlaneUpgrade.DeepCopy()
-	result.FailureReason = "PreparationFailed"
+	result.FailureReason = failureReason
 	result.FailureMessage = "The automatic release could not be prepared before dispatch"
 	return r.writeStatus(ctx, c, result, requeueConflict,
 		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, privatev1.ControlPlaneUpgradeCancelingReason, "Restoring the observed release before unlocking automatic intent"),
-		newCondition(conditionProgressing, metav1.ConditionFalse, "PreparationFailed", result.FailureMessage),
-		newCondition(conditionDegraded, metav1.ConditionTrue, "PreparationFailed", result.FailureMessage))
+		newCondition(conditionProgressing, metav1.ConditionFalse, failureReason, result.FailureMessage),
+		newCondition(conditionDegraded, metav1.ConditionTrue, failureReason, result.FailureMessage))
+}
+
+// automaticPreparationFailureReason records why an unsubmitted automatic
+// upgrade is being canceled. Catalog rejection may recover on its own; other
+// preparation failures require corrected release settings.
+func automaticPreparationFailureReason(c *privatev1.Cluster) string {
+	if condition := meta.FindStatusCondition(c.Status.Conditions, "VersionResolved"); condition != nil &&
+		condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == c.Generation {
+		return versionResolutionFailureReason
+	}
+	return preparationFailureReason
 }
 
 func (r *Reconciler) finishAutomaticCancellation(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {
@@ -285,5 +305,9 @@ func (r *Reconciler) finishAutomaticCancellation(ctx context.Context, c *private
 			return reconcile.Result{}, fmt.Errorf("restore unsubmitted automatic release: %w", err)
 		}
 	}
-	return r.block(ctx, c, "PreparationFailed", "The unsubmitted automatic upgrade failed; release settings can be corrected", true)
+	reason := preparationFailureReason
+	if result := c.Status.ControlPlaneUpgrade; result != nil && result.FailureReason == versionResolutionFailureReason {
+		reason = versionResolutionFailureReason
+	}
+	return r.block(ctx, c, reason, "The unsubmitted automatic upgrade failed; release settings can be corrected", true)
 }
