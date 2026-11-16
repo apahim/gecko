@@ -1,0 +1,13 @@
+apiVersion: v2
+name: gecko-gar-access
+description: Gecko GAR Access Controller - reconciles Artifact Registry reader access for NodePools
+type: application
+version: 0.1.0
+appVersion: "0.0.1-dev"
+maintainers:
+  - name: GCP HCP Team
+keywords:
+  - gecko
+  - controllers
+  - gar-access
+home: https://github.com/openshift-online/gecko

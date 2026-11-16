@@ -33,6 +33,7 @@ type Reconciler struct {
 	transport transport.Client
 	log       logger.Logger
 	client    client.Client
+	GARAccess GARAccessGate
 }
 
 // New creates a new nodepool Reconciler.
@@ -130,6 +131,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		log.Infof(ctx, "nodepool VR version %q does not match spec version %q, requeueing after %s",
 			np.Status.VersionResolution.ReleaseVersion, version, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
+	}
+
+	if ready, err := r.garAccessReady(ctx, &np, &cluster); err != nil || !ready {
+		return reconcile.Result{RequeueAfter: requeuePending}, err
 	}
 
 	// Extract nodepool GCP platform fields.
@@ -248,11 +253,11 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 		return reconcile.Result{}, nil
 	}
 
-	// Only call transport.Delete if resources were applied to an MC.
-	if clusterFound &&
-		meta.FindStatusCondition(np.Status.Conditions, "NodePoolResourcesApplied") != nil &&
-		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
-		mcName := cluster.Status.PlacementResult.ManagementClusterName
+	mcName, err := r.workerCleanupTarget(np, cluster, clusterFound)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if mcName != "" {
 
 		groupKey, err := transport.NodePoolGroupKey(np.Namespace, np.Spec.ClusterID, np.Name)
 		if err != nil {
@@ -293,7 +298,7 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: cleanup delete desires: %w", err)
 		}
 	} else {
-		log.Infof(ctx, "nodepool reconciler: parent cluster not available for nodepool %s, skipping transport cleanup", np.Name)
+		log.Infof(ctx, "nodepool reconciler: no worker cleanup target for nodepool %s, skipping transport cleanup", np.Name)
 	}
 
 	controllerutil.RemoveFinalizer(np, constants.FinalizerNodePool)

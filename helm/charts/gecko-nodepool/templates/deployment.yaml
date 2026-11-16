@@ -8,7 +8,7 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
-    {{- toYaml .Values.strategy | nindent 4 }}
+    type: Recreate
   selector:
     matchLabels:
       {{- include "gecko-nodepool.selectorLabels" . | nindent 6 }}
@@ -45,6 +45,8 @@ spec:
             - --log-level={{ .Values.logLevel }}
             - --log-format={{ .Values.logFormat }}
             - --workers={{ .Values.workers }}
+            - --gar-repository={{ .Values.garAccess.repository }}
+            - --iam-namespace={{ .Values.garAccess.iamNamespace }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
