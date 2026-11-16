@@ -219,7 +219,7 @@ func TestReconciler_CatalogUnavailable(t *testing.T) {
 			r, store := buildReconciler(t, cluster, tc.release)
 			result, err := r.Reconcile(context.Background(), clusterReq("cluster"))
 			require.NoError(t, err)
-			require.Equal(t, reconcile.Result{}, result)
+			require.Equal(t, requeueStable, result.RequeueAfter)
 			updated := store.statusWriter.captured.(*privatev1.Cluster)
 			require.Nil(t, updated.Status.VersionResolution)
 			condition := meta.FindStatusCondition(updated.Status.Conditions, "VersionResolved")
@@ -290,7 +290,7 @@ func TestReconciler_CatalogChangesPreservePinnedImage(t *testing.T) {
 	require.Equal(t, "original", cluster.Status.VersionResolution.ReleaseImage)
 }
 
-func TestReconciler_CatalogRejectionRequiresResubmission(t *testing.T) {
+func TestReconciler_CatalogRejectionRecoversWhenCatalogChanges(t *testing.T) {
 	for _, missing := range []bool{true, false} {
 		t.Run(fmt.Sprintf("missing=%t", missing), func(t *testing.T) {
 			ctx := context.Background()
@@ -305,7 +305,7 @@ func TestReconciler_CatalogRejectionRequiresResubmission(t *testing.T) {
 			r := NewReconciler(newTestLogger(t), apiClient)
 			result, err := r.Reconcile(ctx, clusterReq("cluster"))
 			require.NoError(t, err)
-			require.Equal(t, reconcile.Result{}, result, "catalog rejection must not schedule a retry")
+			require.Equal(t, requeueStable, result.RequeueAfter, "catalog rejection must schedule a retry")
 			require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
 			require.Nil(t, cluster.Status.VersionResolution)
 			rejected := *meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved")
@@ -318,21 +318,8 @@ func TestReconciler_CatalogRejectionRequiresResubmission(t *testing.T) {
 			} else {
 				require.NoError(t, apiClient.Update(ctx, release))
 			}
-			// A new reconciler simulates restart or an unrelated status/Channel event.
+			// A new reconciler simulates a restart or a catalog watch event.
 			r = NewReconciler(newTestLogger(t), apiClient)
-			result, err = r.Reconcile(ctx, clusterReq("cluster"))
-			require.NoError(t, err)
-			require.Equal(t, reconcile.Result{}, result)
-			require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
-			require.Nil(t, cluster.Status.VersionResolution, "publishing the release must not revive a rejected request")
-			require.Equal(t, rejected, *meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"))
-
-			// A spec change starts a new resolution attempt.
-			cluster.Spec.Release.ChannelGroup = "nightly"
-			cluster.Generation++
-			require.NoError(t, apiClient.Update(ctx, cluster))
-			release.Spec.ChannelGroups = append(release.Spec.ChannelGroups, "nightly")
-			require.NoError(t, apiClient.Update(ctx, release))
 			result, err = r.Reconcile(ctx, clusterReq("cluster"))
 			require.NoError(t, err)
 			require.Equal(t, requeueStable, result.RequeueAfter)

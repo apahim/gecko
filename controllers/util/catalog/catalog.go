@@ -21,6 +21,8 @@ const (
 
 // ResolutionRejected reports a catalog rejection for the current spec generation.
 // It remains terminal until the user changes the spec or recreates the resource.
+// The Cluster version-resolution controller no longer uses this gate; it
+// re-evaluates the catalog so corrections recover without a spec change.
 func ResolutionRejected(condition *metav1.Condition, generation int64) bool {
 	return condition != nil && condition.Status == metav1.ConditionFalse &&
 		condition.ObservedGeneration == generation &&
