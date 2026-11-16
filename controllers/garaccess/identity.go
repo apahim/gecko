@@ -3,10 +3,13 @@ package garaccess
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/iam/v1"
 )
+
+var defaultComputeAccountPattern = regexp.MustCompile(`^[1-9][0-9]*-compute@developer\.gserviceaccount\.com$`)
 
 type identityLookup struct {
 	compute *compute.Service
@@ -30,9 +33,10 @@ func (l *identityLookup) customerMember(ctx context.Context, projectID string) (
 	if err != nil {
 		return "", fmt.Errorf("get Compute project %s: %w", projectID, err)
 	}
-	// The number comes from Google, never from a customer-supplied Cluster field.
-	email := fmt.Sprintf("%d-compute@developer.gserviceaccount.com", project.Id)
-	if project.Name != projectID || project.Id == 0 || project.DefaultServiceAccount != email {
+	// Compute's resource ID is not the GCP project number used in the email.
+	// Use Google's default account, then verify ownership and state through IAM.
+	email := project.DefaultServiceAccount
+	if project.Name != projectID || !defaultComputeAccountPattern.MatchString(email) {
 		return "", fmt.Errorf("project %s has no valid default Compute service account", projectID)
 	}
 	name := fmt.Sprintf("projects/%s/serviceAccounts/%s", projectID, email)
