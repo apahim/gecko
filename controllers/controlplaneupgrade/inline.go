@@ -22,9 +22,9 @@ const (
 	// preparationFailureReason marks a configuration failure that stays terminal
 	// for the Cluster generation until the release settings are corrected.
 	preparationFailureReason = "PreparationFailed"
-	// versionResolutionFailureReason marks a catalog-caused cancellation. It may
-	// retry because target selection re-validates catalog membership first.
-	versionResolutionFailureReason = "VersionResolutionFailed"
+	// waitingForVersionCatalogReason marks an approved target that is blocked
+	// only by transient catalog lag. The approval and selected target survive.
+	waitingForVersionCatalogReason = "WaitingForVersionCatalog"
 )
 
 func releaseGroup(c *privatev1.Cluster) string {
@@ -199,8 +199,17 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 	}
 	hc := c.Status.HostedClusterResult
 	if hc.Version != result.TargetVersion && !privatev1.ClusterUpgradeSubmissionStarted(c) && preparationFailureActive(c) {
+		// A catalog rejection is transient: keep the approved target and wait
+		// rather than cancelling, restoring spec, and selecting again. Dispatched
+		// rollouts are never cancelled here; submission evidence wins.
+		if catalogRejectionActive(c) {
+			if result.TargetSource == targetSourceAutomatic {
+				return r.waitForVersionCatalog(ctx, c, result, hc)
+			}
+			return r.block(ctx, c, waitingForVersionCatalogReason, "The approved target is waiting for catalog synchronization", true)
+		}
 		if result.TargetSource == targetSourceAutomatic {
-			return r.cancelAutomaticPreparation(ctx, c, automaticPreparationFailureReason(c))
+			return r.cancelAutomaticPreparation(ctx, c, preparationFailureReason, "The automatic release could not be prepared before dispatch")
 		}
 		return r.block(ctx, c, preparationFailureReason, "The release could not be prepared before dispatch; release settings can be corrected", true)
 	}
@@ -267,25 +276,46 @@ func (r *Reconciler) eligibleUpdates(ctx context.Context, c *privatev1.Cluster) 
 // cancelAutomaticPreparation keeps ownership until the unsubmitted automatic
 // target is removed from spec. Otherwise an unrelated spec repair could make a
 // later retry look like a new customer request and bypass maintenance.
-func (r *Reconciler) cancelAutomaticPreparation(ctx context.Context, c *privatev1.Cluster, failureReason string) (reconcile.Result, error) {
+func (r *Reconciler) cancelAutomaticPreparation(ctx context.Context, c *privatev1.Cluster, failureReason, failureMessage string) (reconcile.Result, error) {
 	result := c.Status.ControlPlaneUpgrade.DeepCopy()
 	result.FailureReason = failureReason
-	result.FailureMessage = "The automatic release could not be prepared before dispatch"
+	result.FailureMessage = failureMessage
 	return r.writeStatus(ctx, c, result, requeueConflict,
 		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, privatev1.ControlPlaneUpgradeCancelingReason, "Restoring the observed release before unlocking automatic intent"),
 		newCondition(conditionProgressing, metav1.ConditionFalse, failureReason, result.FailureMessage),
 		newCondition(conditionDegraded, metav1.ConditionTrue, failureReason, result.FailureMessage))
 }
 
-// automaticPreparationFailureReason records why an unsubmitted automatic
-// upgrade is being canceled. Catalog rejection may recover on its own; other
-// preparation failures require corrected release settings.
-func automaticPreparationFailureReason(c *privatev1.Cluster) string {
-	if condition := meta.FindStatusCondition(c.Status.Conditions, "VersionResolved"); condition != nil &&
-		condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == c.Generation {
-		return versionResolutionFailureReason
+// waitForVersionCatalog keeps an approved automatic target while version
+// resolution waits for the catalog. The wait can outlast the rules that
+// authorized the upgrade, so they are revalidated on every retry: if health or
+// maintenance no longer permits the rollout, the upgrade is cancelled and any
+// later attempt is a fresh approval that passes every check again.
+func (r *Reconciler) waitForVersionCatalog(ctx context.Context, c *privatev1.Cluster, result *privatev1.ControlPlaneUpgradeResult, hc *privatev1.HostedClusterResult) (reconcile.Result, error) {
+	current, _ := utilversion.ParseSemantic(hc.Version)
+	selected, _ := utilversion.ParseSemantic(result.TargetVersion)
+	isYStream := current.Major() != selected.Major() || current.Minor() != selected.Minor()
+	if ok, reason, message := healthOK(c.Status.Conditions, hc.ObservedConditions, isYStream); !ok {
+		return r.cancelAutomaticPreparation(ctx, c, reason, message)
 	}
-	return preparationFailureReason
+	if override, _, _ := overrideCondition(c, result.TargetVersion, hc.Version); !override {
+		if permitted, reason, message, _ := maintenancePermitted(c, r.now()); !permitted {
+			return r.cancelAutomaticPreparation(ctx, c, reason, message)
+		}
+	}
+	message := "The approved target is waiting for catalog synchronization"
+	return r.writeStatus(ctx, c, result, requeuePending,
+		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, "UpgradeAccepted", "The automatic release is approved for rollout"),
+		newCondition(conditionAvailable, metav1.ConditionFalse, waitingForVersionCatalogReason, message),
+		newCondition(conditionProgressing, metav1.ConditionFalse, waitingForVersionCatalogReason, message),
+		newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""))
+}
+
+// catalogRejectionActive reports whether version resolution is currently
+// rejecting this generation's release because of catalog membership.
+func catalogRejectionActive(c *privatev1.Cluster) bool {
+	condition := meta.FindStatusCondition(c.Status.Conditions, "VersionResolved")
+	return condition != nil && condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == c.Generation
 }
 
 func (r *Reconciler) finishAutomaticCancellation(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {
@@ -306,8 +336,8 @@ func (r *Reconciler) finishAutomaticCancellation(ctx context.Context, c *private
 		}
 	}
 	reason := preparationFailureReason
-	if result := c.Status.ControlPlaneUpgrade; result != nil && result.FailureReason == versionResolutionFailureReason {
-		reason = versionResolutionFailureReason
+	if result := c.Status.ControlPlaneUpgrade; result != nil && result.FailureReason != "" {
+		reason = result.FailureReason
 	}
 	return r.block(ctx, c, reason, "The unsubmitted automatic upgrade failed; release settings can be corrected", true)
 }

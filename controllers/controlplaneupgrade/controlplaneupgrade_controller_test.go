@@ -1241,7 +1241,7 @@ func TestReconcile_AutomaticPreparationFailureRetainsSourceUntilCleanup(t *testi
 				require.NoError(t, err)
 			}
 			require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version)
-			meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{Type: "VersionResolved", Status: metav1.ConditionFalse, ObservedGeneration: store.cluster.Generation})
+			meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{Type: "ResourcesApplied", Status: metav1.ConditionFalse, Reason: "ManifestBuildFailed", ObservedGeneration: store.cluster.Generation})
 			_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
 			require.NoError(t, err)
 			require.True(t, privatev1.ClusterAutomaticReleaseCanceling(store.cluster))
@@ -1286,7 +1286,7 @@ func TestReconcile_AutomaticPreparationFailureRetainsSourceUntilCleanup(t *testi
 	}
 }
 
-func TestReconcile_CatalogRepairRetriesAutomaticUpgrade(t *testing.T) {
+func TestReconcile_CatalogRejectionWaitsWithoutCancelling(t *testing.T) {
 	cluster := readyCluster("4.23.8", []string{"4.23.9"})
 	r, store := buildReconciler(t, cluster)
 	store.persistUpdates = true
@@ -1296,25 +1296,27 @@ func TestReconcile_CatalogRepairRetriesAutomaticUpgrade(t *testing.T) {
 	}
 	require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version)
 
-	// A catalog rejection cancels the unsubmitted automatic upgrade.
+	// A catalog rejection must keep the approved target instead of cancelling.
 	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
-		Type: "VersionResolved", Status: metav1.ConditionFalse, ObservedGeneration: store.cluster.Generation})
+		Type: "VersionResolved", Status: metav1.ConditionFalse, Reason: "VersionNotFoundInCatalog",
+		ObservedGeneration: store.cluster.Generation})
 	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
 	require.NoError(t, err)
-	r = NewReconciler(store, testLogger(t))
-	_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
-	require.NoError(t, err)
-	require.False(t, privatev1.ClusterUpgradeActive(store.cluster))
-	require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+	require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version, "the approved target must survive catalog lag")
+	require.True(t, privatev1.ClusterUpgradeActive(store.cluster))
+	require.Equal(t, "WaitingForVersionCatalog", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionProgressing).Reason)
+	require.Equal(t, metav1.ConditionFalse, meta.FindStatusCondition(store.cluster.Status.Conditions, conditionDegraded).Status)
 
-	// The catalog correction lets version resolution recover.
+	// Catalog recovery lets the same rollout proceed without re-selection.
 	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
-		Type: "VersionResolved", Status: metav1.ConditionTrue, ObservedGeneration: store.cluster.Generation})
+		Type: "VersionResolved", Status: metav1.ConditionTrue, Reason: "VersionResolved",
+		ObservedGeneration: store.cluster.Generation})
 	r = NewReconciler(store, testLogger(t))
 	_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
 	require.NoError(t, err)
-	require.True(t, privatev1.ClusterAutomaticReleasePreparing(store.cluster),
-		"catalog repair must retry the automatic upgrade without a spec edit")
+	require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version)
+	require.True(t, privatev1.ClusterUpgradeActive(store.cluster))
+	require.Equal(t, "HostedClusterProgressing", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionProgressing).Reason)
 }
 
 func TestReconcile_ConfigurationPreparationFailureDoesNotRetry(t *testing.T) {
