@@ -306,3 +306,89 @@ func TestCatalogRecovery_PendingResolutionDoesNotCancelHealthyUpgrade(t *testing
 	}
 	require.True(t, hasTarget, "the approved target image must be dispatched")
 }
+
+func TestReconcile_CatalogWaitExpiresAcrossRestarts(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		elapsed        time.Duration
+		submitted      metav1.ConditionStatus
+		feedbackActive bool
+		recovered      bool
+		wantRequeue    time.Duration
+		expired        bool
+	}{
+		{name: "before deadline", elapsed: 19 * time.Minute, wantRequeue: 15 * time.Second},
+		{name: "next retry at deadline", elapsed: 20*time.Minute - time.Second, wantRequeue: time.Second},
+		{name: "recovery before deadline", elapsed: 19 * time.Minute, recovered: true},
+		{name: "late recovery cannot bypass expiry", elapsed: 20 * time.Minute, recovered: true, expired: true},
+		{name: "at deadline", elapsed: 20 * time.Minute, expired: true},
+		{name: "after deadline", elapsed: 25 * time.Minute, expired: true},
+		{name: "uncertain dispatch is preserved", elapsed: 25 * time.Minute, submitted: metav1.ConditionUnknown},
+		{name: "acknowledged dispatch is preserved", elapsed: 25 * time.Minute, submitted: metav1.ConditionTrue},
+		{name: "feedback proves dispatch", elapsed: 25 * time.Minute, feedbackActive: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := readyCluster("4.23.8", []string{"4.23.9"})
+			require.NoError(t, cluster.Default(t.Context()))
+			r, store := buildReconciler(t, cluster)
+			store.persistUpdates = true
+			for range 2 {
+				_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+				require.NoError(t, err)
+			}
+			meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
+				Type: "VersionResolved", Status: metav1.ConditionFalse, Reason: "VersionNotFoundInCatalog", ObservedGeneration: store.cluster.Generation,
+			})
+			_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			require.NoError(t, err)
+			waitStarted := meta.FindStatusCondition(store.cluster.Status.Conditions, conditionProgressing).LastTransitionTime
+			for _, elapsed := range []time.Duration{5 * time.Minute, 10 * time.Minute, 15 * time.Minute} {
+				if elapsed == 10*time.Minute {
+					store.cluster.Generation++
+				}
+				r = NewReconciler(store, testLogger(t))
+				r.now = func() time.Time { return waitStarted.Add(elapsed) }
+				_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+				require.NoError(t, err)
+				require.Equal(t, waitStarted, meta.FindStatusCondition(store.cluster.Status.Conditions, conditionProgressing).LastTransitionTime,
+					"retries and restarts must preserve the original wait deadline")
+				require.Equal(t, "WaitingForVersionCatalog", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionProgressing).Reason)
+			}
+			if tc.recovered {
+				meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
+					Type: "VersionResolved", Status: metav1.ConditionTrue, Reason: "VersionResolved", ObservedGeneration: store.cluster.Generation,
+				})
+			}
+			if tc.submitted != "" {
+				meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
+					Type: privatev1.ControlPlaneUpgradeSubmitted, Status: tc.submitted, ObservedGeneration: store.cluster.Generation,
+				})
+			}
+			if tc.feedbackActive {
+				store.cluster.Status.HostedClusterResult.DesiredVersion = "4.23.9"
+			}
+			r = NewReconciler(store, testLogger(t))
+			r.now = func() time.Time { return waitStarted.Add(tc.elapsed) }
+			result, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			require.NoError(t, err)
+			if tc.wantRequeue != 0 {
+				require.Equal(t, tc.wantRequeue, result.RequeueAfter)
+			}
+			if !tc.expired {
+				require.False(t, privatev1.ClusterAutomaticReleaseCanceling(store.cluster))
+				require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version)
+				return
+			}
+			require.True(t, privatev1.ClusterAutomaticReleaseCanceling(store.cluster), "a catalog wait must stop after twenty minutes")
+			require.Equal(t, "VersionCatalogWaitExpired", store.cluster.Status.ControlPlaneUpgrade.FailureReason)
+			r = NewReconciler(store, testLogger(t))
+			_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			require.NoError(t, err)
+			require.False(t, privatev1.ClusterUpgradeActive(store.cluster))
+			require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+			changed := store.cluster.DeepCopy()
+			changed.Spec.Release.Version = "4.23.9"
+			require.NoError(t, changed.ValidateUpdate(t.Context(), store.cluster), "expiry must release the admission lock")
+		})
+	}
+}

@@ -55,6 +55,14 @@ or acknowledged dispatch retains its retry protection even after a window closes
 Waiting for version resolution changes `ResourcesApplied` readiness while
 preserving the availability last observed from the running HostedCluster.
 
+An approved automatic target can wait up to 20 minutes for catalog recovery,
+allowing a full 15-minute catalog synchronization cycle. The start of that wait
+is persisted in status and survives retries and controller restarts. Expiry
+records `VersionCatalogWaitExpired`, restores the observed release through the
+normal cancellation flow, and releases the release-settings lock. The installer
+also enforces the deadline when catalog recovery happens before cancellation.
+Uncertain or acknowledged dispatch is never canceled by this timeout.
+
 `WithAdmissionGate` is the internal integration point for future progressive
 rollout capacity. A denied gate retains normalized customer intent in spec and reports
 `WaitingForUpgradeCapacity`. The default permits upgrades: this change does not

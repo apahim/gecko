@@ -1521,6 +1521,7 @@ func TestReconcile_AutomaticDispatchChecksEligibility(t *testing.T) {
 		name                                                      string
 		source                                                    string
 		open, degraded, criticalPin, staleReceipt, feedbackActive bool
+		expiredCatalogWait                                        bool
 		submitted                                                 metav1.ConditionStatus
 		statusErr                                                 error
 		wantErr                                                   bool
@@ -1530,6 +1531,8 @@ func TestReconcile_AutomaticDispatchChecksEligibility(t *testing.T) {
 	}{
 		{name: "closed automatic window", source: "automatic", wantStatus: metav1.ConditionFalse, wantReason: "OutsideMaintenanceWindow"},
 		{name: "open automatic window", source: "automatic", open: true, wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
+		{name: "expired catalog wait blocks installer first", source: "automatic", open: true, expiredCatalogWait: true, wantStatus: metav1.ConditionFalse, wantReason: "VersionCatalogWaitExpired"},
+		{name: "expired catalog wait preserves uncertain dispatch", source: "automatic", open: true, expiredCatalogWait: true, submitted: metav1.ConditionUnknown, wantStatus: metav1.ConditionTrue, wantReason: "Dispatched", wantApplies: 1},
 		{name: "degraded cluster", source: "automatic", open: true, degraded: true, wantStatus: metav1.ConditionFalse, wantReason: "HostedClusterDegraded"},
 		{name: "critical patch override", source: "automatic", criticalPin: true, wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
 		{name: "critical override still requires health", source: "automatic", criticalPin: true, degraded: true, wantStatus: metav1.ConditionFalse, wantReason: "HostedClusterDegraded"},
@@ -1556,6 +1559,12 @@ func TestReconcile_AutomaticDispatchChecksEligibility(t *testing.T) {
 			cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "4.23.9", TargetSource: tc.source}
 			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: "HostedClusterAvailable", Status: metav1.ConditionTrue})
 			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, ObservedGeneration: cluster.Generation})
+			if tc.expiredCatalogWait {
+				meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+					Type: "ControlPlaneUpgradeProgressing", Status: metav1.ConditionFalse, Reason: "WaitingForVersionCatalog",
+					ObservedGeneration: cluster.Generation, LastTransitionTime: metav1.NewTime(time.Now().Add(-21 * time.Minute)),
+				})
+			}
 			if tc.submitted != "" {
 				generation := cluster.Generation
 				if tc.staleReceipt {

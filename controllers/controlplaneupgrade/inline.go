@@ -105,7 +105,7 @@ func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, t
 			return reconcile.Result{}, err
 		}
 		if unavailable.Reason == "VersionNotFoundInCatalog" {
-			return r.block(ctx, c, "WaitingForVersionCatalog", "The advertised target is waiting for catalog synchronization", false)
+			return r.block(ctx, c, waitingForVersionCatalogReason, "The advertised target is waiting for catalog synchronization", false)
 		}
 		return r.block(ctx, c, unavailable.Reason, unavailable.Message, true)
 	}
@@ -159,7 +159,7 @@ func (r *Reconciler) block(ctx context.Context, c *privatev1.Cluster, reason, me
 	if degraded {
 		degradedStatus = metav1.ConditionTrue
 	}
-	if degraded || reason == "TargetNotAvailable" || reason == "WaitingForVersionCatalog" {
+	if degraded || reason == "TargetNotAvailable" || reason == waitingForVersionCatalogReason {
 		availableStatus = metav1.ConditionFalse
 	}
 	return r.writeStatus(ctx, c, c.Status.ControlPlaneUpgrade, requeuePending,
@@ -178,10 +178,9 @@ func feedbackTarget(completed, desired string) (bool, string) {
 	return a != nil || b != nil || current.LessThan(target), desired
 }
 
-// preparationFailureActive reports whether a condition that blocks release
-// preparation is still failing for the current generation. Catalog rejection is
-// transient: once version resolution recovers, automatic selection must retry
-// without requiring a customer spec edit.
+// preparationFailureActive reports any current-generation preparation failure.
+// The caller distinguishes a retryable automatic catalog wait from terminal
+// customer rejection and configuration failures.
 func preparationFailureActive(cluster *privatev1.Cluster) bool {
 	for _, typ := range []string{"VersionResolved", "ResourcesApplied"} {
 		condition := meta.FindStatusCondition(cluster.Status.Conditions, typ)
@@ -207,6 +206,9 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 		if result.TargetSource == targetSourceAutomatic {
 			if ok, reason, message := upgradepolicy.AutomaticAuthorizationHolds(c, r.now()); !ok {
 				return r.cancelAutomaticPreparation(ctx, c, reason, message)
+			}
+			if catalogWaitPending(c) {
+				return r.writeWaitingForVersionCatalog(ctx, c, result)
 			}
 		}
 		if preparationFailureActive(c) {
@@ -301,14 +303,20 @@ func (r *Reconciler) cancelAutomaticPreparation(ctx context.Context, c *privatev
 		newCondition(conditionDegraded, metav1.ConditionTrue, failureReason, result.FailureMessage))
 }
 
-// writeWaitingForVersionCatalog keeps an approved automatic target while
-// version resolution waits for the catalog.
+// writeWaitingForVersionCatalog keeps an approved automatic target for a bounded
+// catalog wait. Its persisted transition time survives retries and restarts.
 func (r *Reconciler) writeWaitingForVersionCatalog(ctx context.Context, c *privatev1.Cluster, result *privatev1.ControlPlaneUpgradeResult) (reconcile.Result, error) {
 	message := "The approved target is waiting for catalog synchronization"
-	return r.writeStatus(ctx, c, result, requeuePending,
+	progressing := newCondition(conditionProgressing, metav1.ConditionFalse, waitingForVersionCatalogReason, message)
+	progressing.LastTransitionTime = metav1.NewTime(r.now())
+	retry := requeuePending
+	if remaining := upgradepolicy.CatalogWaitRemaining(c, r.now()); remaining > 0 && remaining < retry {
+		retry = remaining
+	}
+	return r.writeStatus(ctx, c, result, retry,
 		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, "UpgradeAccepted", "The automatic release is approved for rollout"),
 		newCondition(conditionAvailable, metav1.ConditionFalse, waitingForVersionCatalogReason, message),
-		newCondition(conditionProgressing, metav1.ConditionFalse, waitingForVersionCatalogReason, message),
+		progressing,
 		newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""))
 }
 
@@ -316,7 +324,17 @@ func (r *Reconciler) writeWaitingForVersionCatalog(ctx context.Context, c *priva
 // rejecting this generation's release because of catalog membership.
 func catalogRejectionActive(c *privatev1.Cluster) bool {
 	condition := meta.FindStatusCondition(c.Status.Conditions, "VersionResolved")
-	return condition != nil && condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == c.Generation
+	return catalog.ResolutionRejected(condition, c.Generation)
+}
+
+// catalogWaitPending preserves an existing automatic wait while version
+// resolution catches up with unrelated generation changes. The approved release
+// remains immutable, so such changes must not restart the catalog-wait budget.
+func catalogWaitPending(c *privatev1.Cluster) bool {
+	waiting := meta.FindStatusCondition(c.Status.Conditions, conditionProgressing)
+	resolution := meta.FindStatusCondition(c.Status.Conditions, "VersionResolved")
+	return waiting != nil && waiting.Status == metav1.ConditionFalse && waiting.Reason == waitingForVersionCatalogReason &&
+		resolution != nil && catalog.ResolutionRejected(resolution, resolution.ObservedGeneration)
 }
 
 func (r *Reconciler) finishAutomaticCancellation(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {

@@ -10,6 +10,14 @@ import (
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 )
 
+const (
+	// CatalogWaitTimeout allows a full fifteen-minute catalog synchronization
+	// cycle before abandoning an automatic upgrade that has not been dispatched.
+	CatalogWaitTimeout = 20 * time.Minute
+	// CatalogWaitExpiredReason identifies an expired, unsubmitted catalog wait.
+	CatalogWaitExpiredReason = "VersionCatalogWaitExpired"
+)
+
 // HealthOK reports whether a new upgrade target may be requested. Both z-stream and
 // y-stream upgrades require HostedCluster availability and positive confirmation of
 // no degradation. Y-stream upgrades additionally require ClusterVersionUpgradeable=True.
@@ -68,7 +76,22 @@ func AutomaticAuthorizationHolds(cluster *privatev1.Cluster, now time.Time) (boo
 			return false, reason, message
 		}
 	}
+	if CatalogWaitRemaining(cluster, now) <= 0 {
+		return false, CatalogWaitExpiredReason, "The selected release did not resolve from the Version catalog within 20 minutes"
+	}
 	return true, "", ""
+}
+
+// CatalogWaitRemaining uses the persisted transition into catalog waiting, so
+// retries, controller restarts, and unrelated spec updates cannot reset the
+// deadline. Recovery must also pass this deadline before dispatch, until the
+// upgrade controller records that the wait has ended.
+func CatalogWaitRemaining(cluster *privatev1.Cluster, now time.Time) time.Duration {
+	waiting := meta.FindStatusCondition(cluster.Status.Conditions, "ControlPlaneUpgradeProgressing")
+	if waiting == nil || waiting.Status != metav1.ConditionFalse || waiting.Reason != "WaitingForVersionCatalog" || waiting.LastTransitionTime.IsZero() {
+		return CatalogWaitTimeout
+	}
+	return waiting.LastTransitionTime.Add(CatalogWaitTimeout).Sub(now)
 }
 
 // IsValidCriticalPin restricts maintenance overrides to strictly newer patches
