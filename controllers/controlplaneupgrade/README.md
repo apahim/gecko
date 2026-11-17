@@ -47,21 +47,13 @@ the unsubmitted platform-selected target cannot later be mistaken for manual int
 completion. Recovery after a dispatched, failed upgrade requires operational
 intervention; changing the desired release is not an implicit rollback.
 
-The installer rechecks automatic-upgrade health and maintenance timing before
-persisting the dispatch boundary. Both controllers use the same policy, so a
-catalog repair cannot bypass a closed window when the installer reconciles
-first. A denied dispatch records `ControlPlaneUpgradeSubmitted=False`; uncertain
-or acknowledged dispatch retains its retry protection even after a window closes.
-Waiting for version resolution changes `ResourcesApplied` readiness while
-preserving the availability last observed from the running HostedCluster.
-
-An approved automatic target can wait up to 20 minutes for catalog recovery,
-allowing a full 15-minute catalog synchronization cycle. The start of that wait
-is persisted in status and survives retries and controller restarts. Expiry
-records `VersionCatalogWaitExpired`, restores the observed release through the
-normal cancellation flow, and releases the release-settings lock. The installer
-also enforces the deadline when catalog recovery happens before cancellation.
-Uncertain or acknowledged dispatch is never canceled by this timeout.
+An unsubmitted automatic upgrade retains its approved target during catalog
+rejection and retries version resolution every five minutes. The upgrade
+controller rechecks health and maintenance while waiting. After 20 minutes it
+records `VersionCatalogWaitExpired`, restores the observed release, and unlocks
+release settings. The persisted wait time survives restarts and unrelated spec
+changes. Terminal manifest failures remain `PreparationFailed` until the spec is
+corrected; already-dispatched rollouts keep their retry protection.
 
 `WithAdmissionGate` is the internal integration point for future progressive
 rollout capacity. A denied gate retains normalized customer intent in spec and reports

@@ -3,32 +3,14 @@ package hc
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
-	"github.com/openshift-online/gecko/controllers/util/upgradepolicy"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-// refreshAutomaticUpgradeFeedback reads the latest transport feedback even while
-// preparation is waiting for version resolution. Authorization must not use the
-// health snapshot from before that wait. Existing dispatch keeps its retry lock.
-func (r *Reconciler) refreshAutomaticUpgradeFeedback(ctx context.Context, c *privatev1.Cluster, groupKey string) (bool, error) {
-	result, placement := c.Status.ControlPlaneUpgrade, c.Status.PlacementResult
-	if result == nil || result.TargetSource != "automatic" || placement == nil || placement.ManagementClusterName == "" ||
-		!meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) || privatev1.ClusterUpgradeSubmissionStarted(c) {
-		return false, nil
-	}
-	status, err := r.transport.GetStatus(ctx, placement.ManagementClusterName, groupKey)
-	if err != nil {
-		return false, fmt.Errorf("read automatic upgrade feedback: %w", err)
-	}
-	return r.applyHostedClusterFeedback(c, status)
-}
 
 func (r *Reconciler) preparationFailure(ctx context.Context, c *privatev1.Cluster, cause error) error {
 	if privatev1.ClusterReleaseApproved(c) && meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) && !privatev1.ClusterUpgradeSubmissionStarted(c) {
@@ -54,22 +36,6 @@ func (r *Reconciler) applyResources(ctx context.Context, c *privatev1.Cluster, m
 	submitted := meta.FindStatusCondition(c.Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted)
 	accepted := meta.FindStatusCondition(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted)
 	if submitted == nil || submitted.Status == metav1.ConditionFalse || submitted.ObservedGeneration < accepted.ObservedGeneration {
-		// The installer owns the dispatch boundary. Check automatic eligibility
-		// here even if upgrade reconciliation has not yet observed catalog repair
-		// or a closed window. Existing uncertain dispatch must keep retrying.
-		if result := c.Status.ControlPlaneUpgrade; result != nil && result.TargetSource == "automatic" && !privatev1.ClusterUpgradeSubmissionStarted(c) {
-			if allowed, reason, message := upgradepolicy.AutomaticAuthorizationHolds(c, time.Now()); !allowed {
-				if meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
-					Type: privatev1.ControlPlaneUpgradeSubmitted, Status: metav1.ConditionFalse,
-					Reason: reason, Message: message, ObservedGeneration: c.Generation,
-				}) {
-					if err := r.client.Status().Update(ctx, c); err != nil && !apierrors.IsConflict(err) {
-						return nil, fmt.Errorf("record blocked dispatch: %w", err)
-					}
-				}
-				return &transport.Status{Stale: true}, nil
-			}
-		}
 		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
 			Type: privatev1.ControlPlaneUpgradeSubmitted, Status: metav1.ConditionUnknown,
 			Reason: "Dispatching", Message: "The approved release is being dispatched", ObservedGeneration: c.Generation,

@@ -70,7 +70,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// must change to start a new attempt. Automatic upgrade targets are selected
 	// from HostedCluster AvailableUpdates, so their rejection reflects transient
 	// catalog state and is retried until the catalog catches up.
-	if terminalCatalogRejection(&cluster, version) {
+	retryAfter := catalogRetryAfter(&cluster, version)
+	if catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) && retryAfter == 0 {
 		return reconcile.Result{}, nil
 	}
 
@@ -136,11 +137,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				return reconcile.Result{}, fmt.Errorf("vr: update cluster status %s: %w", clusterID, err)
 			}
 		}
-		if automaticUpgradeTarget(&cluster, version) {
-			// Requeue so a rejected automatic target converges even if a catalog event is missed.
-			return reconcile.Result{RequeueAfter: requeueStable}, nil
-		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{RequeueAfter: retryAfter}, nil
 	}
 
 	// Write VR result and VersionResolved condition to status.
@@ -168,21 +165,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
 }
 
-// terminalCatalogRejection preserves customer rejection until a new spec attempt
-// while allowing the selected automatic target to recover from catalog lag.
-func terminalCatalogRejection(cluster *privatev1.Cluster, version string) bool {
-	return catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) &&
-		!automaticUpgradeTarget(cluster, version)
-}
-
-// automaticUpgradeTarget reports whether version is a pending automatic
-// upgrade target. Automatic targets are selected from HostedCluster
-// AvailableUpdates, so a catalog rejection reflects transient catalog state
-// rather than an invalid customer request.
-func automaticUpgradeTarget(cluster *privatev1.Cluster, version string) bool {
+// catalogRetryAfter retries the advertised automatic target on catalog lag.
+// Customer-selected catalog rejections remain terminal for their generation.
+func catalogRetryAfter(cluster *privatev1.Cluster, version string) time.Duration {
 	result := cluster.Status.ControlPlaneUpgrade
-	return result != nil && result.TargetSource == "automatic" &&
-		result.TargetVersion == version && result.CompletedTime == nil
+	if result != nil && result.TargetSource == "automatic" && result.TargetVersion == version && result.CompletedTime == nil {
+		return requeueStable
+	}
+	return 0
 }
 
 // buildChannel constructs the Cincinnati channel name from a version string and channel group.

@@ -85,19 +85,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil // re-reconcile with finalizer in place
 	}
 
-	feedbackChanged, err := r.refreshAutomaticUpgradeFeedback(ctx, &cluster, groupKey)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if feedbackChanged {
-		if err := r.client.Status().Update(ctx, &cluster); err != nil {
-			if apierrors.IsConflict(err) {
-				return reconcile.Result{RequeueAfter: requeuePending}, nil
-			}
-			return reconcile.Result{}, fmt.Errorf("%s: update upgrade feedback: %w", adapterName, err)
-		}
-	}
-
 	ready, err := r.prerequisitesReady(ctx, &cluster, log)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -353,8 +340,7 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 }
 
 // setWaitingConditions records preparation readiness without overwriting the
-// availability of an already observed HostedCluster. Initial installation has no
-// observed availability yet, so it remains Unknown until feedback arrives.
+// availability last observed from a running HostedCluster.
 func (r *Reconciler) setWaitingConditions(cluster *privatev1.Cluster, reason, message string) bool {
 	gen := cluster.Generation
 	a := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
@@ -410,8 +396,29 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 	// Derive ResourcesApplied from top-level conditions.
 	appliedStatus, appliedReason, appliedMessage := firstCondition(mwStatus.Conditions, "Applied")
 
-	// Derive ApiCertificateReady from Certificate resource status.
+	// Derive HostedClusterAvailable and HostedClusterResult fields from HC resource status.
 	clusterNS := fmt.Sprintf("clusters-%s", cluster.UID)
+	safeName := cluster.Spec.SafeName
+	if safeName == "" {
+		safeName = privatev1.DefaultSafeName(cluster.Name, cluster.UID)
+	}
+	hcKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "hostedclusters",
+		clusterNS, safeName)
+	hcFeedback := mwStatus.ResourceStatuses[hcKey]
+	// The map key can be present but empty: extractResourceStatuses inserts an empty
+	// map when the HostedCluster's live content has not synced yet (KubeContent nil),
+	// which is a different condition than the "read status document never arrived"
+	// case mwStatus.Stale already covers. Treat an empty map the same as no feedback —
+	// key presence alone is not proof this is fresh data. extractHCFields always sets
+	// at least availableVersions and versionConditions when it actually runs, so a
+	// non-empty map reliably means live content was read.
+	hasHCFeedback := len(hcFeedback) > 0
+	availableStatus := string(metav1.ConditionFalse)
+	if v, ok := hcFeedback["availableCondition"]; ok {
+		availableStatus = v
+	}
+
+	// Derive ApiCertificateReady from Certificate resource status.
 	certKey := transport.ResourceKey("cert-manager.io", "v1", "certificates", clusterNS, "external-api-cert")
 	certStatus := string(metav1.ConditionFalse)
 	certReason := "CertificateNotReady"
@@ -435,6 +442,16 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 		Message:            appliedMessage,
 		ObservedGeneration: gen,
 	})
+	availableReason := "HostedClusterNotAvailable"
+	if availableStatus == "True" {
+		availableReason = "HostedClusterAvailable"
+	}
+	b := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		Type:               "HostedClusterAvailable",
+		Status:             metav1.ConditionStatus(availableStatus),
+		Reason:             availableReason,
+		ObservedGeneration: gen,
+	})
 	d := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "ApiCertificateReady",
 		Status:             metav1.ConditionStatus(certStatus),
@@ -442,54 +459,20 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 		Message:            certMessage,
 		ObservedGeneration: gen,
 	})
-	b, err := r.applyHostedClusterFeedback(cluster, mwStatus)
-	return a || b || d, err
-}
-
-// applyHostedClusterFeedback updates health and version observations without
-// changing preparation conditions such as ResourcesApplied/ManifestBuildFailed.
-func (r *Reconciler) applyHostedClusterFeedback(cluster *privatev1.Cluster, status *transport.Status) (bool, error) {
-	safeName := cluster.Spec.SafeName
-	if safeName == "" {
-		safeName = privatev1.DefaultSafeName(cluster.Name, cluster.UID)
-	}
-	hcKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "hostedclusters",
-		fmt.Sprintf("clusters-%s", cluster.UID), safeName)
-	var feedback map[string]string
-	if status != nil && !status.Stale {
-		feedback = status.ResourceStatuses[hcKey]
-	}
-	// An empty map can mean live content has not synced yet. Neither missing nor
-	// stale transport feedback can confirm health, even if status was healthy.
-	availableStatus, availableReason := metav1.ConditionFalse, "HostedClusterNotAvailable"
-	if status == nil || status.Stale {
-		availableStatus, availableReason = metav1.ConditionUnknown, "WaitingForHostedClusterFeedback"
-	} else if len(feedback) > 0 {
-		if v, ok := feedback["availableCondition"]; ok {
-			availableStatus = metav1.ConditionStatus(v)
-		}
-		if availableStatus == metav1.ConditionTrue {
-			availableReason = "HostedClusterAvailable"
-		}
-	}
-	a := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-		Type: "HostedClusterAvailable", Status: availableStatus, Reason: availableReason,
-		ObservedGeneration: cluster.Generation,
-	})
 
 	// HostedClusterResult (including the observed HyperShift/CVO conditions) is only
 	// touched once something has been observed at least once. Before that, there is
 	// nothing meaningful to report and the field stays nil.
 	c := false
-	if len(feedback) > 0 || cluster.Status.HostedClusterResult != nil {
+	if hasHCFeedback || cluster.Status.HostedClusterResult != nil {
 		var err error
-		c, err = r.applyHostedClusterResult(cluster, len(feedback) > 0, feedback, cluster.Generation)
+		c, err = r.applyHostedClusterResult(cluster, hasHCFeedback, hcFeedback, gen)
 		if err != nil {
 			return false, fmt.Errorf("%s: apply hosted cluster result: %w", adapterName, err)
 		}
 	}
 
-	return a || c, nil
+	return a || b || c || d, nil
 }
 
 // applyHostedClusterResult writes HC-owned HostedCluster feedback to
@@ -515,8 +498,8 @@ func (r *Reconciler) applyHostedClusterFeedback(cluster *privatev1.Cluster, stat
 //
 // ObservedConditions is private HC feedback and is intentionally not exposed on the
 // public API; it is the only place the hc-controller writes raw HyperShift/CVO
-// conditions, including their original LastTransitionTime. This is the time of a
-// state change, not the time of the latest observation. See
+// conditions, including their original LastTransitionTime, which callers may use to
+// tell a fresh signal apart from one that has persisted for a while. See
 // ControlPlaneUpgradeResult for the customer-facing upgrade conditions the
 // control-plane-upgrade controller derives from this data.
 //

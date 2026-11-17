@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -152,7 +151,6 @@ func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { r
 type errTransport struct {
 	applyErr         error
 	applyResult      *transport.Status
-	getStatusErr     error
 	deleteErr        error
 	deleteStatus     *transport.DeleteStatus
 	deleteStatusErr  error
@@ -163,7 +161,7 @@ func (e *errTransport) Apply(_ context.Context, _, _ string, _ [][]byte) (*trans
 	return e.applyResult, e.applyErr
 }
 func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Status, error) {
-	return nil, e.getStatusErr
+	return nil, nil
 }
 func (e *errTransport) Delete(_ context.Context, _, _ string) error { return e.deleteErr }
 func (e *errTransport) GetDeleteStatus(_ context.Context, _, _ string) (*transport.DeleteStatus, error) {
@@ -1515,216 +1513,4 @@ func TestReconcile_AutomaticPreparationDoesNotDispatchTarget(t *testing.T) {
 		require.NotContains(t, string(manifest), "4.23.9")
 	}
 	require.Nil(t, meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted), "maintaining the old release must not mark the new target as dispatched")
-}
-
-func TestReconcile_AutomaticDispatchRefreshesHealth(t *testing.T) {
-	for _, tc := range []struct {
-		name                string
-		previouslyUnhealthy bool
-		unavailable         bool
-		degraded            bool
-		missingConditions   bool
-		missingFeedback     bool
-		stale               bool
-		waitingResolution   bool
-		yStream             bool
-		readErr             error
-		statusErr           error
-		wantReason          string
-	}{
-		{name: "healthy feedback with old transition time", wantReason: "Dispatching"},
-		{name: "health recovers", previouslyUnhealthy: true, wantReason: "Dispatching"},
-		{name: "new availability loss", unavailable: true, wantReason: "HostedClusterUnavailable"},
-		{name: "new degradation", degraded: true, wantReason: "HostedClusterDegraded"},
-		{name: "missing conditions", missingConditions: true, wantReason: "HostedClusterDegraded"},
-		{name: "missing feedback", missingFeedback: true, wantReason: "HostedClusterUnavailable"},
-		{name: "stale healthy feedback", stale: true, wantReason: "HostedClusterUnavailable"},
-		{name: "health loss while resolution is pending", unavailable: true, waitingResolution: true},
-		{name: "missing y-stream upgradeability", yStream: true, wantReason: "ClusterVersionNotUpgradeable"},
-		{name: "feedback read fails", readErr: fmt.Errorf("feedback unavailable")},
-		{name: "feedback status conflict", unavailable: true, statusErr: conflictErr()},
-		{name: "feedback status write fails", unavailable: true, statusErr: fmt.Errorf("status unavailable")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			target := "4.23.9"
-			if tc.yStream {
-				target = "4.24.1"
-			}
-			cluster := buildReadyCluster("cluster-abc", target)
-			cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{
-				Version: "4.23.8", DesiredVersion: "4.23.8",
-				ObservedConditions: []metav1.Condition{
-					{Type: "HostedClusterDegraded", Status: metav1.ConditionFalse},
-					{Type: "ClusterVersionUpgradeable", Status: metav1.ConditionTrue},
-				},
-			}
-			cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: target, TargetSource: "automatic"}
-			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: "HostedClusterAvailable", Status: metav1.ConditionTrue})
-			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, ObservedGeneration: cluster.Generation})
-			if tc.previouslyUnhealthy {
-				cluster.Status.HostedClusterResult.ObservedConditions[0].Status = metav1.ConditionTrue
-				meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: "HostedClusterAvailable", Status: metav1.ConditionFalse})
-			}
-			if tc.waitingResolution {
-				cluster.Status.VersionResolution.ReleaseVersion = "4.23.8"
-			}
-			available, degraded := "True", metav1.ConditionFalse
-			if tc.unavailable {
-				available = "False"
-			}
-			if tc.degraded {
-				degraded = metav1.ConditionTrue
-			}
-			conditions := []metav1.Condition{{Type: "Degraded", Status: degraded, LastTransitionTime: metav1.NewTime(time.Now().Add(-24 * time.Hour))}}
-			if tc.missingConditions {
-				conditions = nil
-			}
-			raw, err := json.Marshal(conditions)
-			require.NoError(t, err)
-			feedback := map[string]map[string]string{
-				hostedClusterResourceKey(cluster): {"version": "4.23.8", "desiredVersion": "4.23.8", "availableCondition": available, "versionConditions": string(raw)},
-			}
-			if tc.missingFeedback {
-				feedback = nil
-			}
-			tr := mock.New()
-			tr.StatusOverrides["mc-cluster-1/"+mustClusterGroupKey(cluster.Namespace, cluster.Name)] = &transport.Status{Stale: tc.stale, ResourceStatuses: feedback}
-			var transportClient transport.Client = tr
-			if tc.readErr != nil {
-				transportClient = &errTransport{getStatusErr: tc.readErr}
-			}
-			r, store := buildReconciler(t, cluster, nil, transportClient, tc.statusErr)
-			_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
-			if tc.readErr != nil {
-				require.ErrorContains(t, err, "feedback unavailable")
-				require.False(t, store.statusWriter.called)
-				return
-			}
-			if tc.statusErr != nil && !apierrors.IsConflict(tc.statusErr) {
-				require.ErrorContains(t, err, "status unavailable")
-			} else {
-				require.NoError(t, err)
-			}
-			require.Empty(t, tr.ApplyCalls, "an unsubmitted target cannot be applied before authorization is durably recorded")
-			require.True(t, store.statusWriter.called)
-			captured := store.statusWriter.captured.(*privatev1.Cluster)
-			submitted := meta.FindStatusCondition(captured.Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted)
-			if tc.wantReason == "" {
-				require.Nil(t, submitted, "resolution waits and conflicting feedback writes must not cross the dispatch boundary")
-			} else {
-				require.NotNil(t, submitted)
-				require.Equal(t, tc.wantReason, submitted.Reason)
-				wantStatus := metav1.ConditionFalse
-				if tc.wantReason == "Dispatching" {
-					wantStatus = metav1.ConditionUnknown
-				}
-				require.Equal(t, wantStatus, submitted.Status)
-			}
-			require.Equal(t, "4.23.8", captured.Status.HostedClusterResult.Version)
-			if tc.unavailable || tc.missingFeedback || tc.stale {
-				require.False(t, meta.IsStatusConditionTrue(captured.Status.Conditions, "HostedClusterAvailable"))
-			}
-			if tc.missingFeedback || tc.stale || tc.missingConditions {
-				require.Empty(t, captured.Status.HostedClusterResult.ObservedConditions)
-			}
-		})
-	}
-}
-
-func TestReconcile_AutomaticDispatchChecksEligibility(t *testing.T) {
-	for _, tc := range []struct {
-		name                                                      string
-		source                                                    string
-		open, degraded, criticalPin, staleReceipt, feedbackActive bool
-		expiredCatalogWait                                        bool
-		submitted                                                 metav1.ConditionStatus
-		statusErr                                                 error
-		wantErr                                                   bool
-		wantStatus                                                metav1.ConditionStatus
-		wantReason                                                string
-		wantApplies                                               int
-	}{
-		{name: "closed automatic window", source: "automatic", wantStatus: metav1.ConditionFalse, wantReason: "OutsideMaintenanceWindow"},
-		{name: "open automatic window", source: "automatic", open: true, wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
-		{name: "expired catalog wait blocks installer first", source: "automatic", open: true, expiredCatalogWait: true, wantStatus: metav1.ConditionFalse, wantReason: "VersionCatalogWaitExpired"},
-		{name: "expired catalog wait preserves uncertain dispatch", source: "automatic", open: true, expiredCatalogWait: true, submitted: metav1.ConditionUnknown, wantStatus: metav1.ConditionTrue, wantReason: "Dispatched", wantApplies: 1},
-		{name: "degraded cluster", source: "automatic", open: true, degraded: true, wantStatus: metav1.ConditionFalse, wantReason: "HostedClusterDegraded"},
-		{name: "critical patch override", source: "automatic", criticalPin: true, wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
-		{name: "critical override still requires health", source: "automatic", criticalPin: true, degraded: true, wantStatus: metav1.ConditionFalse, wantReason: "HostedClusterDegraded"},
-		{name: "customer bypasses maintenance", source: "customer", wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
-		{name: "uncertain dispatch retries", source: "automatic", submitted: metav1.ConditionUnknown, wantStatus: metav1.ConditionTrue, wantReason: "Dispatched", wantApplies: 1},
-		{name: "acknowledged dispatch retries", source: "automatic", submitted: metav1.ConditionTrue, wantStatus: metav1.ConditionTrue, wantReason: "Dispatched", wantApplies: 1},
-		{name: "old receipt does not bypass maintenance", source: "automatic", submitted: metav1.ConditionUnknown, staleReceipt: true, wantStatus: metav1.ConditionFalse, wantReason: "OutsideMaintenanceWindow"},
-		{name: "feedback proves existing dispatch", source: "automatic", feedbackActive: true, wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
-		{name: "blocked status conflict", source: "automatic", statusErr: conflictErr(), wantStatus: metav1.ConditionFalse, wantReason: "OutsideMaintenanceWindow"},
-		{name: "blocked status write fails", source: "automatic", statusErr: fmt.Errorf("status unavailable"), wantErr: true, wantStatus: metav1.ConditionFalse, wantReason: "OutsideMaintenanceWindow"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cluster := buildReadyCluster("cluster-abc", "4.23.9")
-			cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{
-				Version: "4.23.8", DesiredVersion: "4.23.8",
-				ObservedConditions: []metav1.Condition{{Type: "HostedClusterDegraded", Status: metav1.ConditionFalse, ObservedGeneration: cluster.Generation}},
-			}
-			if tc.degraded {
-				cluster.Status.HostedClusterResult.ObservedConditions[0].Status = metav1.ConditionTrue
-			}
-			if tc.feedbackActive {
-				cluster.Status.HostedClusterResult.DesiredVersion = "4.23.9"
-			}
-			cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "4.23.9", TargetSource: tc.source}
-			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: "HostedClusterAvailable", Status: metav1.ConditionTrue, Reason: "HostedClusterAvailable", ObservedGeneration: cluster.Generation})
-			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, ObservedGeneration: cluster.Generation})
-			if tc.expiredCatalogWait {
-				meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-					Type: "ControlPlaneUpgradeProgressing", Status: metav1.ConditionFalse, Reason: "WaitingForVersionCatalog",
-					ObservedGeneration: cluster.Generation, LastTransitionTime: metav1.NewTime(time.Now().Add(-21 * time.Minute)),
-				})
-			}
-			if tc.submitted != "" {
-				generation := cluster.Generation
-				if tc.staleReceipt {
-					generation--
-				}
-				meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeSubmitted, Status: tc.submitted, Reason: "Dispatched", ObservedGeneration: generation})
-			}
-			start := time.Now().UTC().Truncate(time.Second).Add(-2 * time.Hour)
-			if tc.open {
-				start = time.Now().UTC().Truncate(time.Second).Add(-30 * time.Minute)
-			}
-			cluster.Spec.Maintenance = &privatev1.ClusterMaintenanceSpec{Window: &privatev1.ControlPlaneMaintenanceWindow{
-				StartTime: metav1.NewTime(start), DurationSeconds: 3600,
-				Recurrence: privatev1.ControlPlaneMaintenanceRecurrence{Frequency: "weekly", DaysOfWeek: []string{strings.ToLower(start.Weekday().String())}},
-			}}
-			if tc.criticalPin {
-				cluster.Spec.Maintenance.CriticalUpgrade = "4.23.9"
-			}
-			tr := mock.New()
-			observed := metav1.ConditionFalse
-			if tc.degraded {
-				observed = metav1.ConditionTrue
-			}
-			raw, err := json.Marshal([]metav1.Condition{{Type: "Degraded", Status: observed}})
-			require.NoError(t, err)
-			tr.StatusOverrides["mc-cluster-1/"+mustClusterGroupKey(cluster.Namespace, cluster.Name)] = &transport.Status{
-				ResourceStatuses: map[string]map[string]string{
-					hostedClusterResourceKey(cluster): {
-						"version": "4.23.8", "desiredVersion": cluster.Status.HostedClusterResult.DesiredVersion,
-						"availableCondition": "True", "versionConditions": string(raw),
-					},
-				},
-			}
-			r, store := buildReconciler(t, cluster, nil, tr, tc.statusErr)
-			_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
-			if tc.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-			require.Len(t, tr.ApplyCalls, tc.wantApplies)
-			condition := meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted)
-			require.NotNil(t, condition)
-			require.Equal(t, tc.wantStatus, condition.Status)
-			require.Equal(t, tc.wantReason, condition.Reason)
-		})
-	}
 }

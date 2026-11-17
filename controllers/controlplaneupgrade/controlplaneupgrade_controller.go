@@ -9,7 +9,6 @@ import (
 
 	channelutil "github.com/openshift-online/gecko/controllers/util/channel"
 	"github.com/openshift-online/gecko/controllers/util/logger"
-	"github.com/openshift-online/gecko/controllers/util/upgradepolicy"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -88,7 +87,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if active, target := feedbackTarget(completed, desired); active {
 		return r.observeExisting(ctx, &cluster, target)
 	}
-	if degraded := meta.FindStatusCondition(cluster.Status.Conditions, conditionDegraded); degraded != nil && degraded.Status == metav1.ConditionTrue && degraded.ObservedGeneration == cluster.Generation && degraded.Reason == preparationFailureReason {
+	if degraded := meta.FindStatusCondition(cluster.Status.Conditions, conditionDegraded); degraded != nil && degraded.Status == metav1.ConditionTrue && degraded.ObservedGeneration == cluster.Generation && degraded.Reason == "PreparationFailed" {
 		return reconcile.Result{RequeueAfter: requeueStable}, nil
 	}
 	result := recordCompletion(cluster.Status.ControlPlaneUpgrade, completed)
@@ -275,9 +274,38 @@ func upgradeFailureReason(observed []metav1.Condition) (reason, message string, 
 	return "", "", false
 }
 
-// healthOK shares the same observed-health rules as the dispatch gate.
-func healthOK(clusterConditions, observed []metav1.Condition, isYStream bool) (bool, string, string) {
-	return upgradepolicy.HealthOK(clusterConditions, observed, isYStream)
+// healthOK reports whether a new upgrade target may be requested. Both z-stream and
+// y-stream upgrades require HostedCluster availability and positive confirmation of
+// no degradation. Y-stream upgrades additionally require ClusterVersionUpgradeable=True.
+// An absent or Unknown HostedClusterDegraded reading blocks selection just like a
+// confirmed True does — deny by default when there isn't enough evidence to confirm
+// the cluster is healthy.
+func healthOK(clusterConditions, observed []metav1.Condition, isYStream bool) (ok bool, reason, message string) {
+	if !meta.IsStatusConditionTrue(clusterConditions, "HostedClusterAvailable") {
+		return false, "HostedClusterUnavailable", "HostedCluster must be available before an upgrade can start"
+	}
+	degraded := meta.FindStatusCondition(observed, "HostedClusterDegraded")
+	if degraded == nil || degraded.Status != metav1.ConditionFalse {
+		message := "HostedCluster has not reported HostedClusterDegraded=False"
+		if degraded != nil && degraded.Message != "" {
+			message = degraded.Message
+		}
+		return false, "HostedClusterDegraded", message
+	}
+
+	// Y-stream upgrades require ClusterVersionUpgradeable=True
+	if isYStream {
+		upgradeable := meta.FindStatusCondition(observed, "ClusterVersionUpgradeable")
+		if upgradeable == nil || upgradeable.Status != metav1.ConditionTrue {
+			message := "Y-stream upgrade requires ClusterVersionUpgradeable=True"
+			if upgradeable != nil && upgradeable.Message != "" {
+				message = upgradeable.Message
+			}
+			return false, "ClusterVersionNotUpgradeable", message
+		}
+	}
+
+	return true, "", ""
 }
 
 // recordActiveTarget returns the ControlPlaneUpgradeResult to report while target is

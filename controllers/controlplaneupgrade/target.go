@@ -3,8 +3,6 @@ package controlplaneupgrade
 import (
 	"fmt"
 
-	"github.com/openshift-online/gecko/controllers/util/upgradepolicy"
-
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 )
 
@@ -49,9 +47,18 @@ func isAdvertised(version string, advertised []string) bool {
 	return false
 }
 
-// isValidCriticalPin uses the same override rule as HostedCluster dispatch.
+// isValidCriticalPin reports whether pin is a valid emergency z-stream override
+// for the given completed version. It delegates to selectZStreamCandidate with a
+// single-element list: the pin is valid iff selectZStreamCandidate would select it,
+// meaning it parses, shares the same major.minor as completed, and is strictly newer.
+// This prevents a cross-minor or downgrade pin from bypassing y-stream health gates
+// and Channel FleetMinorVersion authorization.
 func isValidCriticalPin(pin, completed string) bool {
-	return upgradepolicy.IsValidCriticalPin(pin, completed)
+	if pin == "" {
+		return false
+	}
+	selected, err := selectZStreamCandidate(completed, []string{pin})
+	return err == nil && selected == pin
 }
 
 // selectYStreamCandidate returns the next sequential minor version from advertised
