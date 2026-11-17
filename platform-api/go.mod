@@ -3,7 +3,7 @@ module github.com/openshift-online/gecko/platform-api
 go 1.26.4
 
 require (
-	github.com/cedar-policy/cedar-go v1.9.0
+	github.com/cedar-policy/cedar-go v1.9.1
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/go-logr/logr v1.4.4
 	github.com/go-logr/stdr v1.2.2

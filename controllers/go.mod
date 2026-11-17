@@ -34,7 +34,7 @@ require (
 	cloud.google.com/go/longrunning v1.5.0 // indirect
 	cloud.google.com/go/pubsub/v2 v2.9.0
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/cedar-policy/cedar-go v1.9.0 // indirect
+	github.com/cedar-policy/cedar-go v1.9.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.14.0 // indirect
