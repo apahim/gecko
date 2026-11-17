@@ -44,6 +44,9 @@ func NewProcessor(structural *schema.Structural, props *apiext.JSONSchemaProps) 
 
 // Process applies pruning, defaulting, and validation to an object.
 // obj should be a map[string]interface{} representing the JSON object.
+// Generic JSON inputs must preserve Kubernetes unstructured numeric types:
+// int64 for integer literals and float64 for fractional/exponent literals.
+// Do not pass json.Number or repair already-rounded integers from float64.
 // oldObj should be the previously stored object as a map[string]interface{},
 // or nil when processing a create request. It is passed to the CEL validator
 // so that rules referencing oldSelf (e.g. immutability guards) work correctly

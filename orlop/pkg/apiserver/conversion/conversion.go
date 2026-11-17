@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	kjson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
@@ -166,7 +167,7 @@ func (c *Converter) filterNonPublicConditions(obj runtime.Object, kind string) e
 	}
 
 	var objMap map[string]interface{}
-	if err := json.Unmarshal(jsonData, &objMap); err != nil {
+	if err := kjson.Unmarshal(jsonData, &objMap); err != nil {
 		return fmt.Errorf("failed to unmarshal object for condition filtering: %w", err)
 	}
 
@@ -434,7 +435,7 @@ func (c *Converter) preserveNonPublicConditions(existing, converted runtime.Obje
 	}
 
 	var convertedMap map[string]interface{}
-	if err := json.Unmarshal(convertedJSON, &convertedMap); err != nil {
+	if err := kjson.Unmarshal(convertedJSON, &convertedMap); err != nil {
 		return fmt.Errorf("failed to unmarshal converted object for condition preservation: %w", err)
 	}
 
@@ -497,7 +498,7 @@ func (c *Converter) extractNonPublicConditions(obj runtime.Object, kind string) 
 	}
 
 	var objMap map[string]interface{}
-	if err := json.Unmarshal(jsonData, &objMap); err != nil {
+	if err := kjson.Unmarshal(jsonData, &objMap); err != nil {
 		return nil
 	}
 

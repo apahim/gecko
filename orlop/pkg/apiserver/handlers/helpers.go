@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/go-logr/logr"
@@ -14,9 +15,22 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	kjson "k8s.io/apimachinery/pkg/util/json"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// decodeObjectMap preserves integers before they reach CEL or a JSON merge.
+// Converting an already decoded float64 cannot recover large integer precision.
+// Keep the existing single-object streaming behavior, including null handling.
+func decodeObjectMap(reader io.Reader, target *map[string]interface{}) error {
+	decoder := json.NewDecoder(reader)
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return kjson.ConvertMapNumbers(*target, 0)
+}
 
 // writeError writes an error response with a Status object.
 func writeError(w http.ResponseWriter, code int, message string) {
@@ -66,8 +80,8 @@ func authorizeRequestObject(w http.ResponseWriter, r *http.Request, obj client.O
 // unstructured tree. Correctness therefore depends on both sides decoding
 // numbers as the same Go type. This holds today: typed objects convert to
 // int64 via ToUnstructured, and the postgres/spanner stores' unstructured
-// Get also yields int64. If a future Get path decodes numbers as float64,
-// numeric spec fields would churn — normalize numbers here if that changes.
+// Get also yields int64. Generic JSON decoding must preserve this representation
+// before validation/comparison; converting rounded floats afterward is unsafe.
 func specChanged(old, new runtime.Object) bool {
 	oldSpec, err := extractSpec(old)
 	if err != nil {
@@ -136,7 +150,7 @@ func applyProcessingForComparison(ctx context.Context, processor *pkgschema.Proc
 		return err
 	}
 	var m map[string]interface{}
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := kjson.Unmarshal(data, &m); err != nil {
 		return err
 	}
 	// Process mutates m in place (pruning unknown fields, applying defaults).

@@ -11,6 +11,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	kjson "k8s.io/apimachinery/pkg/util/json"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -23,7 +24,7 @@ func (h *ResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Parse request body
 	var updateMap map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&updateMap); err != nil {
+	if err := decodeObjectMap(r.Body, &updateMap); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
@@ -65,7 +66,7 @@ func (h *ResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var existingMap map[string]interface{}
-	if err := json.Unmarshal(existingJSON, &existingMap); err != nil {
+	if err := kjson.Unmarshal(existingJSON, &existingMap); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to unmarshal existing object: %v", err))
 		return
 	}

@@ -16,6 +16,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	kjson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -128,7 +129,7 @@ func (h *ResourceHandler) applyPatch(contentType string, existing client.Object,
 func (h *ResourceHandler) processPatchedObject(w http.ResponseWriter, r *http.Request, namespace, name string, patchedJSON []byte, existing client.Object) {
 	// Convert to map for schema processing
 	var objMap map[string]interface{}
-	if err := json.Unmarshal(patchedJSON, &objMap); err != nil {
+	if err := kjson.Unmarshal(patchedJSON, &objMap); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to unmarshal patched object: %v", err))
 		return
 	}
@@ -141,7 +142,7 @@ func (h *ResourceHandler) processPatchedObject(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var oldObjMap map[string]interface{}
-	if err := json.Unmarshal(existingJSON, &oldObjMap); err != nil {
+	if err := kjson.Unmarshal(existingJSON, &oldObjMap); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to unmarshal old object: %v", err))
 		return
 	}
@@ -353,11 +354,11 @@ func (h *ResourceHandler) strategicMergePatch(original client.Object, patchBytes
 func jsonMergePatch(original, patch []byte) ([]byte, error) {
 	var originalMap, patchMap map[string]interface{}
 
-	if err := json.Unmarshal(original, &originalMap); err != nil {
+	if err := kjson.Unmarshal(original, &originalMap); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal original: %w", err)
 	}
 
-	if err := json.Unmarshal(patch, &patchMap); err != nil {
+	if err := kjson.Unmarshal(patch, &patchMap); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal patch: %w", err)
 	}
 

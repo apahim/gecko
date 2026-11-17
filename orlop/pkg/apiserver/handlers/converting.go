@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	kjson "k8s.io/apimachinery/pkg/util/json"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -108,7 +109,7 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 
 	// Parse request body as map for schema processing
 	var objMap map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&objMap); err != nil {
+	if err := decodeObjectMap(r.Body, &objMap); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
@@ -594,7 +595,7 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 
 	// Parse request body
 	var objMap map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&objMap); err != nil {
+	if err := decodeObjectMap(r.Body, &objMap); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
@@ -614,7 +615,7 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var oldObjMap map[string]interface{}
-	if err := json.Unmarshal(existingJSONForCEL, &oldObjMap); err != nil {
+	if err := kjson.Unmarshal(existingJSONForCEL, &oldObjMap); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("unmarshaling old object: %v", err))
 		return
 	}
@@ -859,7 +860,7 @@ func (h *ConvertingResourceHandler) preparePatch(r *http.Request, namespace, nam
 	// Status is controller-managed; strip from patch before applying so that
 	// existing controller-set status is preserved from existingPublic.
 	var patchMap map[string]interface{}
-	if err := json.Unmarshal(patchBytes, &patchMap); err != nil {
+	if err := kjson.Unmarshal(patchBytes, &patchMap); err != nil {
 		return patchInput{}, http.StatusBadRequest, fmt.Errorf("invalid patch JSON: %w", err)
 	}
 	stripStatus(patchMap)
@@ -876,14 +877,14 @@ func (h *ConvertingResourceHandler) preparePatch(r *http.Request, namespace, nam
 	}
 
 	var objMap map[string]interface{}
-	if err := json.Unmarshal(patchedJSON, &objMap); err != nil {
+	if err := kjson.Unmarshal(patchedJSON, &objMap); err != nil {
 		return patchInput{}, http.StatusInternalServerError, fmt.Errorf("failed to unmarshal patched object: %w", err)
 	}
 
 	// Build an old-object map from the pre-patch state so that CEL rules
 	// referencing oldSelf work correctly on update.
 	var oldObjMap map[string]interface{}
-	if err := json.Unmarshal(existingJSON, &oldObjMap); err != nil {
+	if err := kjson.Unmarshal(existingJSON, &oldObjMap); err != nil {
 		return patchInput{}, http.StatusInternalServerError, fmt.Errorf("failed to unmarshal old object: %w", err)
 	}
 
