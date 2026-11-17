@@ -1,0 +1,19 @@
+# Packaging-only local build. The context contains an app/ directory produced by
+# `make local-image-api` or `make local-image-controllers`, never the source tree.
+# This stage supplies the same trusted CA bundle as the normal Gecko images;
+# nothing executes here, so even an amd64 base on an arm64 Mac needs no emulation.
+FROM registry.access.redhat.com/ubi9/go-toolset:1.27.3-1794518352 AS certificates
+
+FROM registry.access.redhat.com/ubi9/ubi-micro:9.9-1794478307
+
+# BINARY names the component in metadata; both targets install it as /app/gecko.
+ARG BINARY=gecko
+LABEL org.opencontainers.image.title="${BINARY}" \
+      org.opencontainers.image.description="Locally cross-compiled Gecko development image" \
+      org.opencontainers.image.source="https://github.com/openshift-online/gecko"
+
+COPY --from=certificates /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt
+COPY --chown=65532:65532 app /app
+USER 65532:65532
+WORKDIR /app
+ENTRYPOINT ["/app/gecko"]
