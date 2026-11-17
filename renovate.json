@@ -1,19 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "dependencyDashboard": true,
-  "addLabels": ["ok-to-test", "area/dependency"],
-  "prConcurrentLimit": 10,
-  "postUpdateOptions": [
-    "gomodTidyAll",
-    "gomodUpdateImportPaths"
-  ],
+  "extends": ["github>openshift-online/gcp-hcp//renovate/default"],
   "gomod": {
-    "packageRules": [
-      {
-        "matchPackageNames": ["golang.org/x/**"],
-        "groupName": "golang.org/x packages",
-        "groupSlug": "golang-org-x"
-      }
-    ]
+    "postUpdateOptions": ["gomodTidyAll", "gomodUpdateImportPaths"]
   }
 }
