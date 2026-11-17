@@ -14,6 +14,22 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// refreshAutomaticUpgradeFeedback reads the latest transport feedback even while
+// preparation is waiting for version resolution. Authorization must not use the
+// health snapshot from before that wait. Existing dispatch keeps its retry lock.
+func (r *Reconciler) refreshAutomaticUpgradeFeedback(ctx context.Context, c *privatev1.Cluster, groupKey string) (bool, error) {
+	result, placement := c.Status.ControlPlaneUpgrade, c.Status.PlacementResult
+	if result == nil || result.TargetSource != "automatic" || placement == nil || placement.ManagementClusterName == "" ||
+		!meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) || privatev1.ClusterUpgradeSubmissionStarted(c) {
+		return false, nil
+	}
+	status, err := r.transport.GetStatus(ctx, placement.ManagementClusterName, groupKey)
+	if err != nil {
+		return false, fmt.Errorf("read automatic upgrade feedback: %w", err)
+	}
+	return r.applyHostedClusterFeedback(c, status)
+}
+
 func (r *Reconciler) preparationFailure(ctx context.Context, c *privatev1.Cluster, cause error) error {
 	if privatev1.ClusterReleaseApproved(c) && meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) && !privatev1.ClusterUpgradeSubmissionStarted(c) {
 		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{

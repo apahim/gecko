@@ -1246,6 +1246,7 @@ func TestReconcile_AutomaticPreparationFailureRetainsSourceUntilCleanup(t *testi
 			require.NoError(t, err)
 			require.True(t, privatev1.ClusterAutomaticReleaseCanceling(store.cluster))
 			require.Equal(t, "4.23.8", privatev1.ClusterInstallationVersion(store.cluster))
+			require.True(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, conditionDegraded), "manifest preparation failures remain degraded")
 			if failCleanup {
 				store.statusWriter.updateErr = fmt.Errorf("cleanup status unavailable")
 			}
@@ -1263,6 +1264,7 @@ func TestReconcile_AutomaticPreparationFailureRetainsSourceUntilCleanup(t *testi
 			require.False(t, privatev1.ClusterUpgradeActive(store.cluster))
 			require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
 			// A non-release repair must retry as automation, respecting timing.
+			require.True(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, conditionDegraded))
 			nextDay := time.Now().UTC().Add(24 * time.Hour)
 			store.cluster.Spec.Maintenance = &privatev1.ClusterMaintenanceSpec{Window: &privatev1.ControlPlaneMaintenanceWindow{
 				StartTime: metav1.NewTime(nextDay), DurationSeconds: 3600,

@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/client/transport/mock"
 	"github.com/openshift-online/gecko/controllers/hc"
 	"github.com/openshift-online/gecko/controllers/util/constants"
@@ -53,10 +54,13 @@ func TestReconcile_CatalogWaitRevalidatesMaintenance(t *testing.T) {
 	_, err = closed.Reconcile(t.Context(), clusterReq(cluster.Name))
 	require.NoError(t, err)
 	require.True(t, privatev1.ClusterAutomaticReleaseCanceling(store.cluster))
+	require.False(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, conditionDegraded), "closing a maintenance window is a policy wait")
 	_, err = closed.Reconcile(t.Context(), clusterReq(cluster.Name))
 	require.NoError(t, err)
 	require.False(t, privatev1.ClusterUpgradeActive(store.cluster))
 	require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+	require.False(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, conditionDegraded), "restoring the observed release must preserve the policy wait")
+	require.Equal(t, "OutsideMaintenanceWindow", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionDegraded).Reason)
 
 	_, err = closed.Reconcile(t.Context(), clusterReq(cluster.Name))
 	require.NoError(t, err)
@@ -250,6 +254,16 @@ func TestCatalogRecovery_InstallerFirstAfterWindowClosesDoesNotDispatch(t *testi
 	_, err = resolver.Reconcile(t.Context(), clusterReq(cluster.Name))
 	require.NoError(t, err)
 	tr := mock.New()
+	hcKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "hostedclusters",
+		"clusters-"+string(cluster.UID), privatev1.DefaultSafeName(cluster.Name, cluster.UID))
+	groupKey, err := transport.ClusterGroupKey(cluster.Namespace, cluster.Name)
+	require.NoError(t, err)
+	tr.StatusOverrides["management/"+groupKey] = &transport.Status{
+		ResourceStatuses: map[string]map[string]string{hcKey: {
+			"version": "4.23.8", "desiredVersion": "4.23.8", "availableCondition": "True",
+			"versionConditions": `[{"type":"Degraded","status":"False"}]`, "availableVersions": `["4.23.9"]`,
+		}},
+	}
 	installer := hc.New(tr, testLogger(t), apiClient, nil, "", "")
 	for range 2 {
 		_, err = installer.Reconcile(t.Context(), clusterReq(cluster.Name))
@@ -278,8 +292,18 @@ func TestCatalogRecovery_PendingResolutionDoesNotCancelHealthyUpgrade(t *testing
 		require.NoError(t, err)
 	}
 	tr := mock.New()
+	hcKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "hostedclusters",
+		"clusters-"+string(cluster.UID), privatev1.DefaultSafeName(cluster.Name, cluster.UID))
+	groupKey, err := transport.ClusterGroupKey(cluster.Namespace, cluster.Name)
+	require.NoError(t, err)
+	tr.StatusOverrides["management/"+groupKey] = &transport.Status{
+		ResourceStatuses: map[string]map[string]string{hcKey: {
+			"version": "4.23.8", "desiredVersion": "4.23.8", "availableCondition": "True",
+			"versionConditions": `[{"type":"Degraded","status":"False"}]`, "availableVersions": `["4.23.9"]`,
+		}},
+	}
 	installer := hc.New(tr, testLogger(t), apiClient, nil, "", "")
-	_, err := installer.Reconcile(t.Context(), clusterReq(cluster.Name))
+	_, err = installer.Reconcile(t.Context(), clusterReq(cluster.Name))
 	require.NoError(t, err)
 	require.Empty(t, tr.ApplyCalls)
 	require.NoError(t, apiClient.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
@@ -381,11 +405,13 @@ func TestReconcile_CatalogWaitExpiresAcrossRestarts(t *testing.T) {
 			}
 			require.True(t, privatev1.ClusterAutomaticReleaseCanceling(store.cluster), "a catalog wait must stop after twenty minutes")
 			require.Equal(t, "VersionCatalogWaitExpired", store.cluster.Status.ControlPlaneUpgrade.FailureReason)
+			require.False(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, conditionDegraded))
 			r = NewReconciler(store, testLogger(t))
 			_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
 			require.NoError(t, err)
 			require.False(t, privatev1.ClusterUpgradeActive(store.cluster))
 			require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+			require.False(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, conditionDegraded))
 			changed := store.cluster.DeepCopy()
 			changed.Spec.Release.Version = "4.23.9"
 			require.NoError(t, changed.ValidateUpdate(t.Context(), store.cluster), "expiry must release the admission lock")

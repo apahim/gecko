@@ -297,10 +297,14 @@ func (r *Reconciler) cancelAutomaticPreparation(ctx context.Context, c *privatev
 	result := c.Status.ControlPlaneUpgrade.DeepCopy()
 	result.FailureReason = failureReason
 	result.FailureMessage = failureMessage
+	degraded := metav1.ConditionFalse
+	if failureReason == preparationFailureReason {
+		degraded = metav1.ConditionTrue
+	}
 	return r.writeStatus(ctx, c, result, requeueConflict,
 		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, privatev1.ControlPlaneUpgradeCancelingReason, "Restoring the observed release before unlocking automatic intent"),
 		newCondition(conditionProgressing, metav1.ConditionFalse, failureReason, result.FailureMessage),
-		newCondition(conditionDegraded, metav1.ConditionTrue, failureReason, result.FailureMessage))
+		newCondition(conditionDegraded, degraded, failureReason, result.FailureMessage))
 }
 
 // writeWaitingForVersionCatalog keeps an approved automatic target for a bounded
@@ -355,8 +359,10 @@ func (r *Reconciler) finishAutomaticCancellation(ctx context.Context, c *private
 		}
 	}
 	reason := preparationFailureReason
+	message := "The unsubmitted automatic upgrade failed; release settings can be corrected"
 	if result := c.Status.ControlPlaneUpgrade; result != nil && result.FailureReason != "" {
 		reason = result.FailureReason
+		message = result.FailureMessage
 	}
-	return r.block(ctx, c, reason, "The unsubmitted automatic upgrade failed; release settings can be corrected", true)
+	return r.block(ctx, c, reason, message, reason == preparationFailureReason)
 }
