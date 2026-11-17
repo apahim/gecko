@@ -198,20 +198,34 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 		return reconcile.Result{}, fmt.Errorf("approved release does not match persisted upgrade target")
 	}
 	hc := c.Status.HostedClusterResult
-	if hc.Version != result.TargetVersion && !privatev1.ClusterUpgradeSubmissionStarted(c) && preparationFailureActive(c) {
-		// A catalog rejection is transient: keep the approved target and wait
-		// rather than cancelling, restoring spec, and selecting again. Dispatched
-		// rollouts are never cancelled here; submission evidence wins.
-		if catalogRejectionActive(c) {
-			if result.TargetSource == targetSourceAutomatic {
-				return r.waitForVersionCatalog(ctx, c, result, hc)
-			}
-			return r.block(ctx, c, waitingForVersionCatalogReason, "The approved target is waiting for catalog synchronization", true)
-		}
+	if hc.Version != result.TargetVersion && !privatev1.ClusterUpgradeSubmissionStarted(c) {
+		// The authorization that approved an automatic upgrade must still hold
+		// when installation can proceed. This check is durable: it runs on every
+		// reconcile before dispatch, so catalog recovery after a window closes or
+		// health degrades cannot continue an upgrade with a stale approval.
 		if result.TargetSource == targetSourceAutomatic {
-			return r.cancelAutomaticPreparation(ctx, c, preparationFailureReason, "The automatic release could not be prepared before dispatch")
+			if ok, reason, message := r.automaticAuthorizationHolds(c, result, hc); !ok {
+				return r.cancelAutomaticPreparation(ctx, c, reason, message)
+			}
 		}
-		return r.block(ctx, c, preparationFailureReason, "The release could not be prepared before dispatch; release settings can be corrected", true)
+		if preparationFailureActive(c) {
+			// A catalog rejection is transient: keep the approved target and wait
+			// rather than cancelling, restoring spec, and selecting again. Dispatched
+			// rollouts are never cancelled here; submission evidence wins.
+			if catalogRejectionActive(c) {
+				if result.TargetSource == targetSourceAutomatic {
+					return r.writeWaitingForVersionCatalog(ctx, c, result)
+				}
+				// Customer intent stays terminal so the upgrade controller and
+				// version resolution agree: re-approval would otherwise alternate
+				// with version resolution's terminal rejection.
+				return r.block(ctx, c, preparationFailureReason, "The release could not be prepared before dispatch; release settings can be corrected", true)
+			}
+			if result.TargetSource == targetSourceAutomatic {
+				return r.cancelAutomaticPreparation(ctx, c, preparationFailureReason, "The automatic release could not be prepared before dispatch")
+			}
+			return r.block(ctx, c, preparationFailureReason, "The release could not be prepared before dispatch; release settings can be corrected", true)
+		}
 	}
 	healthy, _, _ := healthOK(c.Status.Conditions, hc.ObservedConditions, false)
 	if hc.Version == result.TargetVersion && healthy && !meta.IsStatusConditionTrue(hc.ObservedConditions, "ClusterVersionProgressing") {
@@ -286,23 +300,27 @@ func (r *Reconciler) cancelAutomaticPreparation(ctx context.Context, c *privatev
 		newCondition(conditionDegraded, metav1.ConditionTrue, failureReason, result.FailureMessage))
 }
 
-// waitForVersionCatalog keeps an approved automatic target while version
-// resolution waits for the catalog. The wait can outlast the rules that
-// authorized the upgrade, so they are revalidated on every retry: if health or
-// maintenance no longer permits the rollout, the upgrade is cancelled and any
-// later attempt is a fresh approval that passes every check again.
-func (r *Reconciler) waitForVersionCatalog(ctx context.Context, c *privatev1.Cluster, result *privatev1.ControlPlaneUpgradeResult, hc *privatev1.HostedClusterResult) (reconcile.Result, error) {
+// automaticAuthorizationHolds reports whether the rules that authorize an
+// automatic upgrade still permit it: cluster health and the maintenance
+// window (unless a critical override applies).
+func (r *Reconciler) automaticAuthorizationHolds(c *privatev1.Cluster, result *privatev1.ControlPlaneUpgradeResult, hc *privatev1.HostedClusterResult) (bool, string, string) {
 	current, _ := utilversion.ParseSemantic(hc.Version)
 	selected, _ := utilversion.ParseSemantic(result.TargetVersion)
 	isYStream := current.Major() != selected.Major() || current.Minor() != selected.Minor()
 	if ok, reason, message := healthOK(c.Status.Conditions, hc.ObservedConditions, isYStream); !ok {
-		return r.cancelAutomaticPreparation(ctx, c, reason, message)
+		return false, reason, message
 	}
 	if override, _, _ := overrideCondition(c, result.TargetVersion, hc.Version); !override {
 		if permitted, reason, message, _ := maintenancePermitted(c, r.now()); !permitted {
-			return r.cancelAutomaticPreparation(ctx, c, reason, message)
+			return false, reason, message
 		}
 	}
+	return true, "", ""
+}
+
+// writeWaitingForVersionCatalog keeps an approved automatic target while
+// version resolution waits for the catalog.
+func (r *Reconciler) writeWaitingForVersionCatalog(ctx context.Context, c *privatev1.Cluster, result *privatev1.ControlPlaneUpgradeResult) (reconcile.Result, error) {
 	message := "The approved target is waiting for catalog synchronization"
 	return r.writeStatus(ctx, c, result, requeuePending,
 		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, "UpgradeAccepted", "The automatic release is approved for rollout"),

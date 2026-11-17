@@ -142,3 +142,73 @@ func TestCatalogRejectionAndRecoverySequence(t *testing.T) {
 	require.True(t, privatev1.ClusterUpgradeActive(rolled))
 	require.Equal(t, "catalog-image", rolled.Status.VersionResolution.ReleaseImage)
 }
+
+func TestReconcile_CatalogRecoveryAfterWindowCloseDoesNotProceed(t *testing.T) {
+	start := time.Now().UTC().Truncate(time.Second).Add(-time.Minute)
+	cluster := readyCluster("4.23.8", []string{"4.23.9"})
+	cluster.Spec.Maintenance = &privatev1.ClusterMaintenanceSpec{Window: &privatev1.ControlPlaneMaintenanceWindow{
+		StartTime: metav1.NewTime(start), DurationSeconds: 1200,
+		Recurrence: privatev1.ControlPlaneMaintenanceRecurrence{Frequency: "weekly", DaysOfWeek: []string{strings.ToLower(start.Weekday().String())}},
+	}}
+	r, store := buildReconciler(t, cluster)
+	r.now = func() time.Time { return start }
+	store.persistUpdates = true
+	for range 2 {
+		_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+	}
+	require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version)
+
+	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
+		Type: "VersionResolved", Status: metav1.ConditionFalse, Reason: "VersionNotFoundInCatalog",
+		ObservedGeneration: store.cluster.Generation})
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Equal(t, "WaitingForVersionCatalog", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionProgressing).Reason)
+
+	// Version resolution recovers first, after the window has closed. The old
+	// approval must not let the rollout proceed without re-authorization.
+	recovered := NewReconciler(store, testLogger(t))
+	recovered.now = func() time.Time { return start.Add(30 * time.Minute) }
+	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
+		Type: "VersionResolved", Status: metav1.ConditionTrue, Reason: "VersionResolved",
+		ObservedGeneration: store.cluster.Generation})
+	_, err = recovered.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.True(t, privatev1.ClusterAutomaticReleaseCanceling(store.cluster),
+		"catalog recovery after the window closed must cancel, not proceed")
+	_, err = recovered.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.False(t, privatev1.ClusterUpgradeActive(store.cluster))
+	require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+}
+
+func TestReconcile_CustomerCatalogRejectionStaysTerminal(t *testing.T) {
+	cluster := readyCluster("4.23.8", []string{"4.23.9"})
+	cluster.Spec.Release.Version = "4.23.9"
+	r, store := buildReconciler(t, cluster)
+	store.persistUpdates = true
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.True(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted))
+
+	// Version resolution terminally rejects the customer target.
+	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
+		Type: "VersionResolved", Status: metav1.ConditionFalse, Reason: "VersionNotFoundInCatalog",
+		ObservedGeneration: store.cluster.Generation})
+	_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.False(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted))
+	require.Equal(t, "PreparationFailed", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionDegraded).Reason)
+
+	// Repeated reconciles must not alternate approval with the terminal
+	// version-resolution rejection.
+	for range 3 {
+		r = NewReconciler(store, testLogger(t))
+		_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+		require.False(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted),
+			"customer catalog rejection must stay terminal until the spec changes")
+		require.Equal(t, "PreparationFailed", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionDegraded).Reason)
+	}
+}
