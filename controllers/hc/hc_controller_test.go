@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1513,4 +1514,79 @@ func TestReconcile_AutomaticPreparationDoesNotDispatchTarget(t *testing.T) {
 		require.NotContains(t, string(manifest), "4.23.9")
 	}
 	require.Nil(t, meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted), "maintaining the old release must not mark the new target as dispatched")
+}
+
+func TestReconcile_AutomaticDispatchChecksEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name                                                      string
+		source                                                    string
+		open, degraded, criticalPin, staleReceipt, feedbackActive bool
+		submitted                                                 metav1.ConditionStatus
+		statusErr                                                 error
+		wantErr                                                   bool
+		wantStatus                                                metav1.ConditionStatus
+		wantReason                                                string
+		wantApplies                                               int
+	}{
+		{name: "closed automatic window", source: "automatic", wantStatus: metav1.ConditionFalse, wantReason: "OutsideMaintenanceWindow"},
+		{name: "open automatic window", source: "automatic", open: true, wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
+		{name: "degraded cluster", source: "automatic", open: true, degraded: true, wantStatus: metav1.ConditionFalse, wantReason: "HostedClusterDegraded"},
+		{name: "critical patch override", source: "automatic", criticalPin: true, wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
+		{name: "critical override still requires health", source: "automatic", criticalPin: true, degraded: true, wantStatus: metav1.ConditionFalse, wantReason: "HostedClusterDegraded"},
+		{name: "customer bypasses maintenance", source: "customer", wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
+		{name: "uncertain dispatch retries", source: "automatic", submitted: metav1.ConditionUnknown, wantStatus: metav1.ConditionTrue, wantReason: "Dispatched", wantApplies: 1},
+		{name: "acknowledged dispatch retries", source: "automatic", submitted: metav1.ConditionTrue, wantStatus: metav1.ConditionTrue, wantReason: "Dispatched", wantApplies: 1},
+		{name: "old receipt does not bypass maintenance", source: "automatic", submitted: metav1.ConditionUnknown, staleReceipt: true, wantStatus: metav1.ConditionFalse, wantReason: "OutsideMaintenanceWindow"},
+		{name: "feedback proves existing dispatch", source: "automatic", feedbackActive: true, wantStatus: metav1.ConditionUnknown, wantReason: "Dispatching"},
+		{name: "blocked status conflict", source: "automatic", statusErr: conflictErr(), wantStatus: metav1.ConditionFalse, wantReason: "OutsideMaintenanceWindow"},
+		{name: "blocked status write fails", source: "automatic", statusErr: fmt.Errorf("status unavailable"), wantErr: true, wantStatus: metav1.ConditionFalse, wantReason: "OutsideMaintenanceWindow"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := buildReadyCluster("cluster-abc", "4.23.9")
+			cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{
+				Version: "4.23.8", DesiredVersion: "4.23.8",
+				ObservedConditions: []metav1.Condition{{Type: "HostedClusterDegraded", Status: metav1.ConditionFalse}},
+			}
+			if tc.degraded {
+				cluster.Status.HostedClusterResult.ObservedConditions[0].Status = metav1.ConditionTrue
+			}
+			if tc.feedbackActive {
+				cluster.Status.HostedClusterResult.DesiredVersion = "4.23.9"
+			}
+			cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "4.23.9", TargetSource: tc.source}
+			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: "HostedClusterAvailable", Status: metav1.ConditionTrue})
+			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, ObservedGeneration: cluster.Generation})
+			if tc.submitted != "" {
+				generation := cluster.Generation
+				if tc.staleReceipt {
+					generation--
+				}
+				meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeSubmitted, Status: tc.submitted, Reason: "Dispatched", ObservedGeneration: generation})
+			}
+			start := time.Now().UTC().Truncate(time.Second).Add(-2 * time.Hour)
+			if tc.open {
+				start = time.Now().UTC().Truncate(time.Second).Add(-30 * time.Minute)
+			}
+			cluster.Spec.Maintenance = &privatev1.ClusterMaintenanceSpec{Window: &privatev1.ControlPlaneMaintenanceWindow{
+				StartTime: metav1.NewTime(start), DurationSeconds: 3600,
+				Recurrence: privatev1.ControlPlaneMaintenanceRecurrence{Frequency: "weekly", DaysOfWeek: []string{strings.ToLower(start.Weekday().String())}},
+			}}
+			if tc.criticalPin {
+				cluster.Spec.Maintenance.CriticalUpgrade = "4.23.9"
+			}
+			tr := mock.New()
+			r, store := buildReconciler(t, cluster, nil, tr, tc.statusErr)
+			_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Len(t, tr.ApplyCalls, tc.wantApplies)
+			condition := meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted)
+			require.NotNil(t, condition)
+			require.Equal(t, tc.wantStatus, condition.Status)
+			require.Equal(t, tc.wantReason, condition.Reason)
+		})
+	}
 }

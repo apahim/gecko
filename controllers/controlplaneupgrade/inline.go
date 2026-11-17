@@ -8,6 +8,7 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/util/catalog"
 	channelutil "github.com/openshift-online/gecko/controllers/util/channel"
+	"github.com/openshift-online/gecko/controllers/util/upgradepolicy"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -200,18 +201,18 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 	hc := c.Status.HostedClusterResult
 	if hc.Version != result.TargetVersion && !privatev1.ClusterUpgradeSubmissionStarted(c) {
 		// The authorization that approved an automatic upgrade must still hold
-		// when installation can proceed. This check is durable: it runs on every
-		// reconcile before dispatch, so catalog recovery after a window closes or
-		// health degrades cannot continue an upgrade with a stale approval.
+		// while preparation is pending. The installer independently checks the
+		// same policy when persisting the dispatch boundary, so this decision does
+		// not depend on which controller reconciles first.
 		if result.TargetSource == targetSourceAutomatic {
-			if ok, reason, message := r.automaticAuthorizationHolds(c, result, hc); !ok {
+			if ok, reason, message := upgradepolicy.AutomaticAuthorizationHolds(c, r.now()); !ok {
 				return r.cancelAutomaticPreparation(ctx, c, reason, message)
 			}
 		}
 		if preparationFailureActive(c) {
 			// A catalog rejection is transient: keep the approved target and wait
-			// rather than cancelling, restoring spec, and selecting again. Dispatched
-			// rollouts are never cancelled here; submission evidence wins.
+			// rather than canceling, restoring spec, and selecting again. Dispatched
+			// rollouts are never canceled here; submission evidence wins.
 			if catalogRejectionActive(c) {
 				if result.TargetSource == targetSourceAutomatic {
 					return r.writeWaitingForVersionCatalog(ctx, c, result)
@@ -298,24 +299,6 @@ func (r *Reconciler) cancelAutomaticPreparation(ctx context.Context, c *privatev
 		newCondition(privatev1.ControlPlaneUpgradeAccepted, metav1.ConditionTrue, privatev1.ControlPlaneUpgradeCancelingReason, "Restoring the observed release before unlocking automatic intent"),
 		newCondition(conditionProgressing, metav1.ConditionFalse, failureReason, result.FailureMessage),
 		newCondition(conditionDegraded, metav1.ConditionTrue, failureReason, result.FailureMessage))
-}
-
-// automaticAuthorizationHolds reports whether the rules that authorize an
-// automatic upgrade still permit it: cluster health and the maintenance
-// window (unless a critical override applies).
-func (r *Reconciler) automaticAuthorizationHolds(c *privatev1.Cluster, result *privatev1.ControlPlaneUpgradeResult, hc *privatev1.HostedClusterResult) (bool, string, string) {
-	current, _ := utilversion.ParseSemantic(hc.Version)
-	selected, _ := utilversion.ParseSemantic(result.TargetVersion)
-	isYStream := current.Major() != selected.Major() || current.Minor() != selected.Minor()
-	if ok, reason, message := healthOK(c.Status.Conditions, hc.ObservedConditions, isYStream); !ok {
-		return false, reason, message
-	}
-	if override, _, _ := overrideCondition(c, result.TargetVersion, hc.Version); !override {
-		if permitted, reason, message, _ := maintenancePermitted(c, r.now()); !permitted {
-			return false, reason, message
-		}
-	}
-	return true, "", ""
 }
 
 // writeWaitingForVersionCatalog keeps an approved automatic target while

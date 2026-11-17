@@ -1296,7 +1296,7 @@ func TestReconcile_CatalogRejectionWaitsWithoutCancelling(t *testing.T) {
 	}
 	require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version)
 
-	// A catalog rejection must keep the approved target instead of cancelling.
+	// A catalog rejection must keep the approved target instead of canceling.
 	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
 		Type: "VersionResolved", Status: metav1.ConditionFalse, Reason: "VersionNotFoundInCatalog",
 		ObservedGeneration: store.cluster.Generation})

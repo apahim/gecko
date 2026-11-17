@@ -47,6 +47,14 @@ the unsubmitted platform-selected target cannot later be mistaken for manual int
 completion. Recovery after a dispatched, failed upgrade requires operational
 intervention; changing the desired release is not an implicit rollback.
 
+The installer rechecks automatic-upgrade health and maintenance timing before
+persisting the dispatch boundary. Both controllers use the same policy, so a
+catalog repair cannot bypass a closed window when the installer reconciles
+first. A denied dispatch records `ControlPlaneUpgradeSubmitted=False`; uncertain
+or acknowledged dispatch retains its retry protection even after a window closes.
+Waiting for version resolution changes `ResourcesApplied` readiness while
+preserving the availability last observed from the running HostedCluster.
+
 `WithAdmissionGate` is the internal integration point for future progressive
 rollout capacity. A denied gate retains normalized customer intent in spec and reports
 `WaitingForUpgradeCapacity`. The default permits upgrades: this change does not

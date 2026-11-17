@@ -3,8 +3,10 @@ package hc
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
+	"github.com/openshift-online/gecko/controllers/util/upgradepolicy"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,6 +38,22 @@ func (r *Reconciler) applyResources(ctx context.Context, c *privatev1.Cluster, m
 	submitted := meta.FindStatusCondition(c.Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted)
 	accepted := meta.FindStatusCondition(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted)
 	if submitted == nil || submitted.Status == metav1.ConditionFalse || submitted.ObservedGeneration < accepted.ObservedGeneration {
+		// The installer owns the dispatch boundary. Check automatic eligibility
+		// here even if upgrade reconciliation has not yet observed catalog repair
+		// or a closed window. Existing uncertain dispatch must keep retrying.
+		if result := c.Status.ControlPlaneUpgrade; result != nil && result.TargetSource == "automatic" && !privatev1.ClusterUpgradeSubmissionStarted(c) {
+			if allowed, reason, message := upgradepolicy.AutomaticAuthorizationHolds(c, time.Now()); !allowed {
+				if meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
+					Type: privatev1.ControlPlaneUpgradeSubmitted, Status: metav1.ConditionFalse,
+					Reason: reason, Message: message, ObservedGeneration: c.Generation,
+				}) {
+					if err := r.client.Status().Update(ctx, c); err != nil && !apierrors.IsConflict(err) {
+						return nil, fmt.Errorf("record blocked dispatch: %w", err)
+					}
+				}
+				return &transport.Status{Stale: true}, nil
+			}
+		}
 		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
 			Type: privatev1.ControlPlaneUpgradeSubmitted, Status: metav1.ConditionUnknown,
 			Reason: "Dispatching", Message: "The approved release is being dispatched", ObservedGeneration: c.Generation,

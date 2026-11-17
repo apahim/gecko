@@ -70,8 +70,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// must change to start a new attempt. Automatic upgrade targets are selected
 	// from HostedCluster AvailableUpdates, so their rejection reflects transient
 	// catalog state and is retried until the catalog catches up.
-	if catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) &&
-		!automaticUpgradeTarget(&cluster, version) {
+	if terminalCatalogRejection(&cluster, version) {
 		return reconcile.Result{}, nil
 	}
 
@@ -169,8 +168,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
 }
 
-// buildChannel constructs the Cincinnati channel name from a version string and channel group.
-// e.g. "4.22.0-ec.4" + "stable" → "stable-4.22"
+// terminalCatalogRejection preserves customer rejection until a new spec attempt
+// while allowing the selected automatic target to recover from catalog lag.
+func terminalCatalogRejection(cluster *privatev1.Cluster, version string) bool {
+	return catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) &&
+		!automaticUpgradeTarget(cluster, version)
+}
+
 // automaticUpgradeTarget reports whether version is a pending automatic
 // upgrade target. Automatic targets are selected from HostedCluster
 // AvailableUpdates, so a catalog rejection reflects transient catalog state
@@ -181,6 +185,8 @@ func automaticUpgradeTarget(cluster *privatev1.Cluster, version string) bool {
 		result.TargetVersion == version && result.CompletedTime == nil
 }
 
+// buildChannel constructs the Cincinnati channel name from a version string and channel group.
+// e.g. "4.22.0-ec.4" + "stable" → "stable-4.22"
 func buildChannel(version, channelGroup string) (string, error) {
 	parts := strings.Split(version, ".")
 	if len(parts) < 2 {

@@ -7,6 +7,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/openshift-online/gecko/controllers/client/transport/mock"
+	"github.com/openshift-online/gecko/controllers/hc"
+	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/setup"
 	versionresolution "github.com/openshift-online/gecko/controllers/versionresolution"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -211,4 +214,95 @@ func TestReconcile_CustomerCatalogRejectionStaysTerminal(t *testing.T) {
 			"customer catalog rejection must stay terminal until the spec changes")
 		require.Equal(t, "PreparationFailed", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionDegraded).Reason)
 	}
+}
+
+func TestCatalogRecovery_InstallerFirstAfterWindowClosesDoesNotDispatch(t *testing.T) {
+	start := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	cluster := readyCluster("4.23.8", []string{"4.23.9"})
+	cluster.UID = "550e8400-e29b-41d4-a716-446655440000"
+	cluster.Finalizers = []string{constants.FinalizerCluster}
+	cluster.Spec.Platform = privatev1.ClusterPlatformSpec{Type: "GCP", GCP: &privatev1.GCPClusterPlatform{ProjectID: "project", Region: "us-central1", Network: "network", Subnet: "subnet"}}
+	cluster.Status.PlacementResult = &privatev1.PlacementResult{ManagementClusterName: "management", BaseDomain: "example.com"}
+	cluster.Spec.Maintenance = &privatev1.ClusterMaintenanceSpec{Window: &privatev1.ControlPlaneMaintenanceWindow{
+		StartTime: metav1.NewTime(start), DurationSeconds: 1200,
+		Recurrence: privatev1.ControlPlaneMaintenanceRecurrence{Frequency: "weekly", DaysOfWeek: []string{strings.ToLower(start.Weekday().String())}},
+	}}
+	release := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: "4.23.9"}, Spec: privatev1.VersionSpec{ReleaseImage: "new-target-image", ChannelGroups: []string{"stable"}}}
+	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithStatusSubresource(cluster).WithObjects(cluster, release).Build()
+	upgrade := NewReconciler(apiClient, testLogger(t))
+	upgrade.now = func() time.Time { return start }
+	resolver := versionresolution.NewReconciler(testLogger(t), apiClient)
+	for range 2 {
+		_, err := upgrade.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+	}
+	require.NoError(t, apiClient.Delete(t.Context(), release))
+	_, err := resolver.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	_, err = upgrade.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.NoError(t, apiClient.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
+	require.Equal(t, "WaitingForVersionCatalog", meta.FindStatusCondition(cluster.Status.Conditions, conditionProgressing).Reason)
+	permitted, _, _, _ := maintenancePermitted(cluster, time.Now().UTC())
+	require.False(t, permitted, "fixture must have a closed window at actual dispatch time")
+	release.ResourceVersion = ""
+	require.NoError(t, apiClient.Create(t.Context(), release))
+	_, err = resolver.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	tr := mock.New()
+	installer := hc.New(tr, testLogger(t), apiClient, nil, "", "")
+	for range 2 {
+		_, err = installer.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+	}
+	upgrade.now = func() time.Time { return start.Add(time.Hour) }
+	_, err = upgrade.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.NoError(t, apiClient.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
+	require.Zero(t, len(tr.ApplyCalls),
+		"installer-first ordering must not dispatch after the window closes; submitted=%v", meta.FindStatusCondition(cluster.Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted))
+}
+
+func TestCatalogRecovery_PendingResolutionDoesNotCancelHealthyUpgrade(t *testing.T) {
+	cluster := readyCluster("4.23.8", []string{"4.23.9"})
+	cluster.UID = "550e8400-e29b-41d4-a716-446655440000"
+	cluster.Finalizers = []string{constants.FinalizerCluster}
+	cluster.Spec.Platform = privatev1.ClusterPlatformSpec{Type: "GCP", GCP: &privatev1.GCPClusterPlatform{ProjectID: "project", Region: "us-central1", Network: "network", Subnet: "subnet"}}
+	cluster.Status.PlacementResult = &privatev1.PlacementResult{ManagementClusterName: "management", BaseDomain: "example.com"}
+	cluster.Status.VersionResolution = &privatev1.VersionResolutionResult{ReleaseVersion: "4.23.8", ReleaseImage: "old-image", ChannelGroup: "stable", CincinnatiChannel: "stable-4.23"}
+	release := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: "4.23.9"}, Spec: privatev1.VersionSpec{ReleaseImage: "new-image", ChannelGroups: []string{"stable"}}}
+	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithStatusSubresource(cluster).WithObjects(cluster, release).Build()
+	upgrade := NewReconciler(apiClient, testLogger(t))
+	for range 2 {
+		_, err := upgrade.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+	}
+	tr := mock.New()
+	installer := hc.New(tr, testLogger(t), apiClient, nil, "", "")
+	_, err := installer.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls)
+	require.NoError(t, apiClient.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
+	require.Equal(t, "VersionMismatch", meta.FindStatusCondition(cluster.Status.Conditions, "ResourcesApplied").Reason)
+	require.True(t, meta.IsStatusConditionTrue(cluster.Status.Conditions, "HostedClusterAvailable"),
+		"a preparation wait must preserve the observed HostedCluster availability")
+	_, err = upgrade.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.NoError(t, apiClient.Get(t.Context(), client.ObjectKeyFromObject(cluster), cluster))
+	require.False(t, privatev1.ClusterAutomaticReleaseCanceling(cluster),
+		"waiting for the selected version to resolve is expected preparation, not observed cluster health degradation")
+
+	resolver := versionresolution.NewReconciler(testLogger(t), apiClient)
+	_, err = resolver.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	for range 2 {
+		_, err = installer.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+	}
+	require.Len(t, tr.ApplyCalls, 1, "the healthy automatic upgrade must proceed once resolution is ready")
+	hasTarget := false
+	for _, manifest := range tr.ApplyCalls[0].Manifests {
+		hasTarget = hasTarget || strings.Contains(string(manifest), "new-image")
+	}
+	require.True(t, hasTarget, "the approved target image must be dispatched")
 }

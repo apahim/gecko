@@ -339,8 +339,9 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 	return reconcile.Result{}, nil
 }
 
-// setWaitingConditions sets ResourcesApplied and HostedClusterAvailable to Unknown.
-// Returns true if either condition changed.
+// setWaitingConditions records preparation readiness without overwriting the
+// availability of an already observed HostedCluster. Initial installation has no
+// observed availability yet, so it remains Unknown until feedback arrives.
 func (r *Reconciler) setWaitingConditions(cluster *privatev1.Cluster, reason, message string) bool {
 	gen := cluster.Generation
 	a := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
@@ -350,6 +351,9 @@ func (r *Reconciler) setWaitingConditions(cluster *privatev1.Cluster, reason, me
 		Message:            message,
 		ObservedGeneration: gen,
 	})
+	if hc := cluster.Status.HostedClusterResult; hc != nil && hc.Version != "" {
+		return a
+	}
 	b := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "HostedClusterAvailable",
 		Status:             metav1.ConditionUnknown,
