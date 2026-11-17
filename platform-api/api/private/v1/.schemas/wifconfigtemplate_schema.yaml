@@ -1,0 +1,294 @@
+description: WIFConfigTemplate describes an immutable installation IAM contract.
+properties:
+  apiVersion:
+    description: |-
+      APIVersion defines the versioned schema of this representation of an object.
+      Servers should convert recognized schemas to the latest internal value, and
+      may reject unrecognized values.
+      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    type: string
+  kind:
+    description: |-
+      Kind is a string value representing the REST resource this object represents.
+      Servers may infer this from the endpoint the client submits requests to.
+      Cannot be updated.
+      In CamelCase.
+      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    type: string
+  metadata:
+    type: object
+  spec:
+    description: spec contains the IAM contract and its publication eligibility.
+    properties:
+      iam:
+        description: iam contains the immutable identities, naming rules and grants.
+        properties:
+          naming:
+            description: naming defines deterministic installation-owned resource
+              names.
+            properties:
+              customRoleIDTemplate:
+                description: customRoleIDTemplate uses the supported infraIDHex and
+                  role placeholders.
+                maxLength: 128
+                type: string
+              maxCustomRoleIDLength:
+                description: maxCustomRoleIDLength bounds rendered custom role identifiers.
+                format: int32
+                maximum: 64
+                minimum: 1
+                type: integer
+              maxInfraIDLength:
+                description: maxInfraIDLength bounds the installation identifier.
+                format: int32
+                maximum: 12
+                minimum: 1
+                type: integer
+              maxServiceAccountIDLength:
+                description: maxServiceAccountIDLength bounds rendered service account
+                  identifiers.
+                format: int32
+                maximum: 30
+                minimum: 6
+                type: integer
+              maxWorkloadIdentityIDLength:
+                description: maxWorkloadIdentityIDLength bounds rendered pool and
+                  provider identifiers.
+                format: int32
+                maximum: 32
+                minimum: 4
+                type: integer
+              workloadIdentityPoolIDTemplate:
+                description: workloadIdentityPoolIDTemplate uses the supported infraID
+                  placeholder.
+                maxLength: 128
+                type: string
+              workloadIdentityProviderIDTemplate:
+                description: workloadIdentityProviderIDTemplate uses the supported
+                  infraID placeholder.
+                maxLength: 128
+                type: string
+            required:
+            - customRoleIDTemplate
+            - maxCustomRoleIDLength
+            - maxInfraIDLength
+            - maxServiceAccountIDLength
+            - maxWorkloadIdentityIDLength
+            - workloadIdentityPoolIDTemplate
+            - workloadIdentityProviderIDTemplate
+            type: object
+          requiredComponents:
+            description: requiredComponents enumerates the complete component identity
+              set.
+            items:
+              maxLength: 32
+              type: string
+            maxItems: 6
+            minItems: 6
+            type: array
+            x-kubernetes-list-type: set
+          roleBindings:
+            description: roleBindings grants custom roles at project scope.
+            items:
+              description: WIFConfigRoleBinding grants a custom role to one component.
+              properties:
+                roleRef:
+                  description: roleRef references a logical custom role.
+                  maxLength: 32
+                  type: string
+                scope:
+                  description: scope restricts this grant to the customer project.
+                  properties:
+                    kind:
+                      description: kind identifies project scope.
+                      enum:
+                      - Project
+                      maxLength: 7
+                      type: string
+                  required:
+                  - kind
+                  type: object
+                serviceAccountRef:
+                  description: serviceAccountRef references a component account.
+                  maxLength: 32
+                  type: string
+              required:
+              - roleRef
+              - scope
+              - serviceAccountRef
+              type: object
+            maxItems: 128
+            minItems: 1
+            type: array
+            x-kubernetes-list-type: atomic
+          roles:
+            description: roles defines installation-owned custom-role permissions.
+            items:
+              description: WIFConfigRole defines one logical custom role.
+              properties:
+                name:
+                  description: name is the logical role identifier, not a customer
+                    project role name.
+                  maxLength: 32
+                  type: string
+                permissions:
+                  description: permissions is the exact set of GCP permissions to
+                    grant.
+                  items:
+                    maxLength: 128
+                    type: string
+                  maxItems: 512
+                  minItems: 1
+                  type: array
+                  x-kubernetes-list-type: set
+              required:
+              - name
+              - permissions
+              type: object
+            maxItems: 32
+            minItems: 1
+            type: array
+            x-kubernetes-list-map-keys:
+            - name
+            x-kubernetes-list-type: map
+          serviceAccountRoleBindings:
+            description: serviceAccountRoleBindings grants actAs on the exact installation
+              worker account.
+            items:
+              description: WIFConfigServiceAccountRoleBinding defines an exact-worker-SA
+                grant.
+              properties:
+                memberServiceAccountRefs:
+                  description: memberServiceAccountRefs lists the components granted
+                    actAs.
+                  items:
+                    maxLength: 32
+                    type: string
+                  maxItems: 6
+                  minItems: 1
+                  type: array
+                  x-kubernetes-list-type: set
+                role:
+                  description: role must be the standard service account user role.
+                  enum:
+                  - roles/iam.serviceAccountUser
+                  maxLength: 28
+                  type: string
+                scope:
+                  description: scope identifies the exact worker account.
+                  properties:
+                    kind:
+                      description: kind identifies service-account scope rather than
+                        project-wide actAs.
+                      enum:
+                      - ServiceAccount
+                      maxLength: 14
+                      type: string
+                    reference:
+                      description: reference selects the exact worker service account
+                        supplied at installation.
+                      enum:
+                      - WorkerServiceAccount
+                      maxLength: 20
+                      type: string
+                  required:
+                  - kind
+                  - reference
+                  type: object
+              required:
+              - memberServiceAccountRefs
+              - role
+              - scope
+              type: object
+            maxItems: 8
+            minItems: 1
+            type: array
+            x-kubernetes-list-type: atomic
+          serviceAccounts:
+            description: serviceAccounts defines component accounts and guest federation
+              subjects.
+            items:
+              description: WIFConfigServiceAccount defines one component identity.
+              properties:
+                accountIDTemplate:
+                  description: accountIDTemplate defines its installation-owned account
+                    ID.
+                  maxLength: 128
+                  type: string
+                name:
+                  description: name identifies this component within the contract.
+                  maxLength: 32
+                  type: string
+                workloadIdentitySubjects:
+                  description: workloadIdentitySubjects lists exact guest Kubernetes
+                    service-account subjects.
+                  items:
+                    maxLength: 256
+                    type: string
+                  maxItems: 16
+                  minItems: 1
+                  type: array
+                  x-kubernetes-list-type: set
+              required:
+              - accountIDTemplate
+              - name
+              - workloadIdentitySubjects
+              type: object
+            maxItems: 6
+            minItems: 6
+            type: array
+            x-kubernetes-list-map-keys:
+            - name
+            x-kubernetes-list-type: map
+          workloadIdentityBindings:
+            description: workloadIdentityBindings defines guest federation access
+              to component accounts.
+            properties:
+              role:
+                description: role must be the standard workload identity user role.
+                enum:
+                - roles/iam.workloadIdentityUser
+                maxLength: 30
+                type: string
+              serviceAccountRefs:
+                description: serviceAccountRefs identifies all federated component
+                  accounts.
+                items:
+                  maxLength: 32
+                  type: string
+                maxItems: 6
+                minItems: 6
+                type: array
+                x-kubernetes-list-type: set
+            required:
+            - role
+            - serviceAccountRefs
+            type: object
+        required:
+        - naming
+        - requiredComponents
+        - roleBindings
+        - roles
+        - serviceAccountRoleBindings
+        - serviceAccounts
+        - workloadIdentityBindings
+        type: object
+      schemaVersion:
+        description: schemaVersion identifies the executable IAM protocol, independently
+          of the API envelope.
+        format: int32
+        maximum: 1
+        minimum: 1
+        type: integer
+      verified:
+        description: |-
+          verified permits new use when explicitly set to true. Omission means false.
+          Changing verification does not change the IAM contract digest.
+        type: boolean
+    required:
+    - iam
+    - schemaVersion
+    type: object
+required:
+- spec
+type: object

@@ -1,0 +1,18 @@
+{{- if .Values.wifConfigTemplates.enabled }}
+{{- $contract := required "IAM contract file must be present" (.Files.Get "files/wifconfigtemplate-project.yaml") | fromYaml }}
+{{- range .Values.wifConfigTemplates.entries }}
+---
+apiVersion: gcp.managed.openshift.io/v1
+kind: WIFConfigTemplate
+metadata:
+  name: {{ required "wifConfigTemplates.entries[].name is required" .name | quote }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Prune=false,Delete=false
+spec:
+  verified: {{ .verified | default false }}
+  schemaVersion: {{ $contract.schemaVersion }}
+  iam:
+{{ $contract.iam | toYaml | indent 4 }}
+{{- end }}
+{{- end }}

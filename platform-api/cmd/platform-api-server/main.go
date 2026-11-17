@@ -35,19 +35,20 @@ import (
 
 func main() {
 	var (
-		address         string
-		publicAddress   string
-		privatePort     int
-		publicPort      int
-		corsOrigins     string
-		enablePublic    bool
-		tlsCertFile     string
-		tlsKeyFile      string
-		authnKubeconfig string
-		authzKubeconfig string
-		disableAuth     bool
-		devAuth         bool
-		migrateOnly     bool
+		address              string
+		publicAddress        string
+		privatePort          int
+		publicPort           int
+		corsOrigins          string
+		enablePublic         bool
+		tlsCertFile          string
+		tlsKeyFile           string
+		authnKubeconfig      string
+		authzKubeconfig      string
+		disableAuth          bool
+		devAuth              bool
+		migrateOnly          bool
+		allowIAMApplications bool
 	)
 
 	flag.StringVar(&address, "address", "0.0.0.0", "address to bind to")
@@ -63,6 +64,7 @@ func main() {
 	flag.BoolVar(&disableAuth, "disable-auth", false, "disable authentication/authorization (for testing/local dev)")
 	flag.BoolVar(&devAuth, "dev-auth", false, "accept X-Dev-User for public API authentication (local development only)")
 	flag.BoolVar(&migrateOnly, "migrate-only", false, "run Spanner DDL migrations and exit (for PreSync Jobs)")
+	flag.BoolVar(&allowIAMApplications, "enable-iam-application-writes", false, "allow new IAM application assertions after compatible API and controllers are deployed")
 	flag.Parse()
 
 	logger := stdr.New(nil)
@@ -200,10 +202,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create NodePool upgrade validator: %v", err)
 	}
+	templateLookup, err := newWIFConfigTemplateLookup(storageFactory, privateScheme)
+	if err != nil {
+		log.Fatalf("Failed to create IAM catalog validator: %v", err)
+	}
 	privatev1.SetValidatorDeps(privatev1.ValidatorDeps{
-		RoleExists:              stores.RoleExists,
-		PlatformRoleExists:      stores.PlatformRoleExists,
-		ValidateNodePoolUpgrade: upgradeValidator.Validate,
+		RoleExists:                stores.RoleExists,
+		PlatformRoleExists:        stores.PlatformRoleExists,
+		ValidateNodePoolUpgrade:   upgradeValidator.Validate,
+		WIFConfigTemplate:         templateLookup,
+		AllowIAMApplicationWrites: allowIAMApplications,
 	})
 
 	publicResources := getPublicResources()

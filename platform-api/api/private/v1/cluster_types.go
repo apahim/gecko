@@ -199,6 +199,11 @@ type GCPClusterPlatform struct {
 	// +required
 	WorkloadIdentity WorkloadIdentitySpec `json:"workloadIdentity"`
 
+	// iam binds customer-asserted IAM application history to the installation.
+	// +orlop:public
+	// +optional
+	IAM *ClusterIAMSpec `json:"iam,omitempty"`
+
 	// resourceLabels are applied to all GCP resources created for the cluster.
 	// Labels are key-value pairs used for organizing and managing GCP resources.
 	// Changes to this field will be propagated in-place to GCP resources where supported.

@@ -220,7 +220,12 @@ func (h *ResourceHandler) processPatchedObject(w http.ResponseWriter, r *http.Re
 		// If object is being deleted and all finalizers are removed, perform hard delete
 		if len(patchedAccessor.GetFinalizers()) == 0 {
 			// Run delete validation before removing
-			if v, ok := clientObj.(types.CustomValidator); ok {
+			typed, err := conversion.TypedOldObject(h.scheme, h.gvk, clientObj)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to decode object for delete validation")
+				return
+			}
+			if v, ok := typed.(types.CustomValidator); ok {
 				if err := v.ValidateDelete(r.Context()); err != nil {
 					writeError(w, http.StatusBadRequest, fmt.Sprintf("delete validation failed: %v", err))
 					return

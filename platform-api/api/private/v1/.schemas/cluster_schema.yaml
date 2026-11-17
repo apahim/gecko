@@ -307,6 +307,54 @@ properties:
                 - PublicAndPrivate
                 - Private
                 type: string
+              iam:
+                description: iam binds customer-asserted IAM application history to
+                  the installation.
+                properties:
+                  templateApplications:
+                    description: |-
+                      templateApplications records exact contracts asserted applied by the customer.
+                      Records are immutable and append-only; this is not independent cloud attestation.
+                    items:
+                      description: WIFConfigTemplateReference pins both resource identity
+                        and executable content.
+                      properties:
+                        digest:
+                          description: digest is the SHA-256 of the canonical schemaVersion
+                            and IAM contract.
+                          maxLength: 71
+                          pattern: ^sha256:[0-9a-f]{64}$
+                          type: string
+                        name:
+                          description: name is the canonical release boundary of the
+                            template.
+                          maxLength: 32
+                          type: string
+                        uid:
+                          description: uid identifies the exact retained template
+                            resource.
+                          maxLength: 128
+                          type: string
+                      required:
+                      - digest
+                      - name
+                      - uid
+                      type: object
+                    maxItems: 128
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  workerServiceAccount:
+                    description: workerServiceAccount is the exact default Compute
+                      service-account email.
+                    maxLength: 254
+                    type: string
+                required:
+                - templateApplications
+                - workerServiceAccount
+                type: object
               network:
                 description: network is the VPC network name.
                 maxLength: 63

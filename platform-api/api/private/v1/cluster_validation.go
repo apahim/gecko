@@ -35,18 +35,24 @@ func (c *Cluster) Default(_ context.Context) error {
 }
 
 // ValidateCreate validates Cluster creation.
-func (c *Cluster) ValidateCreate(_ context.Context) error {
+func (c *Cluster) ValidateCreate(ctx context.Context) error {
 	if c.Spec.SafeName != DefaultSafeName(c.Name, c.UID) {
 		return fmt.Errorf("spec.safeName must be the default safe name for metadata.name")
+	}
+	if err := c.validateIAM(ctx, nil); err != nil {
+		return err
 	}
 	return c.validateMaintenanceConfig(true)
 }
 
 // ValidateUpdate validates Cluster updates.
-func (c *Cluster) ValidateUpdate(_ context.Context, oldObj runtime.Object) error {
+func (c *Cluster) ValidateUpdate(ctx context.Context, oldObj runtime.Object) error {
 	oldCluster, ok := oldObj.(*Cluster)
 	if !ok {
 		return fmt.Errorf("expected old object to be *Cluster, got %T", oldObj)
+	}
+	if err := c.validateIAM(ctx, oldCluster); err != nil {
+		return err
 	}
 	// Previously accepted timing configurations must not block unrelated spec
 	// changes or controller status writes. Public updates have already applied

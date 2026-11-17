@@ -42,6 +42,7 @@ const DefaultPrivatePrefix = "private.orlop.gcp.managed.openshift.io/"
 //
 // To make a new condition public, add its type string to the appropriate Kind.
 var publicConditionTypes = map[string]sets.Set[string]{
+	"Version": sets.New[string]("Available"),
 	"Cluster": sets.New[string](
 		"HostedClusterAvailable",
 		"ControlPlaneUpgradeAvailable",

@@ -1,0 +1,249 @@
+description: WIFConfigTemplate describes an immutable installation IAM contract.
+properties:
+  apiVersion:
+    description: |-
+      APIVersion defines the versioned schema of this representation of an object.
+      Servers should convert recognized schemas to the latest internal value, and
+      may reject unrecognized values.
+      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    type: string
+  kind:
+    description: |-
+      Kind is a string value representing the REST resource this object represents.
+      Servers may infer this from the endpoint the client submits requests to.
+      Cannot be updated.
+      In CamelCase.
+      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    type: string
+  metadata:
+    type: object
+  spec:
+    description: WIFConfigTemplateSpec defines a versioned contract and mutable eligibility.
+    properties:
+      iam:
+        description: WIFConfigIAM defines project-scoped component IAM and exact-worker-SA
+          actAs.
+        properties:
+          naming:
+            description: WIFConfigNaming bounds deterministic naming without truncation.
+            properties:
+              customRoleIDTemplate:
+                maxLength: 128
+                type: string
+              maxCustomRoleIDLength:
+                format: int32
+                maximum: 64
+                minimum: 1
+                type: integer
+              maxInfraIDLength:
+                format: int32
+                maximum: 12
+                minimum: 1
+                type: integer
+              maxServiceAccountIDLength:
+                format: int32
+                maximum: 30
+                minimum: 6
+                type: integer
+              maxWorkloadIdentityIDLength:
+                format: int32
+                maximum: 32
+                minimum: 4
+                type: integer
+              workloadIdentityPoolIDTemplate:
+                maxLength: 128
+                type: string
+              workloadIdentityProviderIDTemplate:
+                maxLength: 128
+                type: string
+            required:
+            - customRoleIDTemplate
+            - maxCustomRoleIDLength
+            - maxInfraIDLength
+            - maxServiceAccountIDLength
+            - maxWorkloadIdentityIDLength
+            - workloadIdentityPoolIDTemplate
+            - workloadIdentityProviderIDTemplate
+            type: object
+          requiredComponents:
+            items:
+              maxLength: 32
+              type: string
+            maxItems: 6
+            minItems: 6
+            type: array
+            x-kubernetes-list-type: set
+          roleBindings:
+            items:
+              description: WIFConfigRoleBinding grants a custom role to one component.
+              properties:
+                roleRef:
+                  maxLength: 32
+                  type: string
+                scope:
+                  description: WIFConfigProjectScope restricts custom-role grants
+                    to the installation project.
+                  properties:
+                    kind:
+                      enum:
+                      - Project
+                      maxLength: 7
+                      type: string
+                  required:
+                  - kind
+                  type: object
+                serviceAccountRef:
+                  maxLength: 32
+                  type: string
+              required:
+              - roleRef
+              - scope
+              - serviceAccountRef
+              type: object
+            maxItems: 128
+            minItems: 1
+            type: array
+            x-kubernetes-list-type: atomic
+          roles:
+            items:
+              description: WIFConfigRole defines one logical custom role.
+              properties:
+                name:
+                  maxLength: 32
+                  type: string
+                permissions:
+                  items:
+                    maxLength: 128
+                    type: string
+                  maxItems: 512
+                  minItems: 1
+                  type: array
+                  x-kubernetes-list-type: set
+              required:
+              - name
+              - permissions
+              type: object
+            maxItems: 32
+            minItems: 1
+            type: array
+            x-kubernetes-list-map-keys:
+            - name
+            x-kubernetes-list-type: map
+          serviceAccountRoleBindings:
+            items:
+              description: WIFConfigServiceAccountRoleBinding defines an exact-worker-SA
+                grant.
+              properties:
+                memberServiceAccountRefs:
+                  items:
+                    maxLength: 32
+                    type: string
+                  maxItems: 6
+                  minItems: 1
+                  type: array
+                  x-kubernetes-list-type: set
+                role:
+                  enum:
+                  - roles/iam.serviceAccountUser
+                  maxLength: 28
+                  type: string
+                scope:
+                  description: WIFConfigWorkerScope identifies the single exact worker
+                    account installation input.
+                  properties:
+                    kind:
+                      enum:
+                      - ServiceAccount
+                      maxLength: 14
+                      type: string
+                    reference:
+                      enum:
+                      - WorkerServiceAccount
+                      maxLength: 20
+                      type: string
+                  required:
+                  - kind
+                  - reference
+                  type: object
+              required:
+              - memberServiceAccountRefs
+              - role
+              - scope
+              type: object
+            maxItems: 8
+            minItems: 1
+            type: array
+            x-kubernetes-list-type: atomic
+          serviceAccounts:
+            items:
+              description: WIFConfigServiceAccount defines one component identity.
+              properties:
+                accountIDTemplate:
+                  maxLength: 128
+                  type: string
+                name:
+                  maxLength: 32
+                  type: string
+                workloadIdentitySubjects:
+                  items:
+                    maxLength: 256
+                    type: string
+                  maxItems: 16
+                  minItems: 1
+                  type: array
+                  x-kubernetes-list-type: set
+              required:
+              - accountIDTemplate
+              - name
+              - workloadIdentitySubjects
+              type: object
+            maxItems: 6
+            minItems: 6
+            type: array
+            x-kubernetes-list-map-keys:
+            - name
+            x-kubernetes-list-type: map
+          workloadIdentityBindings:
+            description: WIFConfigWorkloadIdentityBindings specifies guest federation
+              grants.
+            properties:
+              role:
+                enum:
+                - roles/iam.workloadIdentityUser
+                maxLength: 30
+                type: string
+              serviceAccountRefs:
+                items:
+                  maxLength: 32
+                  type: string
+                maxItems: 6
+                minItems: 6
+                type: array
+                x-kubernetes-list-type: set
+            required:
+            - role
+            - serviceAccountRefs
+            type: object
+        required:
+        - naming
+        - requiredComponents
+        - roleBindings
+        - roles
+        - serviceAccountRoleBindings
+        - serviceAccounts
+        - workloadIdentityBindings
+        type: object
+      schemaVersion:
+        format: int32
+        maximum: 1
+        minimum: 1
+        type: integer
+      verified:
+        type: boolean
+    required:
+    - iam
+    - schemaVersion
+    type: object
+required:
+- spec
+type: object

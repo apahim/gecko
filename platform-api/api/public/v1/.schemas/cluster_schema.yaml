@@ -203,6 +203,43 @@ properties:
                 - PublicAndPrivate
                 - Private
                 type: string
+              iam:
+                description: ClusterIAMSpec binds application history to one immutable
+                  worker identity.
+                properties:
+                  templateApplications:
+                    items:
+                      description: WIFConfigTemplateReference pins both resource identity
+                        and executable content.
+                      properties:
+                        digest:
+                          maxLength: 71
+                          pattern: ^sha256:[0-9a-f]{64}$
+                          type: string
+                        name:
+                          maxLength: 32
+                          type: string
+                        uid:
+                          maxLength: 128
+                          type: string
+                      required:
+                      - digest
+                      - name
+                      - uid
+                      type: object
+                    maxItems: 128
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  workerServiceAccount:
+                    maxLength: 254
+                    type: string
+                required:
+                - templateApplications
+                - workerServiceAccount
+                type: object
               network:
                 maxLength: 63
                 minLength: 1

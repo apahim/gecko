@@ -95,6 +95,16 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.ClusterIAMSpec)(nil), (*ClusterIAMSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ClusterIAMSpec_PrivateToPublic(a.(*privatev1.ClusterIAMSpec), b.(*ClusterIAMSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ClusterIAMSpec)(nil), (*privatev1.ClusterIAMSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_ClusterIAMSpec_PublicToPrivate(a.(*ClusterIAMSpec), b.(*privatev1.ClusterIAMSpec), scope)
+	}); err != nil {
+		return err
+	}
 	if err := s.AddGeneratedConversionFunc((*privatev1.ClusterList)(nil), (*ClusterList)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_ClusterList_PrivateToPublic(a.(*privatev1.ClusterList), b.(*ClusterList), scope)
 	}); err != nil {
@@ -485,6 +495,146 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.VersionStatus)(nil), (*VersionStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_VersionStatus_PrivateToPublic(a.(*privatev1.VersionStatus), b.(*VersionStatus), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*VersionStatus)(nil), (*privatev1.VersionStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_VersionStatus_PublicToPrivate(a.(*VersionStatus), b.(*privatev1.VersionStatus), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigIAM)(nil), (*WIFConfigIAM)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigIAM_PrivateToPublic(a.(*privatev1.WIFConfigIAM), b.(*WIFConfigIAM), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigIAM)(nil), (*privatev1.WIFConfigIAM)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigIAM_PublicToPrivate(a.(*WIFConfigIAM), b.(*privatev1.WIFConfigIAM), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigNaming)(nil), (*WIFConfigNaming)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigNaming_PrivateToPublic(a.(*privatev1.WIFConfigNaming), b.(*WIFConfigNaming), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigNaming)(nil), (*privatev1.WIFConfigNaming)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigNaming_PublicToPrivate(a.(*WIFConfigNaming), b.(*privatev1.WIFConfigNaming), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigProjectScope)(nil), (*WIFConfigProjectScope)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigProjectScope_PrivateToPublic(a.(*privatev1.WIFConfigProjectScope), b.(*WIFConfigProjectScope), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigProjectScope)(nil), (*privatev1.WIFConfigProjectScope)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigProjectScope_PublicToPrivate(a.(*WIFConfigProjectScope), b.(*privatev1.WIFConfigProjectScope), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigRole)(nil), (*WIFConfigRole)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigRole_PrivateToPublic(a.(*privatev1.WIFConfigRole), b.(*WIFConfigRole), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigRole)(nil), (*privatev1.WIFConfigRole)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigRole_PublicToPrivate(a.(*WIFConfigRole), b.(*privatev1.WIFConfigRole), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigRoleBinding)(nil), (*WIFConfigRoleBinding)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigRoleBinding_PrivateToPublic(a.(*privatev1.WIFConfigRoleBinding), b.(*WIFConfigRoleBinding), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigRoleBinding)(nil), (*privatev1.WIFConfigRoleBinding)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigRoleBinding_PublicToPrivate(a.(*WIFConfigRoleBinding), b.(*privatev1.WIFConfigRoleBinding), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigServiceAccount)(nil), (*WIFConfigServiceAccount)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigServiceAccount_PrivateToPublic(a.(*privatev1.WIFConfigServiceAccount), b.(*WIFConfigServiceAccount), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigServiceAccount)(nil), (*privatev1.WIFConfigServiceAccount)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigServiceAccount_PublicToPrivate(a.(*WIFConfigServiceAccount), b.(*privatev1.WIFConfigServiceAccount), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigServiceAccountRoleBinding)(nil), (*WIFConfigServiceAccountRoleBinding)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigServiceAccountRoleBinding_PrivateToPublic(a.(*privatev1.WIFConfigServiceAccountRoleBinding), b.(*WIFConfigServiceAccountRoleBinding), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigServiceAccountRoleBinding)(nil), (*privatev1.WIFConfigServiceAccountRoleBinding)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigServiceAccountRoleBinding_PublicToPrivate(a.(*WIFConfigServiceAccountRoleBinding), b.(*privatev1.WIFConfigServiceAccountRoleBinding), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigTemplate)(nil), (*WIFConfigTemplate)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigTemplate_PrivateToPublic(a.(*privatev1.WIFConfigTemplate), b.(*WIFConfigTemplate), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigTemplate)(nil), (*privatev1.WIFConfigTemplate)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigTemplate_PublicToPrivate(a.(*WIFConfigTemplate), b.(*privatev1.WIFConfigTemplate), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigTemplateList)(nil), (*WIFConfigTemplateList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigTemplateList_PrivateToPublic(a.(*privatev1.WIFConfigTemplateList), b.(*WIFConfigTemplateList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigTemplateList)(nil), (*privatev1.WIFConfigTemplateList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigTemplateList_PublicToPrivate(a.(*WIFConfigTemplateList), b.(*privatev1.WIFConfigTemplateList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigTemplateReference)(nil), (*WIFConfigTemplateReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigTemplateReference_PrivateToPublic(a.(*privatev1.WIFConfigTemplateReference), b.(*WIFConfigTemplateReference), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigTemplateReference)(nil), (*privatev1.WIFConfigTemplateReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigTemplateReference_PublicToPrivate(a.(*WIFConfigTemplateReference), b.(*privatev1.WIFConfigTemplateReference), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigTemplateSpec)(nil), (*WIFConfigTemplateSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigTemplateSpec_PrivateToPublic(a.(*privatev1.WIFConfigTemplateSpec), b.(*WIFConfigTemplateSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigTemplateSpec)(nil), (*privatev1.WIFConfigTemplateSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigTemplateSpec_PublicToPrivate(a.(*WIFConfigTemplateSpec), b.(*privatev1.WIFConfigTemplateSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigWorkerScope)(nil), (*WIFConfigWorkerScope)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigWorkerScope_PrivateToPublic(a.(*privatev1.WIFConfigWorkerScope), b.(*WIFConfigWorkerScope), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigWorkerScope)(nil), (*privatev1.WIFConfigWorkerScope)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigWorkerScope_PublicToPrivate(a.(*WIFConfigWorkerScope), b.(*privatev1.WIFConfigWorkerScope), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*privatev1.WIFConfigWorkloadIdentityBindings)(nil), (*WIFConfigWorkloadIdentityBindings)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigWorkloadIdentityBindings_PrivateToPublic(a.(*privatev1.WIFConfigWorkloadIdentityBindings), b.(*WIFConfigWorkloadIdentityBindings), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*WIFConfigWorkloadIdentityBindings)(nil), (*privatev1.WIFConfigWorkloadIdentityBindings)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_WIFConfigWorkloadIdentityBindings_PublicToPrivate(a.(*WIFConfigWorkloadIdentityBindings), b.(*privatev1.WIFConfigWorkloadIdentityBindings), scope)
+	}); err != nil {
+		return err
+	}
 	if err := s.AddGeneratedConversionFunc((*privatev1.WorkloadIdentitySpec)(nil), (*WorkloadIdentitySpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_WorkloadIdentitySpec_PrivateToPublic(a.(*privatev1.WorkloadIdentitySpec), b.(*WorkloadIdentitySpec), scope)
 	}); err != nil {
@@ -652,6 +802,32 @@ func autoConvert_Cluster_PublicToPrivate(in *Cluster, out *privatev1.Cluster, s 
 // Convert_Cluster_PublicToPrivate is an autogenerated conversion function.
 func Convert_Cluster_PublicToPrivate(in *Cluster, out *privatev1.Cluster, s conversion.Scope) error {
 	return autoConvert_Cluster_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_ClusterIAMSpec_PrivateToPublic(in *privatev1.ClusterIAMSpec, out *ClusterIAMSpec, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ClusterIAMSpec_PrivateToPublic is an autogenerated conversion function.
+func Convert_ClusterIAMSpec_PrivateToPublic(in *privatev1.ClusterIAMSpec, out *ClusterIAMSpec, s conversion.Scope) error {
+	return autoConvert_ClusterIAMSpec_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_ClusterIAMSpec_PublicToPrivate(in *ClusterIAMSpec, out *privatev1.ClusterIAMSpec, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_ClusterIAMSpec_PublicToPrivate is an autogenerated conversion function.
+func Convert_ClusterIAMSpec_PublicToPrivate(in *ClusterIAMSpec, out *privatev1.ClusterIAMSpec, s conversion.Scope) error {
+	return autoConvert_ClusterIAMSpec_PublicToPrivate(in, out, s)
 }
 
 func autoConvert_ClusterList_PrivateToPublic(in *privatev1.ClusterList, out *ClusterList, s conversion.Scope) error {
@@ -1666,6 +1842,370 @@ func autoConvert_VersionSpec_PublicToPrivate(in *VersionSpec, out *privatev1.Ver
 // Convert_VersionSpec_PublicToPrivate is an autogenerated conversion function.
 func Convert_VersionSpec_PublicToPrivate(in *VersionSpec, out *privatev1.VersionSpec, s conversion.Scope) error {
 	return autoConvert_VersionSpec_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_VersionStatus_PrivateToPublic(in *privatev1.VersionStatus, out *VersionStatus, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_VersionStatus_PrivateToPublic is an autogenerated conversion function.
+func Convert_VersionStatus_PrivateToPublic(in *privatev1.VersionStatus, out *VersionStatus, s conversion.Scope) error {
+	return autoConvert_VersionStatus_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_VersionStatus_PublicToPrivate(in *VersionStatus, out *privatev1.VersionStatus, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_VersionStatus_PublicToPrivate is an autogenerated conversion function.
+func Convert_VersionStatus_PublicToPrivate(in *VersionStatus, out *privatev1.VersionStatus, s conversion.Scope) error {
+	return autoConvert_VersionStatus_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigIAM_PrivateToPublic(in *privatev1.WIFConfigIAM, out *WIFConfigIAM, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigIAM_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigIAM_PrivateToPublic(in *privatev1.WIFConfigIAM, out *WIFConfigIAM, s conversion.Scope) error {
+	return autoConvert_WIFConfigIAM_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigIAM_PublicToPrivate(in *WIFConfigIAM, out *privatev1.WIFConfigIAM, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigIAM_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigIAM_PublicToPrivate(in *WIFConfigIAM, out *privatev1.WIFConfigIAM, s conversion.Scope) error {
+	return autoConvert_WIFConfigIAM_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigNaming_PrivateToPublic(in *privatev1.WIFConfigNaming, out *WIFConfigNaming, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigNaming_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigNaming_PrivateToPublic(in *privatev1.WIFConfigNaming, out *WIFConfigNaming, s conversion.Scope) error {
+	return autoConvert_WIFConfigNaming_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigNaming_PublicToPrivate(in *WIFConfigNaming, out *privatev1.WIFConfigNaming, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigNaming_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigNaming_PublicToPrivate(in *WIFConfigNaming, out *privatev1.WIFConfigNaming, s conversion.Scope) error {
+	return autoConvert_WIFConfigNaming_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigProjectScope_PrivateToPublic(in *privatev1.WIFConfigProjectScope, out *WIFConfigProjectScope, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigProjectScope_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigProjectScope_PrivateToPublic(in *privatev1.WIFConfigProjectScope, out *WIFConfigProjectScope, s conversion.Scope) error {
+	return autoConvert_WIFConfigProjectScope_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigProjectScope_PublicToPrivate(in *WIFConfigProjectScope, out *privatev1.WIFConfigProjectScope, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigProjectScope_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigProjectScope_PublicToPrivate(in *WIFConfigProjectScope, out *privatev1.WIFConfigProjectScope, s conversion.Scope) error {
+	return autoConvert_WIFConfigProjectScope_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigRole_PrivateToPublic(in *privatev1.WIFConfigRole, out *WIFConfigRole, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigRole_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigRole_PrivateToPublic(in *privatev1.WIFConfigRole, out *WIFConfigRole, s conversion.Scope) error {
+	return autoConvert_WIFConfigRole_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigRole_PublicToPrivate(in *WIFConfigRole, out *privatev1.WIFConfigRole, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigRole_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigRole_PublicToPrivate(in *WIFConfigRole, out *privatev1.WIFConfigRole, s conversion.Scope) error {
+	return autoConvert_WIFConfigRole_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigRoleBinding_PrivateToPublic(in *privatev1.WIFConfigRoleBinding, out *WIFConfigRoleBinding, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigRoleBinding_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigRoleBinding_PrivateToPublic(in *privatev1.WIFConfigRoleBinding, out *WIFConfigRoleBinding, s conversion.Scope) error {
+	return autoConvert_WIFConfigRoleBinding_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigRoleBinding_PublicToPrivate(in *WIFConfigRoleBinding, out *privatev1.WIFConfigRoleBinding, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigRoleBinding_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigRoleBinding_PublicToPrivate(in *WIFConfigRoleBinding, out *privatev1.WIFConfigRoleBinding, s conversion.Scope) error {
+	return autoConvert_WIFConfigRoleBinding_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigServiceAccount_PrivateToPublic(in *privatev1.WIFConfigServiceAccount, out *WIFConfigServiceAccount, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigServiceAccount_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigServiceAccount_PrivateToPublic(in *privatev1.WIFConfigServiceAccount, out *WIFConfigServiceAccount, s conversion.Scope) error {
+	return autoConvert_WIFConfigServiceAccount_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigServiceAccount_PublicToPrivate(in *WIFConfigServiceAccount, out *privatev1.WIFConfigServiceAccount, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigServiceAccount_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigServiceAccount_PublicToPrivate(in *WIFConfigServiceAccount, out *privatev1.WIFConfigServiceAccount, s conversion.Scope) error {
+	return autoConvert_WIFConfigServiceAccount_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigServiceAccountRoleBinding_PrivateToPublic(in *privatev1.WIFConfigServiceAccountRoleBinding, out *WIFConfigServiceAccountRoleBinding, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigServiceAccountRoleBinding_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigServiceAccountRoleBinding_PrivateToPublic(in *privatev1.WIFConfigServiceAccountRoleBinding, out *WIFConfigServiceAccountRoleBinding, s conversion.Scope) error {
+	return autoConvert_WIFConfigServiceAccountRoleBinding_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigServiceAccountRoleBinding_PublicToPrivate(in *WIFConfigServiceAccountRoleBinding, out *privatev1.WIFConfigServiceAccountRoleBinding, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigServiceAccountRoleBinding_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigServiceAccountRoleBinding_PublicToPrivate(in *WIFConfigServiceAccountRoleBinding, out *privatev1.WIFConfigServiceAccountRoleBinding, s conversion.Scope) error {
+	return autoConvert_WIFConfigServiceAccountRoleBinding_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigTemplate_PrivateToPublic(in *privatev1.WIFConfigTemplate, out *WIFConfigTemplate, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigTemplate_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigTemplate_PrivateToPublic(in *privatev1.WIFConfigTemplate, out *WIFConfigTemplate, s conversion.Scope) error {
+	return autoConvert_WIFConfigTemplate_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigTemplate_PublicToPrivate(in *WIFConfigTemplate, out *privatev1.WIFConfigTemplate, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigTemplate_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigTemplate_PublicToPrivate(in *WIFConfigTemplate, out *privatev1.WIFConfigTemplate, s conversion.Scope) error {
+	return autoConvert_WIFConfigTemplate_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigTemplateList_PrivateToPublic(in *privatev1.WIFConfigTemplateList, out *WIFConfigTemplateList, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigTemplateList_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigTemplateList_PrivateToPublic(in *privatev1.WIFConfigTemplateList, out *WIFConfigTemplateList, s conversion.Scope) error {
+	return autoConvert_WIFConfigTemplateList_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigTemplateList_PublicToPrivate(in *WIFConfigTemplateList, out *privatev1.WIFConfigTemplateList, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigTemplateList_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigTemplateList_PublicToPrivate(in *WIFConfigTemplateList, out *privatev1.WIFConfigTemplateList, s conversion.Scope) error {
+	return autoConvert_WIFConfigTemplateList_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigTemplateReference_PrivateToPublic(in *privatev1.WIFConfigTemplateReference, out *WIFConfigTemplateReference, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigTemplateReference_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigTemplateReference_PrivateToPublic(in *privatev1.WIFConfigTemplateReference, out *WIFConfigTemplateReference, s conversion.Scope) error {
+	return autoConvert_WIFConfigTemplateReference_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigTemplateReference_PublicToPrivate(in *WIFConfigTemplateReference, out *privatev1.WIFConfigTemplateReference, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigTemplateReference_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigTemplateReference_PublicToPrivate(in *WIFConfigTemplateReference, out *privatev1.WIFConfigTemplateReference, s conversion.Scope) error {
+	return autoConvert_WIFConfigTemplateReference_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigTemplateSpec_PrivateToPublic(in *privatev1.WIFConfigTemplateSpec, out *WIFConfigTemplateSpec, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigTemplateSpec_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigTemplateSpec_PrivateToPublic(in *privatev1.WIFConfigTemplateSpec, out *WIFConfigTemplateSpec, s conversion.Scope) error {
+	return autoConvert_WIFConfigTemplateSpec_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigTemplateSpec_PublicToPrivate(in *WIFConfigTemplateSpec, out *privatev1.WIFConfigTemplateSpec, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigTemplateSpec_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigTemplateSpec_PublicToPrivate(in *WIFConfigTemplateSpec, out *privatev1.WIFConfigTemplateSpec, s conversion.Scope) error {
+	return autoConvert_WIFConfigTemplateSpec_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigWorkerScope_PrivateToPublic(in *privatev1.WIFConfigWorkerScope, out *WIFConfigWorkerScope, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigWorkerScope_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigWorkerScope_PrivateToPublic(in *privatev1.WIFConfigWorkerScope, out *WIFConfigWorkerScope, s conversion.Scope) error {
+	return autoConvert_WIFConfigWorkerScope_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigWorkerScope_PublicToPrivate(in *WIFConfigWorkerScope, out *privatev1.WIFConfigWorkerScope, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigWorkerScope_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigWorkerScope_PublicToPrivate(in *WIFConfigWorkerScope, out *privatev1.WIFConfigWorkerScope, s conversion.Scope) error {
+	return autoConvert_WIFConfigWorkerScope_PublicToPrivate(in, out, s)
+}
+
+func autoConvert_WIFConfigWorkloadIdentityBindings_PrivateToPublic(in *privatev1.WIFConfigWorkloadIdentityBindings, out *WIFConfigWorkloadIdentityBindings, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigWorkloadIdentityBindings_PrivateToPublic is an autogenerated conversion function.
+func Convert_WIFConfigWorkloadIdentityBindings_PrivateToPublic(in *privatev1.WIFConfigWorkloadIdentityBindings, out *WIFConfigWorkloadIdentityBindings, s conversion.Scope) error {
+	return autoConvert_WIFConfigWorkloadIdentityBindings_PrivateToPublic(in, out, s)
+}
+
+func autoConvert_WIFConfigWorkloadIdentityBindings_PublicToPrivate(in *WIFConfigWorkloadIdentityBindings, out *privatev1.WIFConfigWorkloadIdentityBindings, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_WIFConfigWorkloadIdentityBindings_PublicToPrivate is an autogenerated conversion function.
+func Convert_WIFConfigWorkloadIdentityBindings_PublicToPrivate(in *WIFConfigWorkloadIdentityBindings, out *privatev1.WIFConfigWorkloadIdentityBindings, s conversion.Scope) error {
+	return autoConvert_WIFConfigWorkloadIdentityBindings_PublicToPrivate(in, out, s)
 }
 
 func autoConvert_WorkloadIdentitySpec_PrivateToPublic(in *privatev1.WorkloadIdentitySpec, out *WorkloadIdentitySpec, s conversion.Scope) error {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -26,6 +27,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+
+	"sigs.k8s.io/yaml"
 )
 
 func TestPublicAPICatalogAuthorizationExemptReads(t *testing.T) {
@@ -76,6 +80,7 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 	if err := channelStore.Create(context.Background(), channel); err != nil {
 		t.Fatalf("seed Channel: %v", err)
 	}
+	templateStore := seedPublicCatalogWIF(t, privateScheme)
 
 	roleGVK := privatev1.GroupVersion.WithKind("PlatformRole")
 	roleStore := memory.NewMemoryStore(apiserver.GroupKindResourceType(roleGVK.GroupKind()), privateScheme, roleGVK)
@@ -121,6 +126,8 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 				return versionStore, nil
 			case "Channel":
 				return channelStore, nil
+			case "WIFConfigTemplate":
+				return templateStore, nil
 			}
 			return memory.NewMemoryStore(resourceType, scheme, gvk), nil
 		},
@@ -153,7 +160,8 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 	})
 
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", publicPort)
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{}}
+	t.Cleanup(client.CloseIdleConnections)
 	waitForPublicAPITestServer(t, client, baseURL+"/apis", runDone, &runErr)
 
 	userInfo := platformAPITestUserInfo(t)
@@ -167,6 +175,7 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 		{name: "list versions", path: apiPrefix + "/versions"},
 		{name: "list channels", path: apiPrefix + "/channels"},
 		{name: "list platform roles", path: apiPrefix + "/platformroles"},
+		{name: "list IAM templates", path: apiPrefix + "/wifconfigtemplates"},
 	} {
 		t.Run(path.name, func(t *testing.T) {
 			if got, _ := request(http.MethodGet, path.path, true); got != http.StatusOK {
@@ -183,6 +192,7 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 		{name: "get version", path: apiPrefix + "/versions/4.22.1", wantContains: "4.22.1", wantAbsent: "releaseImage"},
 		{name: "get channel", path: apiPrefix + "/channels/stable", wantContains: "4.22.1"},
 		{name: "get platform role", path: apiPrefix + "/platformroles/catalog-reader", wantContains: "role.get"},
+		{name: "get IAM template", path: apiPrefix + "/wifconfigtemplates/5.0.0", wantContains: "compute.instances.get"},
 	} {
 		t.Run(path.name, func(t *testing.T) {
 			status, body := request(http.MethodGet, path.path, true)
@@ -222,6 +232,11 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 		{name: "unauthenticated catalog watch", method: http.MethodGet, path: apiPrefix + "/versions?watch=true", wantStatus: http.StatusUnauthorized},
 		{name: "authenticated catalog write", method: http.MethodPost, path: apiPrefix + "/versions", authenticated: true, wantStatus: http.StatusForbidden},
 		{name: "authenticated catalog watch", method: http.MethodGet, path: apiPrefix + "/versions?watch=true", authenticated: true, wantStatus: http.StatusForbidden},
+		{name: "unauthenticated IAM list", method: http.MethodGet, path: apiPrefix + "/wifconfigtemplates", wantStatus: http.StatusUnauthorized},
+		{name: "unauthenticated IAM get", method: http.MethodGet, path: apiPrefix + "/wifconfigtemplates/5.0.0", wantStatus: http.StatusUnauthorized},
+		{name: "authenticated IAM create", method: http.MethodPost, path: apiPrefix + "/wifconfigtemplates", authenticated: true, wantStatus: http.StatusForbidden},
+		{name: "authenticated IAM patch", method: http.MethodPatch, path: apiPrefix + "/wifconfigtemplates/5.0.0", authenticated: true, wantStatus: http.StatusForbidden},
+		{name: "authenticated IAM delete", method: http.MethodDelete, path: apiPrefix + "/wifconfigtemplates/5.0.0", authenticated: true, wantStatus: http.StatusForbidden},
 	}
 	for _, tt := range deniedRequests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -248,6 +263,24 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 		t.Errorf("public requests changed private permissions: %#v", stored)
 	}
 
+}
+
+func seedPublicCatalogWIF(t *testing.T, scheme *runtime.Scheme) *memory.MemoryStore {
+	t.Helper()
+	gvk := privatev1.GroupVersion.WithKind("WIFConfigTemplate")
+	store := memory.NewMemoryStore(apiserver.GroupKindResourceType(gvk.GroupKind()), scheme, gvk)
+	template := &privatev1.WIFConfigTemplate{TypeMeta: metav1.TypeMeta{APIVersion: privatev1.GroupVersion.String(), Kind: "WIFConfigTemplate"}, ObjectMeta: metav1.ObjectMeta{Name: "5.0.0", UID: types.UID("catalog-template")}}
+	contract, err := os.ReadFile("../../../helm/charts/platform-api-server/files/wifconfigtemplate-project.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.UnmarshalStrict(contract, &template.Spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(t.Context(), template); err != nil {
+		t.Fatal(err)
+	}
+	return store
 }
 
 func publicCatalogRequest(t *testing.T, client *http.Client, baseURL, userInfo string) func(string, string, bool) (int, string) {
