@@ -13,6 +13,10 @@ import (
 const (
 	ControlPlaneUpgradeAccepted  = "ControlPlaneUpgradeAccepted"
 	ControlPlaneUpgradeSubmitted = "ControlPlaneUpgradeSubmitted"
+	// TargetSourceAutomatic identifies a target selected by the upgrade controller.
+	TargetSourceAutomatic = "automatic"
+	// TargetSourceCustomer identifies a target explicitly requested by the customer.
+	TargetSourceCustomer = "customer"
 	// ControlPlaneUpgradePreparingReason reserves an automatic target before
 	// normalizing spec. Installers must wait for the final approval condition.
 	ControlPlaneUpgradePreparingReason = "PreparingAutomaticUpgrade"
@@ -89,7 +93,7 @@ func automaticReleasePhase(cluster *Cluster, reason string) bool {
 	accepted := meta.FindStatusCondition(cluster.Status.Conditions, ControlPlaneUpgradeAccepted)
 	result := cluster.Status.ControlPlaneUpgrade
 	return accepted != nil && accepted.Status == "True" && accepted.Reason == reason &&
-		result != nil && result.TargetSource == "automatic" && result.TargetVersion != ""
+		result != nil && result.TargetSource == TargetSourceAutomatic && result.TargetVersion != ""
 }
 
 // ClusterInstallationVersion keeps pending customer intent out of manifests.

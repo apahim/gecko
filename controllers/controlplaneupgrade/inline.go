@@ -117,7 +117,7 @@ func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, t
 	if ok, reason, message := healthOK(c.Status.Conditions, c.Status.HostedClusterResult.ObservedConditions, isYStream); !ok {
 		return r.block(ctx, c, reason, message, false)
 	}
-	if source == targetSourceAutomatic {
+	if source == privatev1.TargetSourceAutomatic {
 		if override, _, _ := overrideCondition(c, target, c.Status.HostedClusterResult.Version); !override {
 			if permitted, reason, message, _ := maintenancePermitted(c, r.now()); !permitted {
 				return r.block(ctx, c, reason, message, false)
@@ -142,7 +142,7 @@ func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, t
 	result.TargetSource = source
 	availableMessage := "The desired release is approved for rollout"
 	reason, availableReason, availableStatus, retry := "UpgradeAccepted", "UpgradeInProgress", metav1.ConditionFalse, requeueObserving
-	if source == targetSourceAutomatic {
+	if source == privatev1.TargetSourceAutomatic {
 		reason, availableReason, availableStatus, retry = privatev1.ControlPlaneUpgradePreparingReason, "UpdateSelected", metav1.ConditionTrue, requeueConflict
 		if override, overrideReason, overrideMessage := overrideCondition(c, target, c.Status.HostedClusterResult.Version); override {
 			availableReason, availableMessage = overrideReason, overrideMessage
@@ -195,7 +195,7 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 				(typ == "ResourcesApplied" && condition.Reason != "ManifestBuildFailed") {
 				continue
 			}
-			if result.TargetSource == targetSourceAutomatic {
+			if result.TargetSource == privatev1.TargetSourceAutomatic {
 				if typ == "VersionResolved" && catalog.ResolutionRejected(condition, c.Generation) {
 					continue
 				}
@@ -203,7 +203,7 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 			}
 			return r.block(ctx, c, preparationFailureReason, "The release could not be prepared before dispatch; release settings can be corrected", true)
 		}
-		if result.TargetSource == targetSourceAutomatic {
+		if result.TargetSource == privatev1.TargetSourceAutomatic {
 			if ok, reason, message := r.automaticUpgradePermitted(c); !ok {
 				return r.cancelAutomaticPreparation(ctx, c, reason, message)
 			}

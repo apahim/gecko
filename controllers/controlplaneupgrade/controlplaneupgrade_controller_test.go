@@ -426,7 +426,7 @@ func TestReconcile_NoMaintenanceWindow_AllowsZStreamUpgrade(t *testing.T) {
 	require.Equal(t, requeueConflict, result.RequeueAfter)
 	require.False(t, storeClient.updateCalled)
 	require.Equal(t, "4.15.1", storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetVersion)
-	require.Equal(t, targetSourceAutomatic, storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetSource)
+	require.Equal(t, privatev1.TargetSourceAutomatic, storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetSource)
 }
 
 func TestReconcile_VersionConflictRechecksCluster(t *testing.T) {
@@ -473,7 +473,7 @@ func TestReconcile_NoMaintenanceWindow_AllowsYStreamUpgrade(t *testing.T) {
 	require.Equal(t, requeueConflict, result.RequeueAfter)
 	require.False(t, storeClient.updateCalled)
 	require.Equal(t, "4.23.0-ec.1", storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetVersion)
-	require.Equal(t, targetSourceAutomatic, storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetSource)
+	require.Equal(t, privatev1.TargetSourceAutomatic, storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetSource)
 }
 
 func TestReconcile_NoMaintenanceWindow_StillRequiresHealthyHostedCluster(t *testing.T) {

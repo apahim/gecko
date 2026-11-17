@@ -21,16 +21,14 @@ import (
 )
 
 const (
-	adapterName           = "control-plane-upgrade-controller"
-	conditionAvailable    = "ControlPlaneUpgradeAvailable"
-	conditionProgressing  = "ControlPlaneUpgradeProgressing"
-	conditionDegraded     = "ControlPlaneUpgradeDegraded"
-	targetSourceAutomatic = "automatic"
-	targetSourceCustomer  = "customer"
-	requeuePending        = 15 * time.Second
-	requeueConflict       = time.Second
-	requeueObserving      = 30 * time.Second
-	requeueStable         = 5 * time.Minute
+	adapterName          = "control-plane-upgrade-controller"
+	conditionAvailable   = "ControlPlaneUpgradeAvailable"
+	conditionProgressing = "ControlPlaneUpgradeProgressing"
+	conditionDegraded    = "ControlPlaneUpgradeDegraded"
+	requeuePending       = 15 * time.Second
+	requeueConflict      = time.Second
+	requeueObserving     = 30 * time.Second
+	requeueStable        = 5 * time.Minute
 )
 
 // AdmissionGate is the integration boundary for progressive rollout admission.
@@ -101,7 +99,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if cluster.Spec.Release.Version != completed {
 		// Only automation may create its approval receipt before changing spec.
 		// A customer version change never inherits an old automatic selection.
-		return r.approveUpgrade(ctx, &cluster, cluster.Spec.Release.Version, targetSourceCustomer)
+		return r.approveUpgrade(ctx, &cluster, cluster.Spec.Release.Version, privatev1.TargetSourceCustomer)
 	}
 	return r.reconcileAutomatic(ctx, &cluster, result)
 }
@@ -220,7 +218,7 @@ func (r *Reconciler) reconcileAutomatic(ctx context.Context, cluster *privatev1.
 
 	// Automatic intent is approved before spec changes, so its source survives
 	// restarts without being inferred from a matching historical target.
-	return r.approveUpgrade(ctx, cluster, candidate, targetSourceAutomatic)
+	return r.approveUpgrade(ctx, cluster, candidate, privatev1.TargetSourceAutomatic)
 }
 
 func (r *Reconciler) writeMaintenanceBlocked(
@@ -322,7 +320,7 @@ func recordActiveTarget(previous *privatev1.ControlPlaneUpgradeResult, target st
 	now := metav1.Now()
 	return &privatev1.ControlPlaneUpgradeResult{
 		TargetVersion: target,
-		TargetSource:  targetSourceAutomatic,
+		TargetSource:  privatev1.TargetSourceAutomatic,
 		RequestedTime: &now,
 	}
 }

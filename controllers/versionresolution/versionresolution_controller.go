@@ -169,7 +169,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 // Customer-selected catalog rejections remain terminal for their generation.
 func catalogRetryAfter(cluster *privatev1.Cluster, version string) time.Duration {
 	result := cluster.Status.ControlPlaneUpgrade
-	if result != nil && result.TargetSource == "automatic" && result.TargetVersion == version && result.CompletedTime == nil {
+	if result != nil && result.TargetSource == privatev1.TargetSourceAutomatic && result.TargetVersion == version && result.CompletedTime == nil {
 		return requeueStable
 	}
 	return 0
