@@ -13,6 +13,7 @@ import (
 	"github.com/openshift-online/gecko/controllers/client/transport/mock"
 	installer "github.com/openshift-online/gecko/controllers/nodepool"
 	"github.com/openshift-online/gecko/controllers/nodepoolvrresolution"
+	"github.com/openshift-online/gecko/controllers/util/catalog/catalogtest"
 	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -42,6 +43,7 @@ func pipelineObjects() (*privatev1.NodePool, *privatev1.Cluster, *privatev1.Vers
 	cluster.Status.PlacementResult = &privatev1.PlacementResult{ManagementClusterName: "test-mc"}
 	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: "HostedClusterAvailable", Status: metav1.ConditionTrue, Reason: "AsExpected"})
 	release.Spec.ReleaseImage = "target-image"
+	catalogtest.CommittedPool(pool, cluster)
 	return pool, cluster, release
 }
 
@@ -196,6 +198,9 @@ func TestInitialVersionIsReportedThroughNormalInstallationFeedback(t *testing.T)
 	reconcilePool(t, r)
 	_, err = vr.Reconcile(t.Context(), poolRequest())
 	require.NoError(t, err)
+	_, err = install.Reconcile(t.Context(), poolRequest())
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "initial installation persists its IAM intent before Apply")
 	_, err = install.Reconcile(t.Context(), poolRequest())
 	require.NoError(t, err)
 	require.Equal(t, "target-image", appliedImage(t, tr))

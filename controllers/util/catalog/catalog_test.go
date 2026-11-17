@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/openshift-online/gecko/controllers/util/catalog/catalogtest"
 	"github.com/openshift-online/gecko/controllers/util/setup"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
@@ -20,10 +21,9 @@ import (
 )
 
 func TestResolve(t *testing.T) {
-	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithObjects(
-		&privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: "5.0.0-ec.6"},
-			Spec: privatev1.VersionSpec{ReleaseImage: "ci-image", ChannelGroups: []string{"nightly", "dev-preview"}}},
-	).Build()
+	v := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: "5.0.0-ec.6"}, Spec: privatev1.VersionSpec{ReleaseImage: "ci-image", ChannelGroups: []string{"nightly", "dev-preview"}}}
+	w := catalogtest.Ready(t, v)
+	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithObjects(v, w).Build()
 	for _, tc := range []struct {
 		name    string
 		version string
@@ -49,6 +49,49 @@ func TestResolve(t *testing.T) {
 			require.Empty(t, image)
 		})
 	}
+}
+
+func TestPrerequisitesFailClosedAndRecover(t *testing.T) {
+	v := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: "5.0.0"}, Spec: privatev1.VersionSpec{ReleaseImage: "image", ChannelGroups: []string{"stable"}}}
+	w := catalogtest.Ready(t, v)
+	c := &privatev1.Cluster{}
+	reader := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithStatusSubresource(&privatev1.Version{}).WithObjects(v, w).Build()
+	_, err := Prerequisites(t.Context(), reader, c, v.Name, "stable")
+	var blocked *UnavailableError
+	require.ErrorAs(t, err, &blocked)
+	require.Equal(t, privatev1.WIFConfigUpdateRequired, blocked.Reason)
+	catalogtest.Apply(c, v.Spec.WIFConfigTemplateRef)
+	_, err = Prerequisites(t.Context(), reader, c, v.Name, "stable")
+	require.NoError(t, err)
+	// Version status remains True: the current template read must close this race.
+	w.Spec.Verified = new(false)
+	require.NoError(t, reader.Update(t.Context(), w))
+	_, err = Prerequisites(t.Context(), reader, c, v.Name, "stable")
+	require.ErrorAs(t, err, &blocked)
+	require.Equal(t, privatev1.WIFTemplateUnverified, blocked.Reason)
+	w.Spec.Verified = new(true)
+	require.NoError(t, reader.Update(t.Context(), w))
+	_, err = Prerequisites(t.Context(), reader, c, v.Name, "stable")
+	require.NoError(t, err)
+	for _, status := range []metav1.ConditionStatus{metav1.ConditionFalse, metav1.ConditionUnknown} {
+		v.Status.Conditions[0].Status = status
+		require.NoError(t, reader.Status().Update(t.Context(), v))
+		_, err = Prerequisites(t.Context(), reader, c, v.Name, "stable")
+		require.ErrorAs(t, err, &blocked)
+		require.Equal(t, "VersionUnavailable", blocked.Reason)
+	}
+	v.Status.Conditions[0].Status = metav1.ConditionTrue
+	v.Status.Conditions[0].ObservedGeneration = v.Generation - 1
+	require.NoError(t, reader.Status().Update(t.Context(), v))
+	_, err = Prerequisites(t.Context(), reader, c, v.Name, "stable")
+	require.ErrorAs(t, err, &blocked)
+}
+
+func TestReadFailurePreservesCauseWithoutServerProse(t *testing.T) {
+	cause := errors.New("untrusted-server-details")
+	_, err := Resolve(t.Context(), failingReader{err: cause}, "5.0.0", "stable")
+	require.ErrorIs(t, err, cause)
+	require.NotContains(t, err.Error(), cause.Error())
 }
 
 type failingReader struct {

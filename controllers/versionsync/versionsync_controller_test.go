@@ -62,6 +62,8 @@ func (m *mockStoreClient) List(_ context.Context, list client.ObjectList, _ ...c
 	case *privatev1.ChannelList:
 		m.listedChannels = true
 		typedList.Items = append([]privatev1.Channel(nil), m.channels...)
+	case *privatev1.WIFConfigTemplateList:
+		typedList.Items = nil
 	default:
 		return fmt.Errorf("unexpected list type %T", list)
 	}
@@ -74,6 +76,7 @@ func (m *mockStoreClient) Create(_ context.Context, obj client.Object, _ ...clie
 		return fmt.Errorf("unexpected create type %T", obj)
 	}
 	m.created = append(m.created, version.DeepCopy())
+	m.versions = append(m.versions, *version.DeepCopy())
 	return nil
 }
 

@@ -9,19 +9,20 @@ import (
 
 func TestBuild_HappyPath(t *testing.T) {
 	input := Input{
-		NodePoolID:         "np-001",
-		NodePoolName:       "my-nodepool",
-		NodePoolGeneration: 3,
-		ClusterID:          "550e8400-e29b-41d4-a716-446655440000",
-		ClusterName:        "my-cluster-safe",
-		Replicas:           2,
-		MachineType:        "n2-standard-8",
-		GCPRegion:          "us-central1",
-		Zone:               "us-central1-b",
-		GCPSubnet:          "my-subnet",
-		DiskSizeGB:         200,
-		DiskType:           "pd-standard",
-		ReleaseImage:       "quay.io/openshift-release-dev/ocp-release:4.16.0-x86_64",
+		NodePoolID:           "np-001",
+		WorkerServiceAccount: "123456789-compute@developer.gserviceaccount.com",
+		NodePoolName:         "my-nodepool",
+		NodePoolGeneration:   3,
+		ClusterID:            "550e8400-e29b-41d4-a716-446655440000",
+		ClusterName:          "my-cluster-safe",
+		Replicas:             2,
+		MachineType:          "n2-standard-8",
+		GCPRegion:            "us-central1",
+		Zone:                 "us-central1-b",
+		GCPSubnet:            "my-subnet",
+		DiskSizeGB:           200,
+		DiskType:             "pd-standard",
+		ReleaseImage:         "quay.io/openshift-release-dev/ocp-release:4.16.0-x86_64",
 	}
 
 	manifests, err := Build(input)
@@ -64,6 +65,7 @@ func TestBuild_HappyPath(t *testing.T) {
 	require.Equal(t, "n2-standard-8", gcp["machineType"])
 	require.Equal(t, "us-central1-b", gcp["zone"])
 	require.Equal(t, "my-subnet", gcp["subnet"])
+	require.Equal(t, map[string]any{"email": input.WorkerServiceAccount}, gcp["serviceAccount"])
 	bootDisk := gcp["bootDisk"].(map[string]any)
 	require.EqualValues(t, 200, bootDisk["diskSizeGB"])
 	require.Equal(t, "pd-standard", bootDisk["diskType"])
@@ -71,14 +73,15 @@ func TestBuild_HappyPath(t *testing.T) {
 
 func TestBuild_ZoneFallback(t *testing.T) {
 	input := Input{
-		NodePoolID:         "np-002",
-		NodePoolName:       "np-fallback",
-		NodePoolGeneration: 1,
-		ClusterID:          "cluster-xyz",
-		ClusterName:        "cl",
-		GCPRegion:          "us-west1",
-		Zone:               "", // should fall back
-		ReleaseImage:       "quay.io/openshift-release-dev/ocp-release:4.16.0-x86_64",
+		NodePoolID:           "np-002",
+		WorkerServiceAccount: "123456789-compute@developer.gserviceaccount.com",
+		NodePoolName:         "np-fallback",
+		NodePoolGeneration:   1,
+		ClusterID:            "cluster-xyz",
+		ClusterName:          "cl",
+		GCPRegion:            "us-west1",
+		Zone:                 "", // should fall back
+		ReleaseImage:         "quay.io/openshift-release-dev/ocp-release:4.16.0-x86_64",
 	}
 
 	manifests, err := Build(input)
@@ -95,13 +98,14 @@ func TestBuild_ZoneFallback(t *testing.T) {
 
 func TestBuild_DiskDefaults(t *testing.T) {
 	input := Input{
-		NodePoolID:         "np-003",
-		NodePoolName:       "np-defaults",
-		NodePoolGeneration: 1,
-		ClusterID:          "cluster-def",
-		ClusterName:        "cl",
-		GCPRegion:          "us-east1",
-		ReleaseImage:       "quay.io/openshift-release-dev/ocp-release:4.16.0-x86_64",
+		NodePoolID:           "np-003",
+		WorkerServiceAccount: "123456789-compute@developer.gserviceaccount.com",
+		NodePoolName:         "np-defaults",
+		NodePoolGeneration:   1,
+		ClusterID:            "cluster-def",
+		ClusterName:          "cl",
+		GCPRegion:            "us-east1",
+		ReleaseImage:         "quay.io/openshift-release-dev/ocp-release:4.16.0-x86_64",
 		// DiskSizeGB, DiskType, MachineType intentionally zero/empty
 	}
 
@@ -123,16 +127,24 @@ func TestBuild_DiskDefaults(t *testing.T) {
 
 func TestBuild_ManifestCount(t *testing.T) {
 	input := Input{
-		NodePoolID:         "np-count",
-		NodePoolName:       "np-count",
-		NodePoolGeneration: 1,
-		ClusterID:          "cid",
-		ClusterName:        "cl",
-		GCPRegion:          "us-central1",
-		ReleaseImage:       "quay.io/openshift-release-dev/ocp-release:4.16.0-x86_64",
+		NodePoolID:           "np-count",
+		WorkerServiceAccount: "123456789-compute@developer.gserviceaccount.com",
+		NodePoolName:         "np-count",
+		NodePoolGeneration:   1,
+		ClusterID:            "cid",
+		ClusterName:          "cl",
+		GCPRegion:            "us-central1",
+		ReleaseImage:         "quay.io/openshift-release-dev/ocp-release:4.16.0-x86_64",
 	}
 
 	manifests, err := Build(input)
 	require.NoError(t, err)
 	require.Len(t, manifests, 1, "expected exactly 1 manifest (the NodePool CR)")
+}
+
+func TestBuildRequiresExplicitDefaultWorkerIdentity(t *testing.T) {
+	for _, email := range []string{"", "foreign@example.iam.gserviceaccount.com", "*-compute@developer.gserviceaccount.com"} {
+		_, err := Build(Input{WorkerServiceAccount: email})
+		require.Error(t, err)
+	}
 }

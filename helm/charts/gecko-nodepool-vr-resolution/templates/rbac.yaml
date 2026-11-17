@@ -6,6 +6,9 @@ metadata:
   labels:
     {{- include "gecko-nodepool-vr-resolution.labels" . | nindent 4 }}
 rules:
+  - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["wifconfigtemplates"]
+    verbs: ["get"]
   # The manager's cached Version reader needs list/watch to stay synchronized.
   # Version events do not enqueue resolution or revive catalog rejections.
   - apiGroups: ["gcp.managed.openshift.io"]

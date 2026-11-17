@@ -31,6 +31,9 @@ func (p *NodePool) ValidateUpdate(ctx context.Context, oldObj runtime.Object) er
 	if NodePoolUpgradeActive(old) {
 		return fmt.Errorf("spec.release cannot be changed while an accepted upgrade is active")
 	}
+	if old.Status.IAMDispatch != nil && old.Status.IAMDispatch.Pending != nil {
+		return fmt.Errorf("spec.release cannot change while a committed dispatch is pending; wait for the observed NodePool version")
+	}
 	if p.Spec.Release.UpgradeStartTime != nil && p.Spec.Release.UpgradeStartTime.IsZero() {
 		return fmt.Errorf("spec.release.upgradeStartTime must be a valid timestamp")
 	}
@@ -94,6 +97,9 @@ func NodePoolUpgradeActive(pool *NodePool) bool {
 // NodePoolUpgradeSubmissionStarted treats Unknown conservatively: the process
 // may have stopped after dispatch but before it recorded acknowledgement.
 func NodePoolUpgradeSubmissionStarted(pool *NodePool) bool {
+	if pool.Status.IAMDispatch != nil && pool.Status.IAMDispatch.Pending != nil {
+		return true
+	}
 	condition := meta.FindStatusCondition(pool.Status.Conditions, NodePoolUpgradeSubmitted)
 	return condition != nil && condition.Status != metav1.ConditionFalse
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/openshift-online/gecko/controllers/util/catalog/catalogtest"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	"github.com/openshift-online/gecko/controllers/util/setup"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -19,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -92,6 +94,16 @@ func (m *storeClient) Get(_ context.Context, key client.ObjectKey, obj client.Ob
 		}
 		m.version.DeepCopyInto(o)
 		return nil
+	case *privatev1.WIFConfigTemplate:
+		if m.version == nil {
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "wifconfigtemplates"}, key.Name)
+		}
+		w := catalogtest.MustReady(m.version.DeepCopy())
+		if w.Name != key.Name {
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "wifconfigtemplates"}, key.Name)
+		}
+		w.DeepCopyInto(o)
+		return nil
 	default:
 		return fmt.Errorf("unexpected type %T", obj)
 	}
@@ -146,6 +158,7 @@ func newTestLogger(t *testing.T) logger.Logger {
 func makeNP(clusterID, npID, version string) *privatev1.NodePool {
 	np := &privatev1.NodePool{}
 	np.SetName(npID)
+	np.SetUID(types.UID("test-pool-" + npID))
 	np.SetNamespace(clusterID)
 	np.Spec.ClusterID = clusterID
 	np.Spec.Release.Version = version
@@ -156,6 +169,7 @@ func makeNP(clusterID, npID, version string) *privatev1.NodePool {
 func makeCluster(id string) *privatev1.Cluster {
 	c := &privatev1.Cluster{}
 	c.SetName(id)
+	c.SetUID(types.UID("test-cluster-" + id))
 	c.SetNamespace("hyperfleet")
 	return c
 }
@@ -185,8 +199,10 @@ func npReq(clusterID, nodepoolID string) reconcile.Request {
 }
 
 func catalogVersion(version, image string, groups ...string) *privatev1.Version {
-	return &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: version},
+	v := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: version},
 		Spec: privatev1.VersionSpec{ReleaseImage: image, ChannelGroups: groups}}
+	catalogtest.MustReady(v)
+	return v
 }
 
 // conflictErr returns a Kubernetes 409 Conflict error.
@@ -265,13 +281,15 @@ func TestReconciler_VersionNotSet_StatusUpdateError(t *testing.T) {
 
 func TestReconciler_AlreadyResolved_SkipsWithoutCatalog(t *testing.T) {
 	np := makeNP("cluster-1", "np-1", "4.15.0")
-	np.Status.VersionResolution = &privatev1.VersionResolutionResult{ReleaseVersion: "4.15.0", ChannelGroup: "candidate"}
-
-	r, store := buildReconciler(t, np, makeCluster("cluster-1"), nil, nil, nil, nil)
+	np.Status.VersionResolution = &privatev1.VersionResolutionResult{ReleaseVersion: "4.15.0", ReleaseImage: "image", ChannelGroup: "candidate"}
+	parent := makeCluster("cluster-1")
+	catalogtest.CommittedPool(np, parent)
+	meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{Type: "NodePoolVersionResolved", Status: metav1.ConditionTrue, Reason: "VersionResolved", Message: "Installation release has a pinned payload and IAM contract", ObservedGeneration: np.Generation})
+	r, store := buildReconciler(t, np, parent, nil, nil, nil, nil)
 	result, err := r.Reconcile(context.Background(), npReq("cluster-1", "np-1"))
 
 	require.NoError(t, err)
-	assert.Equal(t, reconcile.Result{}, result)
+	assert.Equal(t, reconcile.Result{RequeueAfter: requeueStable}, result)
 	assert.False(t, store.statusWriter.called, "status must not be updated when already resolved")
 }
 
@@ -357,7 +375,8 @@ func TestReconciler_ResolvesVersion_WritesStatus(t *testing.T) {
 	require.Equal(t, requeueStable, result.RequeueAfter)
 	updated := store.statusWriter.captured.(*privatev1.NodePool)
 	require.Equal(t, &privatev1.VersionResolutionResult{ReleaseImage: release.Spec.ReleaseImage,
-		ReleaseVersion: release.Name, ChannelGroup: "candidate", CincinnatiChannel: "candidate-4.15"}, updated.Status.VersionResolution)
+		WIFConfigTemplateRef: release.Spec.WIFConfigTemplateRef,
+		ReleaseVersion:       release.Name, ChannelGroup: "candidate", CincinnatiChannel: "candidate-4.15"}, updated.Status.VersionResolution)
 	cond := meta.FindStatusCondition(updated.Status.Conditions, "NodePoolVersionResolved")
 	require.Equal(t, metav1.ConditionTrue, cond.Status)
 	require.Equal(t, int64(3), cond.ObservedGeneration)
@@ -369,7 +388,7 @@ func TestReconciler_ResolvesVersion_StatusUpdateConflict_ReturnsNoError(t *testi
 	r, store := buildReconciler(t, np, makeCluster("cluster-1"), release, nil, nil, conflictErr())
 	result, err := r.Reconcile(context.Background(), npReq("cluster-1", "np-1"))
 	require.NoError(t, err)
-	require.Equal(t, reconcile.Result{}, result)
+	require.Equal(t, reconcile.Result{RequeueAfter: requeueStable}, result)
 	require.True(t, store.statusWriter.called)
 }
 
@@ -388,10 +407,13 @@ func TestReconciler_CatalogChangesPreservePinnedImage(t *testing.T) {
 	cluster.Namespace = np.Namespace
 	release := catalogVersion("4.15.0", "original", "candidate")
 	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithStatusSubresource(np).
-		WithObjects(np, cluster, release).Build()
+		WithObjects(np, cluster, release, catalogtest.MustReady(release)).Build()
 	r := NewReconciler(newTestLogger(t), apiClient)
 	_, err := r.Reconcile(ctx, npReq(np.Namespace, np.Name))
 	require.NoError(t, err)
+	require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(np), np))
+	catalogtest.CommittedPool(np, cluster)
+	require.NoError(t, apiClient.Status().Update(ctx, np))
 	release.Spec.ReleaseImage = "changed"
 	release.Spec.ChannelGroups = []string{"stable"}
 	require.NoError(t, apiClient.Update(ctx, release))
@@ -418,7 +440,7 @@ func TestReconciler_CatalogRejectionRequiresResubmission(t *testing.T) {
 			// A resolved parent must not act as a fallback for a missing release.
 			cluster.Status.VersionResolution = &privatev1.VersionResolutionResult{ReleaseVersion: "5.0.0-ec.6", ReleaseImage: "parent-image"}
 			release := catalogVersion("5.0.0-ec.6", "ci-image", "stable")
-			objects := []client.Object{np, cluster}
+			objects := []client.Object{np, cluster, catalogtest.MustReady(release)}
 			if !missing {
 				objects = append(objects, release)
 			}
@@ -532,7 +554,7 @@ func TestUpgradeResolutionRequiresMatchingApproval(t *testing.T) {
 	cluster := makeCluster("example")
 	cluster.Namespace = np.Namespace
 	release := catalogVersion("4.22.16", "target-image", "stable")
-	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithStatusSubresource(np).WithObjects(np, cluster, release).Build()
+	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithStatusSubresource(np).WithObjects(np, cluster, release, catalogtest.MustReady(release)).Build()
 	r := NewReconciler(newTestLogger(t), apiClient)
 	req := npReq(np.Namespace, np.Name)
 	_, err := r.Reconcile(t.Context(), req)

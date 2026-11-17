@@ -11,11 +11,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/openshift-online/gecko/controllers/util/catalog/catalogtest"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilversion "k8s.io/apimachinery/pkg/util/version"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -64,7 +66,32 @@ func ciStore(t *testing.T, objects ...client.Object) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	require.NoError(t, privatev1.AddToScheme(scheme))
-	return fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&privatev1.Channel{}).WithObjects(objects...).Build()
+	// These tests exercise upstream discovery with an explicitly ready IAM
+	// catalog. Missing/unverified template scenarios use separate focused tests.
+	boundaries := map[string]bool{}
+	for _, obj := range objects {
+		var names []string
+		switch o := obj.(type) {
+		case *privatev1.Channel:
+			names = []string{o.Spec.InstallDefaultVersion, o.Spec.MinimumSupportedVersion + ".0"}
+		case *privatev1.Version:
+			names = []string{o.Name}
+		}
+		for _, name := range names {
+			v, err := utilversion.ParseSemantic(name)
+			if err != nil {
+				continue
+			}
+			boundary := fmt.Sprintf("%d.%d.0", v.Major(), v.Minor())
+			if boundaries[boundary] {
+				continue
+			}
+			boundaries[boundary] = true
+			dummy := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: boundary}}
+			objects = append(objects, catalogtest.Ready(t, dummy))
+		}
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&privatev1.Channel{}, &privatev1.Version{}).WithObjects(objects...).Build()
 }
 func readChannel(t *testing.T, store client.Client, name string) *privatev1.Channel {
 	t.Helper()

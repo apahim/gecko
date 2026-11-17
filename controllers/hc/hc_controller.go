@@ -37,9 +37,18 @@ type Reconciler struct {
 	transport           transport.Client
 	log                 logger.Logger
 	client              client.Client
+	apiReader           client.Reader
 	customerLabels      map[string]string
 	pullSecretStoreName string
 	pullSecretGCPKey    string
+}
+
+func (r *Reconciler) WithAPIReader(reader client.Reader) *Reconciler { r.apiReader = reader; return r }
+func (r *Reconciler) reader() client.Reader {
+	if r.apiReader != nil {
+		return r.apiReader
+	}
+	return r.client
 }
 
 // New creates a new Reconciler.
@@ -63,7 +72,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	log := r.log.With("controller", adapterName).With("cluster_id", req.Name)
 
 	var cluster privatev1.Cluster
-	if err := r.client.Get(ctx, req.NamespacedName, &cluster); err != nil {
+	if err := r.reader().Get(ctx, req.NamespacedName, &cluster); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Infof(ctx, "cluster not found, skipping")
 			return reconcile.Result{}, nil
@@ -90,7 +99,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, err
 	}
 	if !ready {
-		return reconcile.Result{RequeueAfter: requeuePending}, nil
+		return r.observeResources(ctx, &cluster, groupKey)
 	}
 
 	placement := cluster.Status.PlacementResult
@@ -177,6 +186,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("%s: apply status feedback: %w", adapterName, err)
 	}
+	if mwStatus != nil && !mwStatus.Stale && cluster.Status.HostedClusterResult != nil {
+		statusChanged = privatev1.PromoteIAMDispatch(cluster.Status.IAMDispatch, cluster.Status.HostedClusterResult.Version) || statusChanged
+	}
 	if statusChanged {
 		if err := r.client.Status().Update(ctx, &cluster); err != nil {
 			if apierrors.IsConflict(err) {
@@ -212,6 +224,13 @@ func (r *Reconciler) prerequisitesReady(ctx context.Context, cluster *privatev1.
 		return false, nil
 	}
 
+	iamReady, err := r.iamReady(ctx, cluster)
+	if err != nil {
+		return false, err
+	}
+	if !iamReady {
+		return false, nil
+	}
 	if cluster.Status.VersionResolution == nil {
 		if r.setWaitingConditions(cluster, "VersionResolutionNotReady", "Waiting for version resolution") {
 			if err := r.client.Status().Update(ctx, cluster); err != nil && !apierrors.IsConflict(err) {

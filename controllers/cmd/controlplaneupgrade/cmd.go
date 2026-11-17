@@ -42,7 +42,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("index clusters by channel group: %w", err)
 			}
 
-			rec := controlplaneupgrade.NewReconciler(mgr.GetClient(), log)
+			rec := controlplaneupgrade.NewReconciler(mgr.GetClient(), log).WithAPIReader(mgr.GetAPIReader())
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).

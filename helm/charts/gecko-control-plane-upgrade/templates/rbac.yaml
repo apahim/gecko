@@ -7,6 +7,9 @@ metadata:
     {{- include "gecko-control-plane-upgrade.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["wifconfigtemplates"]
+    verbs: ["get"]
+  - apiGroups: ["gcp.managed.openshift.io"]
     resources: ["clusters"]
     verbs: ["get", "list", "watch", "update"]
   - apiGroups: ["gcp.managed.openshift.io"]

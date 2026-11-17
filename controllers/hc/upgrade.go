@@ -3,6 +3,7 @@ package hc
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -28,20 +29,24 @@ func (r *Reconciler) preparationFailure(ctx context.Context, c *privatev1.Cluste
 // applyResources records the dispatch boundary before any external write. An
 // uncertain dispatch keeps the approval lock across errors and restarts.
 func (r *Reconciler) applyResources(ctx context.Context, c *privatev1.Cluster, managementCluster, groupKey string, manifests [][]byte) (*transport.Status, error) {
-	upgrading := privatev1.ClusterReleaseApproved(c) && meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) &&
-		c.Status.HostedClusterResult != nil && c.Spec.Release.Version != c.Status.HostedClusterResult.Version
-	if !upgrading {
-		return r.transport.Apply(ctx, managementCluster, groupKey, manifests)
+	upgrading := privatev1.ClusterReleaseApproved(c) && meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted) && c.Status.HostedClusterResult != nil && c.Spec.Release.Version != c.Status.HostedClusterResult.Version
+	receipt, persist, err := r.freshDispatch(ctx, c)
+	if err != nil {
+		if _, writeErr := r.iamCondition(ctx, c, err); writeErr != nil {
+			return nil, writeErr
+		}
+		return &transport.Status{Stale: true}, nil
 	}
-	submitted := meta.FindStatusCondition(c.Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted)
-	accepted := meta.FindStatusCondition(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted)
-	if submitted == nil || submitted.Status == metav1.ConditionFalse || submitted.ObservedGeneration < accepted.ObservedGeneration {
-		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
-			Type: privatev1.ControlPlaneUpgradeSubmitted, Status: metav1.ConditionUnknown,
-			Reason: "Dispatching", Message: "The approved release is being dispatched", ObservedGeneration: c.Generation,
-		})
+	if persist {
+		if c.Status.IAMDispatch == nil {
+			c.Status.IAMDispatch = &privatev1.IAMDispatchState{}
+		}
+		c.Status.IAMDispatch.Pending = receipt
+		if upgrading {
+			clusterSubmissionCondition(c, metav1.ConditionUnknown, "Dispatching", "The exact release and IAM contract are committed for dispatch")
+		}
 		if err := r.client.Status().Update(ctx, c); err != nil && !apierrors.IsConflict(err) {
-			return nil, fmt.Errorf("record dispatch boundary: %w", err)
+			return nil, fmt.Errorf("record IAM dispatch boundary: %w", err)
 		}
 		return &transport.Status{Stale: true}, nil
 	}
@@ -49,11 +54,8 @@ func (r *Reconciler) applyResources(ctx context.Context, c *privatev1.Cluster, m
 	if err != nil {
 		return nil, err
 	}
-	if submitted.Status != metav1.ConditionTrue {
-		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
-			Type: privatev1.ControlPlaneUpgradeSubmitted, Status: metav1.ConditionTrue,
-			Reason: "Dispatched", Message: "The approved release was dispatched", ObservedGeneration: c.Generation,
-		})
+	if upgrading && !meta.IsStatusConditionTrue(c.Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted) {
+		clusterSubmissionCondition(c, metav1.ConditionTrue, "Dispatched", "The committed release was delivered")
 		if err := r.client.Status().Update(ctx, c); err != nil {
 			if apierrors.IsConflict(err) {
 				return &transport.Status{Stale: true}, nil
@@ -62,4 +64,8 @@ func (r *Reconciler) applyResources(ctx context.Context, c *privatev1.Cluster, m
 		}
 	}
 	return status, nil
+}
+
+func sameClusterDispatchInput(a, b *privatev1.Cluster) bool {
+	return reflect.DeepEqual(a.Spec, b.Spec) && reflect.DeepEqual(a.Annotations, b.Annotations) && reflect.DeepEqual(a.Status.VersionResolution, b.Status.VersionResolution) && reflect.DeepEqual(a.Status.PlacementResult, b.Status.PlacementResult)
 }

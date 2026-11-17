@@ -62,6 +62,7 @@ func NewCommand(rootFlags *setup.RootFlags) *cobra.Command {
 			if ciSource != nil {
 				controller = versionsynccontroller.NewCIController(ciSource, log, manager.GetClient())
 			}
+			controller.WithAPIReader(manager.GetAPIReader())
 
 			if err := manager.Add(controller); err != nil {
 				return fmt.Errorf("add version-sync controller: %w", err)

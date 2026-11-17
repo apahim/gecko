@@ -44,12 +44,13 @@ const DefaultPrivatePrefix = "private.orlop.gcp.managed.openshift.io/"
 var publicConditionTypes = map[string]sets.Set[string]{
 	"Version": sets.New[string]("Available"),
 	"Cluster": sets.New[string](
+		"IAMPermissionsReady",
 		"HostedClusterAvailable",
 		"ControlPlaneUpgradeAvailable",
 		"ControlPlaneUpgradeProgressing",
 		"ControlPlaneUpgradeDegraded",
 	),
-	"NodePool": sets.New[string]("NodePoolAvailable", "NodePoolHealthy", "NodePoolProgressing",
+	"NodePool": sets.New[string]("IAMPermissionsReady", "NodePoolAvailable", "NodePoolHealthy", "NodePoolProgressing",
 		"NodePoolUpgradeScheduled", "NodePoolUpgradeProgressing", "NodePoolUpgradeDegraded"),
 	// Test-only resource type used in orlop tests
 	"Object": sets.New[string]("Ready", "Available"),

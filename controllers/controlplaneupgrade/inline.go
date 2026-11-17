@@ -29,7 +29,7 @@ func releaseGroup(c *privatev1.Cluster) string {
 // written to spec it cannot drift merely because a newer catalog entry appears.
 func (r *Reconciler) normalizeMinor(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {
 	var releases privatev1.VersionList
-	if err := r.apiClient.List(ctx, &releases); err != nil {
+	if err := r.reader().List(ctx, &releases); err != nil {
 		return reconcile.Result{}, fmt.Errorf("list release catalog: %w", err)
 	}
 	var selected string
@@ -54,6 +54,15 @@ func (r *Reconciler) normalizeMinor(ctx context.Context, c *privatev1.Cluster) (
 	if selected == "" {
 		return r.block(ctx, c, "TargetNotAvailable", "No eligible release in the requested minor and channel", false)
 	}
+	// Select the advertised target before checking readiness: never hide an
+	// unavailable newest candidate by silently normalizing to an older release.
+	if _, err := catalog.Available(ctx, r.reader(), selected, releaseGroup(c)); err != nil {
+		var blocked *catalog.UnavailableError
+		if !errors.As(err, &blocked) {
+			return reconcile.Result{}, err
+		}
+		return r.block(ctx, c, blocked.Reason, fmt.Sprintf("Target %s: %s", selected, blocked.Message), false)
+	}
 	c.Spec.Release.Version = selected
 	if err := r.apiClient.Update(ctx, c); err != nil {
 		if apierrors.IsConflict(err) {
@@ -69,6 +78,9 @@ func (r *Reconciler) normalizeMinor(ctx context.Context, c *privatev1.Cluster) (
 // generation. A crash or conflict between either write keeps installers gated.
 func (r *Reconciler) finishAutomaticPreparation(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {
 	result := c.Status.ControlPlaneUpgrade
+	if _, err := catalog.Prerequisites(ctx, r.reader(), c, result.TargetVersion, releaseGroup(c)); err != nil {
+		return r.waitApprovedPrerequisite(ctx, c, err)
+	}
 	if c.Spec.Release.Version != result.TargetVersion {
 		c.Spec.Release.Version = result.TargetVersion
 		if err := r.apiClient.Update(ctx, c); err != nil {
@@ -89,7 +101,7 @@ func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, t
 	if err := privatev1.ValidateClusterUpgradeTarget(c, target); err != nil {
 		return r.block(ctx, c, "TargetNotAvailable", err.Error(), true)
 	}
-	if _, err := catalog.Resolve(ctx, r.apiClient, target, releaseGroup(c)); err != nil {
+	if _, err := catalog.Prerequisites(ctx, r.reader(), c, target, releaseGroup(c)); err != nil {
 		var unavailable *catalog.UnavailableError
 		if !errors.As(err, &unavailable) {
 			return reconcile.Result{}, err
@@ -97,7 +109,7 @@ func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, t
 		if unavailable.Reason == "VersionNotFoundInCatalog" {
 			return r.block(ctx, c, "WaitingForVersionCatalog", "The advertised target is waiting for catalog synchronization", false)
 		}
-		return r.block(ctx, c, unavailable.Reason, unavailable.Message, true)
+		return r.block(ctx, c, unavailable.Reason, fmt.Sprintf("Target %s: %s", target, unavailable.Message), unavailable.Reason == "VersionNotInChannelGroup")
 	}
 	current, _ := utilversion.ParseSemantic(c.Status.HostedClusterResult.Version)
 	selected, _ := utilversion.ParseSemantic(target)
@@ -178,12 +190,15 @@ func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (
 		for _, typ := range []string{"VersionResolved", "ResourcesApplied"} {
 			condition := meta.FindStatusCondition(c.Status.Conditions, typ)
 			if condition != nil && condition.Status == metav1.ConditionFalse && condition.ObservedGeneration == c.Generation &&
-				(typ == "VersionResolved" || condition.Reason == "ManifestBuildFailed") {
+				((typ == "VersionResolved" && !catalog.RecoverableReason(condition.Reason)) || condition.Reason == "ManifestBuildFailed") {
 				if result.TargetSource == targetSourceAutomatic {
 					return r.cancelAutomaticPreparation(ctx, c)
 				}
 				return r.block(ctx, c, "PreparationFailed", "The release could not be prepared before dispatch; release settings can be corrected", true)
 			}
+		}
+		if _, err := catalog.Prerequisites(ctx, r.reader(), c, result.TargetVersion, releaseGroup(c)); err != nil {
+			return r.waitApprovedPrerequisite(ctx, c, err)
 		}
 	}
 	healthy, _, _ := healthOK(c.Status.Conditions, hc.ObservedConditions, false)
@@ -234,7 +249,7 @@ func (r *Reconciler) observeExisting(ctx context.Context, c *privatev1.Cluster, 
 func (r *Reconciler) eligibleUpdates(ctx context.Context, c *privatev1.Cluster) ([]string, error) {
 	var eligible []string
 	for _, candidate := range c.Status.HostedClusterResult.AvailableUpdates {
-		if _, err := catalog.Resolve(ctx, r.apiClient, candidate, releaseGroup(c)); err != nil {
+		if _, err := catalog.Member(ctx, r.reader(), candidate, releaseGroup(c)); err != nil {
 			var unavailable *catalog.UnavailableError
 			if errors.As(err, &unavailable) {
 				continue
@@ -244,6 +259,20 @@ func (r *Reconciler) eligibleUpdates(ctx context.Context, c *privatev1.Cluster) 
 		eligible = append(eligible, candidate)
 	}
 	return eligible, nil
+}
+
+// Keep the durable exact-target approval/source lock while a recoverable IAM or
+// catalog prerequisite is blocked. Clearing Accepted here would reclassify an
+// automatic preparation as customer intent after a crash between spec/status.
+func (r *Reconciler) waitApprovedPrerequisite(ctx context.Context, c *privatev1.Cluster, err error) (reconcile.Result, error) {
+	var blocked *catalog.UnavailableError
+	if !errors.As(err, &blocked) {
+		return reconcile.Result{}, err
+	}
+	return r.writeStatus(ctx, c, c.Status.ControlPlaneUpgrade, requeuePending,
+		newCondition(conditionAvailable, metav1.ConditionTrue, blocked.Reason, blocked.Message),
+		newCondition(conditionProgressing, metav1.ConditionFalse, blocked.Reason, blocked.Message),
+		newCondition(conditionDegraded, metav1.ConditionFalse, "AsExpected", ""))
 }
 
 // cancelAutomaticPreparation keeps ownership until the unsubmitted automatic

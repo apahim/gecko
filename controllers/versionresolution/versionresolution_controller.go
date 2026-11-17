@@ -21,12 +21,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-const requeueStable = 5 * time.Minute
+const requeueStable = 30 * time.Second
 
 // Reconciler resolves the OCP release image for a cluster from the Version catalog.
 type Reconciler struct {
-	log    logger.Logger
-	client client.Client
+	log       logger.Logger
+	client    client.Client
+	apiReader client.Reader
+}
+
+func (r *Reconciler) WithAPIReader(reader client.Reader) *Reconciler { r.apiReader = reader; return r }
+func (r *Reconciler) reader() client.Reader {
+	if r.apiReader != nil {
+		return r.apiReader
+	}
+	return r.client
 }
 
 // NewReconciler creates a new version-resolution Reconciler.
@@ -42,7 +51,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	clusterID := req.Name
 
 	var cluster privatev1.Cluster
-	if err := r.client.Get(ctx, req.NamespacedName, &cluster); err != nil {
+	if err := r.reader().Get(ctx, req.NamespacedName, &cluster); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.log.Infof(ctx, "vr: cluster %s not found, skipping", clusterID)
 			return reconcile.Result{}, nil
@@ -50,6 +59,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("vr: get cluster %s: %w", clusterID, err)
 	}
 
+	if !cluster.DeletionTimestamp.IsZero() {
+		return reconcile.Result{}, nil
+	}
 	version := privatev1.ClusterInstallationVersion(&cluster)
 	if version == "" {
 		r.log.Infof(ctx, "vr: cluster %s: release version not set, waiting for next event", clusterID)
@@ -68,7 +80,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	// Catalog rejection is terminal for this spec, including across restarts
 	// and unrelated status or Channel events. A new generation permits retry.
-	if catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) {
+	if !privatev1.CommittedIAMDispatch(cluster.Status.IAMDispatch, string(cluster.UID), string(cluster.UID), cluster.Status.VersionResolution) && catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) {
 		return reconcile.Result{}, nil
 	}
 
@@ -104,51 +116,45 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("vr: build channel for cluster %s: %w", clusterID, err)
 	}
 
+	// Revalidate even a cached resolution. Keep its image pinned, but never let
+	// cached success authorize new work after readiness/verification revocation.
+	committed := cluster.Status.VersionResolution != nil && cluster.Status.VersionResolution.ReleaseVersion == version && cluster.Status.VersionResolution.ChannelGroup == channelGroup && privatev1.CommittedIAMDispatch(cluster.Status.IAMDispatch, string(cluster.UID), string(cluster.UID), cluster.Status.VersionResolution)
+	var release *privatev1.Version
+	if !committed {
+		release, err = catalog.Available(ctx, r.reader(), version, channelGroup)
+		if err != nil {
+			return r.catalogFailure(ctx, &cluster, err)
+		}
+	}
 	// Pin the image for this version and channel group. Fleet authorization can
 	// advance the CVO channel independently without resolving the image again.
-	if vr := cluster.Status.VersionResolution; vr != nil &&
-		vr.ReleaseVersion == version && vr.ChannelGroup == channelGroup {
+	if vr := cluster.Status.VersionResolution; catalog.ResolutionMatches(vr, version, channelGroup, release, committed) {
+		changed := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: "VersionResolved", Status: metav1.ConditionTrue, Reason: "VersionResolved", Message: "Installation release has a pinned payload and IAM contract", ObservedGeneration: cluster.Generation})
 		if vr.CincinnatiChannel != channel {
 			vr.CincinnatiChannel = channel
+			changed = true
+		}
+		if changed {
 			if err := r.client.Status().Update(ctx, &cluster); err != nil && !apierrors.IsConflict(err) {
 				return reconcile.Result{}, fmt.Errorf("vr: update cluster channel %s: %w", clusterID, err)
 			}
 		}
-		return reconcile.Result{RequeueAfter: requeueStable}, nil
-	}
-
-	image, err := catalog.Resolve(ctx, r.client, version, channelGroup)
-	if err != nil {
-		var unavailable *catalog.UnavailableError
-		if !errors.As(err, &unavailable) {
-			return reconcile.Result{}, fmt.Errorf("vr: catalog lookup for cluster %s: %w", clusterID, err)
-		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-			Type:               "VersionResolved",
-			Status:             metav1.ConditionFalse,
-			Reason:             unavailable.Reason,
-			Message:            unavailable.Message,
-			ObservedGeneration: cluster.Generation,
-		}) {
-			if err := r.client.Status().Update(ctx, &cluster); err != nil && !apierrors.IsConflict(err) {
-				return reconcile.Result{}, fmt.Errorf("vr: update cluster status %s: %w", clusterID, err)
-			}
-		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// Write VR result and VersionResolved condition to status.
 	cluster.Status.VersionResolution = &privatev1.VersionResolutionResult{
-		ReleaseImage:      image,
-		ReleaseVersion:    version,
-		CincinnatiChannel: channel,
-		ChannelGroup:      channelGroup,
+		ReleaseImage:         release.Spec.ReleaseImage,
+		WIFConfigTemplateRef: release.Spec.WIFConfigTemplateRef.DeepCopy(),
+		ReleaseVersion:       version,
+		CincinnatiChannel:    channel,
+		ChannelGroup:         channelGroup,
 	}
 	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "VersionResolved",
 		Status:             metav1.ConditionTrue,
 		Reason:             "VersionResolved",
-		Message:            fmt.Sprintf("Version %s resolved to image %s", version, image),
+		Message:            fmt.Sprintf("Version %s resolved from the available catalog", version),
 		ObservedGeneration: cluster.Generation,
 	})
 	if err := r.client.Status().Update(ctx, &cluster); err != nil {
@@ -158,8 +164,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("vr: update cluster status %s: %w", clusterID, err)
 	}
 
-	r.log.Infof(ctx, "vr: cluster %s: resolved version %s", clusterID, version)
-	return reconcile.Result{RequeueAfter: requeueStable}, nil
+	r.log.Info(ctx, "release resolved from the available catalog")
+	return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func (r *Reconciler) catalogFailure(ctx context.Context, c *privatev1.Cluster, err error) (reconcile.Result, error) {
+	var unavailable *catalog.UnavailableError
+	if !errors.As(err, &unavailable) {
+		return reconcile.Result{}, err
+	}
+	if meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{Type: "VersionResolved", Status: metav1.ConditionFalse, Reason: unavailable.Reason, Message: unavailable.Message, ObservedGeneration: c.Generation}) {
+		if err := r.client.Status().Update(ctx, c); err != nil && !apierrors.IsConflict(err) {
+			return reconcile.Result{}, fmt.Errorf("vr: update cluster status failed")
+		}
+	}
+	if catalog.ResolutionRejected(meta.FindStatusCondition(c.Status.Conditions, "VersionResolved"), c.Generation) {
+		return reconcile.Result{}, nil
+	}
+	return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 // buildChannel constructs the Cincinnati channel name from a version string and channel group.

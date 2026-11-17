@@ -31,7 +31,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("create manager: %w", err)
 			}
 
-			rec := nodepoolvrresolution.NewReconciler(log, mgr.GetClient())
+			rec := nodepoolvrresolution.NewReconciler(log, mgr.GetClient()).WithAPIReader(mgr.GetAPIReader())
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.NodePool{}).

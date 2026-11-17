@@ -542,6 +542,10 @@ type ClusterStatus struct {
 	// +patchMergeKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// iamDispatch retains private target-bound dispatch authority across retries.
+	// +optional
+	IAMDispatch *IAMDispatchState `json:"iamDispatch,omitempty"`
+
 	// PlacementResult is written by the placement controller.
 	// Not exposed on the public API.
 	// +optional
@@ -573,6 +577,9 @@ type PlacementResult struct {
 
 // VersionResolutionResult holds the VR controller's output.
 type VersionResolutionResult struct {
+	// wifConfigTemplateRef pins the IAM identity resolved alongside this payload.
+	// +optional
+	WIFConfigTemplateRef *WIFConfigTemplateReference `json:"wifConfigTemplateRef,omitempty"`
 	// ReleaseImage is the resolved OCP release pullspec (e.g. quay.io/openshift-release-dev/ocp-release@sha256:...).
 	// +optional
 	ReleaseImage string `json:"releaseImage,omitempty"`

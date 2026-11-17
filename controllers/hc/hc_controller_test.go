@@ -12,6 +12,7 @@ import (
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/client/transport/mock"
 	"github.com/openshift-online/gecko/controllers/hc"
+	"github.com/openshift-online/gecko/controllers/util/catalog/catalogtest"
 	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -82,12 +83,30 @@ type mockStoreClient struct {
 	deleted      []client.Object
 }
 
-func (m *mockStoreClient) Get(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+func (m *mockStoreClient) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
 	if m.getErr != nil {
 		return m.getErr
 	}
 	if m.cluster == nil {
 		return apierrors.NewNotFound(schema.GroupResource{Resource: "cluster"}, "")
+	}
+	if v, ok := obj.(*privatev1.Version); ok {
+		image := "image"
+		group := "stable"
+		if vr := m.cluster.Status.VersionResolution; vr != nil {
+			image = vr.ReleaseImage
+			if vr.ChannelGroup != "" {
+				group = vr.ChannelGroup
+			}
+		}
+		*v = privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: key.Name}, Spec: privatev1.VersionSpec{ReleaseImage: image, ChannelGroups: []string{group}}}
+		catalogtest.MustReady(v)
+		return nil
+	}
+	if w, ok := obj.(*privatev1.WIFConfigTemplate); ok {
+		dummy := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: key.Name}}
+		catalogtest.MustReady(dummy).DeepCopyInto(w)
+		return nil
 	}
 	c, ok := obj.(*privatev1.Cluster)
 	if !ok {
@@ -232,6 +251,7 @@ func buildReadyCluster(clusterID, version string) *privatev1.Cluster {
 			CincinnatiChannel: "stable-4.15",
 		},
 	}
+	catalogtest.CommittedCluster(c)
 	return c
 }
 
@@ -465,11 +485,11 @@ func TestReconcile_VRVersionMismatch_StatusUpdateError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestReconcile_ManifestBuildError verifies that a manifest.Build failure is propagated.
-// A nil GCP spec leaves required fields empty, triggering validation inside Build.
+// An empty project leaves required fields empty while retaining IAM test authority.
 func TestReconcile_ManifestBuildError(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
-	cluster.Spec.Platform.GCP = nil // gcpProjectID="" → Build fails validation
+	cluster.Spec.Platform.GCP.ProjectID = "" // gcpProjectID="" -> Build fails validation
 
 	tr := mock.New()
 	r, _ := buildReconciler(t, cluster, nil, tr, nil)
@@ -955,6 +975,7 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	// including ObservedGeneration (cluster.Generation = 2).
 	cluster.Status.Conditions = []metav1.Condition{
 		{Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", Message: "", ObservedGeneration: 2},
+		{Type: privatev1.IAMPermissionsReady, Status: metav1.ConditionTrue, Reason: "IAMContractCovered", Message: "The installation target has exact applied IAM contract coverage", ObservedGeneration: 2},
 		{Type: "HostedClusterAvailable", Status: metav1.ConditionFalse, Reason: "HostedClusterNotAvailable", Message: "", ObservedGeneration: 2},
 		{Type: "ApiCertificateReady", Status: metav1.ConditionFalse, Reason: "CertificateNotReady", Message: "", ObservedGeneration: 2},
 	}
@@ -1481,6 +1502,7 @@ func TestReconcile_ApprovedUpgradePersistsDispatchBoundaryBeforeApply(t *testing
 		}
 		t.Run(name, func(t *testing.T) {
 			cluster := buildReadyCluster("cluster-abc", "4.23.9")
+			cluster.Status.IAMDispatch = nil // this target has approval, not dispatch authority yet
 			cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.22.19", DesiredVersion: "4.22.19"}
 			cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "4.23.9"}
 			meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue})

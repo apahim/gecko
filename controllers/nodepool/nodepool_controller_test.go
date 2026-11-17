@@ -11,6 +11,7 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/client/transport/mock"
+	"github.com/openshift-online/gecko/controllers/util/catalog/catalogtest"
 	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -77,7 +78,7 @@ type mockStoreClient struct {
 	updated      client.Object
 }
 
-func (m *mockStoreClient) Get(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+func (m *mockStoreClient) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
 	switch o := obj.(type) {
 	case *privatev1.NodePool:
 		if m.npGetErr != nil {
@@ -96,6 +97,22 @@ func (m *mockStoreClient) Get(_ context.Context, _ client.ObjectKey, obj client.
 			return apierrors.NewNotFound(schema.GroupResource{Resource: "cluster"}, "")
 		}
 		*o = *m.cluster
+		return nil
+	case *privatev1.Version:
+		image := "image"
+		group := "candidate"
+		if m.nodepool != nil && m.nodepool.Status.VersionResolution != nil {
+			image = m.nodepool.Status.VersionResolution.ReleaseImage
+			if m.nodepool.Status.VersionResolution.ChannelGroup != "" {
+				group = m.nodepool.Status.VersionResolution.ChannelGroup
+			}
+		}
+		*o = privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: key.Name}, Spec: privatev1.VersionSpec{ReleaseImage: image, ChannelGroups: []string{group}}}
+		catalogtest.MustReady(o)
+		return nil
+	case *privatev1.WIFConfigTemplate:
+		dummy := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: key.Name}}
+		catalogtest.MustReady(dummy).DeepCopyInto(o)
 		return nil
 	default:
 		return fmt.Errorf("unexpected type %T", obj)
@@ -191,6 +208,7 @@ func conflictErr() error {
 func testNodePool(vrVersion string) *privatev1.NodePool {
 	np := &privatev1.NodePool{}
 	np.SetName("np-test")
+	np.SetUID(types.UID("pool-test-uid"))
 	np.SetNamespace("cluster-test")
 	np.SetFinalizers([]string{constants.FinalizerNodePool})
 	np.Spec = privatev1.NodePoolSpec{
@@ -258,6 +276,9 @@ func buildReconciler(
 	npGetErr, clsGetErr, statusErr error,
 ) (*Reconciler, *mockStoreClient) {
 	t.Helper()
+	if np != nil && cluster != nil {
+		catalogtest.CommittedPool(np, cluster)
+	}
 	storeClient := &mockStoreClient{
 		nodepool:     np,
 		cluster:      cluster,

@@ -7,6 +7,9 @@ metadata:
     {{- include "gecko-hc.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["versions", "wifconfigtemplates"]
+    verbs: ["get"]
+  - apiGroups: ["gcp.managed.openshift.io"]
     resources: ["clusters"]
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["gcp.managed.openshift.io"]

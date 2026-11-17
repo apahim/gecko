@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/openshift-online/gecko/controllers/util/catalog/catalogtest"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	"github.com/openshift-online/gecko/controllers/util/setup"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -96,6 +97,16 @@ func (m *mockStoreClient) Get(_ context.Context, key client.ObjectKey, obj clien
 		}
 		m.channel.DeepCopyInto(typed)
 		return nil
+	case *privatev1.WIFConfigTemplate:
+		if m.version == nil {
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "wifconfigtemplates"}, key.Name)
+		}
+		w := catalogtest.MustReady(m.version.DeepCopy())
+		if w.Name != key.Name {
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "wifconfigtemplates"}, key.Name)
+		}
+		w.DeepCopyInto(typed)
+		return nil
 	default:
 		return fmt.Errorf("unexpected type %T", obj)
 	}
@@ -144,8 +155,10 @@ func clusterReq(name string) reconcile.Request {
 }
 
 func catalogVersion(version, image string, groups ...string) *privatev1.Version {
-	return &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: version},
+	v := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: version},
 		Spec: privatev1.VersionSpec{ReleaseImage: image, ChannelGroups: groups}}
+	catalogtest.MustReady(v)
+	return v
 }
 
 func buildReconciler(t *testing.T, cluster *privatev1.Cluster, release *privatev1.Version) (*Reconciler, *mockStoreClient) {
@@ -171,7 +184,8 @@ func TestReconciler_HappyPath(t *testing.T) {
 			require.False(t, store.updateCalled)
 			updated := store.statusWriter.captured.(*privatev1.Cluster)
 			require.Equal(t, &privatev1.VersionResolutionResult{ReleaseImage: release.Spec.ReleaseImage,
-				ReleaseVersion: release.Name, ChannelGroup: effectiveGroup, CincinnatiChannel: effectiveGroup + "-5.0"}, updated.Status.VersionResolution)
+				WIFConfigTemplateRef: release.Spec.WIFConfigTemplateRef,
+				ReleaseVersion:       release.Name, ChannelGroup: effectiveGroup, CincinnatiChannel: effectiveGroup + "-5.0"}, updated.Status.VersionResolution)
 			condition := meta.FindStatusCondition(updated.Status.Conditions, "VersionResolved")
 			require.NotNil(t, condition)
 			require.Equal(t, metav1.ConditionTrue, condition.Status)
@@ -261,15 +275,23 @@ func TestReconciler_StatusUpdateError(t *testing.T) {
 func TestReconciler_CatalogChangesPreservePinnedImage(t *testing.T) {
 	ctx := context.Background()
 	cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet"}}
+	cluster.UID = "test-cluster-uid"
 	cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "4.22.14", ChannelGroup: "candidate"}
 	release := catalogVersion("4.22.14", "original", "candidate")
 	channel := &privatev1.Channel{ObjectMeta: metav1.ObjectMeta{Name: "candidate"}}
 	channel.Spec.FleetMinorVersion = "4.22"
 	apiClient := fake.NewClientBuilder().WithScheme(setup.NewScheme()).WithStatusSubresource(cluster).
-		WithObjects(cluster, release, channel).Build()
+		WithObjects(cluster, release, channel, catalogtest.MustReady(release)).Build()
 	r := NewReconciler(newTestLogger(t), apiClient)
 	_, err := r.Reconcile(ctx, clusterReq("cluster"))
 	require.NoError(t, err)
+	require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
+	cluster.UID = "test-cluster-uid"
+	catalogtest.CommittedCluster(cluster)
+	committed := cluster.Status.IAMDispatch.DeepCopy()
+	require.NoError(t, apiClient.Update(ctx, cluster))
+	cluster.Status.IAMDispatch = committed
+	require.NoError(t, apiClient.Status().Update(ctx, cluster))
 	release.Spec.ReleaseImage = "changed"
 	require.NoError(t, apiClient.Update(ctx, release))
 	_, err = r.Reconcile(ctx, clusterReq("cluster"))
@@ -297,7 +319,7 @@ func TestReconciler_CatalogRejectionRequiresResubmission(t *testing.T) {
 			cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet", Generation: 1}}
 			cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: "dev-preview"}
 			release := catalogVersion("5.0.0-ec.6", "ci-image", "stable")
-			objects := []client.Object{cluster}
+			objects := []client.Object{cluster, catalogtest.MustReady(release)}
 			if !missing {
 				objects = append(objects, release)
 			}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/openshift-online/gecko/controllers/util/catalog/catalogtest"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
@@ -18,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilversion "k8s.io/apimachinery/pkg/util/version"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -97,6 +99,12 @@ func (m *mockStoreClient) Get(_ context.Context, key client.ObjectKey, obj clien
 		for _, release := range m.releases {
 			if release.Name == key.Name {
 				*typed = *release.DeepCopy()
+				if typed.Spec.WIFConfigTemplateRef == nil {
+					if typed.Spec.ReleaseImage == "" {
+						typed.Spec.ReleaseImage = "image"
+					}
+					catalogtest.MustReady(typed)
+				}
 				return nil
 			}
 		}
@@ -104,7 +112,12 @@ func (m *mockStoreClient) Get(_ context.Context, key client.ObjectKey, obj clien
 		if m.cluster != nil && m.cluster.Spec.Release.ChannelGroup != "" {
 			group = m.cluster.Spec.Release.ChannelGroup
 		}
-		*typed = privatev1.Version{Spec: privatev1.VersionSpec{ReleaseImage: "image", ChannelGroups: []string{group}}}
+		*typed = privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: key.Name}, Spec: privatev1.VersionSpec{ReleaseImage: "image", ChannelGroups: []string{group}}}
+		catalogtest.MustReady(typed)
+		return nil
+	case *privatev1.WIFConfigTemplate:
+		dummy := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: key.Name}}
+		catalogtest.MustReady(dummy).DeepCopyInto(typed)
 		return nil
 	case *privatev1.Channel:
 		if m.channel == nil {
@@ -188,6 +201,24 @@ func clusterReq(name string) reconcile.Request {
 
 func buildReconciler(t *testing.T, cluster *privatev1.Cluster) (*Reconciler, *mockStoreClient) {
 	t.Helper()
+	if cluster != nil {
+		names := []string{cluster.Spec.Release.Version}
+		if hc := cluster.Status.HostedClusterResult; hc != nil {
+			names = append(names, hc.Version, hc.DesiredVersion)
+			names = append(names, hc.AvailableUpdates...)
+		}
+		for _, name := range names {
+			if name == "" || privatev1.IsMinorRelease(name) {
+				continue
+			}
+			if _, err := utilversion.ParseSemantic(name); err != nil {
+				continue
+			}
+			v := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: name}}
+			catalogtest.Ready(t, v)
+			catalogtest.Apply(cluster, v.Spec.WIFConfigTemplateRef)
+		}
+	}
 	channel := &privatev1.Channel{
 		ObjectMeta: metav1.ObjectMeta{Name: "stable"},
 		Spec: privatev1.ChannelSpec{

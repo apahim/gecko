@@ -895,6 +895,131 @@ properties:
           version:
             type: string
         type: object
+      iamDispatch:
+        description: iamDispatch retains private target-bound dispatch authority across
+          retries.
+        properties:
+          dispatched:
+            description: dispatched is the last target observed after a non-stale
+              delivery.
+            properties:
+              channelGroup:
+                description: channelGroup identifies release membership, not the advancing
+                  CVO channel.
+                maxLength: 128
+                type: string
+              clusterUID:
+                description: clusterUID binds a NodePool receipt to the exact parent
+                  installation.
+                maxLength: 128
+                type: string
+              objectUID:
+                description: objectUID identifies the Cluster or NodePool owning this
+                  receipt.
+                maxLength: 128
+                type: string
+              releaseImage:
+                description: releaseImage is the exact payload passed into manifest
+                  construction.
+                maxLength: 3072
+                type: string
+              releaseVersion:
+                description: releaseVersion identifies the complete release, including
+                  prerelease suffix.
+                maxLength: 128
+                type: string
+              templateRef:
+                description: templateRef binds the exact retained IAM contract authorizing
+                  this intent.
+                properties:
+                  digest:
+                    description: digest is the SHA-256 of the canonical schemaVersion
+                      and IAM contract.
+                    maxLength: 71
+                    pattern: ^sha256:[0-9a-f]{64}$
+                    type: string
+                  name:
+                    description: name is the canonical release boundary of the template.
+                    maxLength: 32
+                    type: string
+                  uid:
+                    description: uid identifies the exact retained template resource.
+                    maxLength: 128
+                    type: string
+                required:
+                - digest
+                - name
+                - uid
+                type: object
+            required:
+            - channelGroup
+            - clusterUID
+            - objectUID
+            - releaseImage
+            - releaseVersion
+            - templateRef
+            type: object
+          pending:
+            description: pending is a durably committed, possibly partially delivered
+              intent.
+            properties:
+              channelGroup:
+                description: channelGroup identifies release membership, not the advancing
+                  CVO channel.
+                maxLength: 128
+                type: string
+              clusterUID:
+                description: clusterUID binds a NodePool receipt to the exact parent
+                  installation.
+                maxLength: 128
+                type: string
+              objectUID:
+                description: objectUID identifies the Cluster or NodePool owning this
+                  receipt.
+                maxLength: 128
+                type: string
+              releaseImage:
+                description: releaseImage is the exact payload passed into manifest
+                  construction.
+                maxLength: 3072
+                type: string
+              releaseVersion:
+                description: releaseVersion identifies the complete release, including
+                  prerelease suffix.
+                maxLength: 128
+                type: string
+              templateRef:
+                description: templateRef binds the exact retained IAM contract authorizing
+                  this intent.
+                properties:
+                  digest:
+                    description: digest is the SHA-256 of the canonical schemaVersion
+                      and IAM contract.
+                    maxLength: 71
+                    pattern: ^sha256:[0-9a-f]{64}$
+                    type: string
+                  name:
+                    description: name is the canonical release boundary of the template.
+                    maxLength: 32
+                    type: string
+                  uid:
+                    description: uid identifies the exact retained template resource.
+                    maxLength: 128
+                    type: string
+                required:
+                - digest
+                - name
+                - uid
+                type: object
+            required:
+            - channelGroup
+            - clusterUID
+            - objectUID
+            - releaseImage
+            - releaseVersion
+            - templateRef
+            type: object
+        type: object
       placementResult:
         description: |-
           PlacementResult is written by the placement controller.
@@ -926,6 +1051,29 @@ properties:
           releaseVersion:
             description: ReleaseVersion is the resolved OCP version string (e.g. "4.16.3").
             type: string
+          wifConfigTemplateRef:
+            description: wifConfigTemplateRef pins the IAM identity resolved alongside
+              this payload.
+            properties:
+              digest:
+                description: digest is the SHA-256 of the canonical schemaVersion
+                  and IAM contract.
+                maxLength: 71
+                pattern: ^sha256:[0-9a-f]{64}$
+                type: string
+              name:
+                description: name is the canonical release boundary of the template.
+                maxLength: 32
+                type: string
+              uid:
+                description: uid identifies the exact retained template resource.
+                maxLength: 128
+                type: string
+            required:
+            - digest
+            - name
+            - uid
+            type: object
         type: object
     type: object
 required:

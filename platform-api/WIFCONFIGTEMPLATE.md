@@ -92,8 +92,58 @@ Run the local Helm-to-API contract check with:
 HELM_BIN=/path/to/helm go test ./cmd/platform-api-server -run TestWIFConfigTemplateHelmRendering
 ```
 
-Phase 1 introduces the API and opt-in packaging only. Versionsync ownership of
-`Available`, prerelease numeric-base floor selection, preservation of pinned
-references during catalog synchronization, minimal status RBAC and server dispatch
-enforcement must ship before activation in Phase 2. A template's verified assertion
-alone does not authorize a Cluster or independently establish runtime permissions.
+## Version availability and dispatch (Phase 2)
+
+Versionsync selects the greatest numeric boundary at or below the release's X.Y.Z
+core in the same major/minor. Prereleases inherit that core's contract without
+changing their full release name or image. Selection includes unverified templates:
+an intact matching template is pinned once, but remains unavailable until verified.
+There is no fallback to an older verified boundary. A newly published higher
+effective boundary blocks a stale association for platform review; it never repins.
+
+Versionsync alone owns Version `Available`. True requires complete release metadata,
+current generation and an intact verified reference. Its separate 30-second loop
+refreshes eligibility even during upstream discovery failure. Failed template reads
+preserve pins and prevent catalog aging; no-op refreshes preserve transition times.
+Channel defaults use their exact pinned Version, never an implicit alternative.
+
+Resolution, control-plane/NodePool approval and final new dispatch require current
+availability. Final dispatch additionally uses fresh API reads to check the exact
+template identity, digest, verification and Cluster application coverage. Missing
+IAM is a block, not an exemption. Coverage compares name, UID and digest, never
+version ordering. The HC dispatcher owns Cluster `IAMPermissionsReady`; the NodePool
+dispatcher owns the corresponding pool condition. Upgrade coordinators report
+future-target failures through their upgrade conditions, separately from readiness
+of the currently running target. Blocked prerequisites retry without a spec edit.
+
+### Durable submission boundary
+
+Before the first transport Apply for a new target, a private status receipt is
+persisted with an optimistic concurrency check. It records object/parent UID, full
+release version, image, channel group and exact template reference. The existing
+upgrade submission-unknown condition, when applicable, is committed in the same
+write. No Apply occurs on a failed/conflicting receipt write. Derived Cincinnati
+channel and whole-object generation are not receipt identity.
+
+Pending and last-dispatched receipts are separate. Non-stale observation of the
+pending release promotes it; uncertain delivery retains it. A committed exact target
+may be redelivered after restart, verification revocation or upstream aging, because
+transport delivery can be partial. This is recovery of an authorized intent, not
+authorization of a different release/image/contract or a legacy exemption. Pending
+dispatch locks release changes but permits unrelated updates. Deletion and observation
+of known work are not new-dispatch authorization.
+
+A committed target that never becomes observable (for example, an invalid image)
+remains locked: transport may already contain a partial delivery. This phase adds
+no force-unlock or alternate-target escape. Operators must diagnose/recover the
+same target or use ordinary deletion and confirmed cleanup before a fresh install.
+Absence of version feedback alone is not proof that no external write occurred.
+
+There is no atomic transaction spanning catalog verification and external transport.
+Revocation is checked before committing a new exact-target intent, not used to recall
+already-committed work. Controllers never apply or inspect customer cloud IAM. The
+worker manifest receives only the Cluster's explicit immutable default Compute SA.
+
+Phase 2 deliberately keeps application writes disabled. Positive coverage and
+upgrade tests use local fixtures only. A template's verified assertion alone does
+not authorize a Cluster or independently establish runtime permissions.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/openshift-online/gecko/controllers/util/catalog/catalogtest"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -34,7 +35,7 @@ var testNow = time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 
 func testObjects() (*privatev1.NodePool, *privatev1.Cluster, *privatev1.Version) {
 	pool := &privatev1.NodePool{
-		ObjectMeta: metav1.ObjectMeta{Name: testPool, Namespace: testNamespace, Generation: 1},
+		ObjectMeta: metav1.ObjectMeta{Name: testPool, Namespace: testNamespace, Generation: 1, UID: types.UID("test-pool-uid")},
 		Spec: privatev1.NodePoolSpec{ClusterID: testCluster,
 			Release: privatev1.NodePoolReleaseSpec{Version: "4.22.16", ChannelGroup: "stable"},
 		},
@@ -45,6 +46,9 @@ func testObjects() (*privatev1.NodePool, *privatev1.Cluster, *privatev1.Version)
 	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "4.22.17"}
 	release := &privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: "4.22.16"}}
 	release.Spec.ChannelGroups = []string{"stable"}
+	release.Spec.ReleaseImage = "image"
+	catalogtest.MustReady(release)
+	catalogtest.Apply(cluster, release.Spec.WIFConfigTemplateRef)
 	return pool, cluster, release
 }
 
@@ -63,6 +67,11 @@ func testReconciler(t *testing.T, objects ...client.Object) (*Reconciler, client
 	t.Helper()
 	scheme := runtime.NewScheme()
 	require.NoError(t, privatev1.AddToScheme(scheme))
+	for _, object := range objects {
+		if v, ok := object.(*privatev1.Version); ok {
+			objects = append(objects, catalogtest.MustReady(v))
+		}
+	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&privatev1.NodePool{}, &privatev1.Cluster{}).WithObjects(objects...).Build()
 	r := NewReconciler(c)
 	r.now = func() time.Time { return testNow }
@@ -344,7 +353,7 @@ func TestMissingUpgradeDependencyIsRetryable(t *testing.T) {
 				objects = append(objects, release)
 				missing = cluster
 			} else {
-				objects = append(objects, cluster)
+				objects = append(objects, cluster, catalogtest.MustReady(release))
 			}
 			r, c := testReconciler(t, objects...)
 			_, err := r.Reconcile(t.Context(), poolRequest())

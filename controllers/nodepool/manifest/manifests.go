@@ -4,8 +4,11 @@ package manifest
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 )
+
+var defaultComputeSA = regexp.MustCompile(`^[1-9][0-9]{0,19}-compute@developer\.gserviceaccount\.com$`)
 
 const (
 	// DefaultDiskSizeGB is the default disk size in GB for GCP node pool boot disks.
@@ -20,23 +23,27 @@ const (
 
 // Input holds all parameters for building the NodePool manifests.
 type Input struct {
-	NodePoolID         string
-	NodePoolName       string
-	NodePoolGeneration int64
-	ClusterID          string
-	ClusterName        string
-	Replicas           int32
-	MachineType        string // e.g. "n2-standard-4"
-	GCPRegion          string
-	Zone               string // optional; falls back to GCPRegion+"-a"
-	GCPSubnet          string
-	DiskSizeGB         int64  // default: 100
-	DiskType           string // default: "pd-ssd"
-	ReleaseImage       string
+	WorkerServiceAccount string
+	NodePoolID           string
+	NodePoolName         string
+	NodePoolGeneration   int64
+	ClusterID            string
+	ClusterName          string
+	Replicas             int32
+	MachineType          string // e.g. "n2-standard-4"
+	GCPRegion            string
+	Zone                 string // optional; falls back to GCPRegion+"-a"
+	GCPSubnet            string
+	DiskSizeGB           int64  // default: 100
+	DiskType             string // default: "pd-ssd"
+	ReleaseImage         string
 }
 
 // Build constructs raw JSON bytes for the NodePool manifest.
 func Build(input Input) ([][]byte, error) {
+	if !defaultComputeSA.MatchString(input.WorkerServiceAccount) {
+		return nil, fmt.Errorf("an explicit default Compute worker service account is required")
+	}
 	// Apply defaults
 	zone := input.Zone
 	if zone == "" {
@@ -103,9 +110,10 @@ func Build(input Input) ([][]byte, error) {
 			"platform": map[string]any{
 				"type": "GCP",
 				"gcp": map[string]any{
-					"machineType": machineType,
-					"zone":        zone,
-					"subnet":      input.GCPSubnet,
+					"serviceAccount": map[string]any{"email": input.WorkerServiceAccount},
+					"machineType":    machineType,
+					"zone":           zone,
+					"subnet":         input.GCPSubnet,
 					"bootDisk": map[string]any{
 						"diskSizeGB": diskSizeGB,
 						"diskType":   diskType,

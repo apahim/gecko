@@ -41,6 +41,9 @@ func ReleaseMatches(requested, concrete string) bool {
 // accepted. HostedCluster feedback also protects upgrades started before this
 // approval protocol was deployed.
 func ClusterUpgradeActive(cluster *Cluster) bool {
+	if cluster.Status.IAMDispatch != nil && cluster.Status.IAMDispatch.Pending != nil {
+		return true
+	}
 	if meta.IsStatusConditionTrue(cluster.Status.Conditions, ControlPlaneUpgradeAccepted) {
 		return true
 	}
@@ -115,6 +118,9 @@ func ClusterInstallationVersion(cluster *Cluster) string {
 
 // ClusterUpgradeSubmissionStarted treats an uncertain dispatch conservatively.
 func ClusterUpgradeSubmissionStarted(cluster *Cluster) bool {
+	if cluster.Status.IAMDispatch != nil && cluster.Status.IAMDispatch.Pending != nil {
+		return true
+	}
 	// Feedback is authoritative for an already dispatched legacy rollout.
 	if hc := cluster.Status.HostedClusterResult; hc != nil {
 		current, a := utilversion.ParseSemantic(hc.Version)

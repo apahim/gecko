@@ -43,9 +43,18 @@ type AdmissionGate func(context.Context, *privatev1.Cluster, string) (bool, erro
 // by the HostedCluster installer. Release normalization never grants approval.
 type Reconciler struct {
 	apiClient client.Client
+	apiReader client.Reader
 	log       logger.Logger
 	now       func() time.Time
 	admission AdmissionGate
+}
+
+func (r *Reconciler) WithAPIReader(reader client.Reader) *Reconciler { r.apiReader = reader; return r }
+func (r *Reconciler) reader() client.Reader {
+	if r.apiReader != nil {
+		return r.apiReader
+	}
+	return r.apiClient
 }
 
 func NewReconciler(apiClient client.Client, log logger.Logger) *Reconciler {
@@ -57,7 +66,7 @@ func (r *Reconciler) WithAdmissionGate(gate AdmissionGate) *Reconciler { r.admis
 
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	var cluster privatev1.Cluster
-	if err := r.apiClient.Get(ctx, req.NamespacedName, &cluster); err != nil {
+	if err := r.reader().Get(ctx, req.NamespacedName, &cluster); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 	if !cluster.DeletionTimestamp.IsZero() {
@@ -137,7 +146,7 @@ func (r *Reconciler) reconcileAutomatic(ctx context.Context, cluster *privatev1.
 	if channelName == "" {
 		channelName = channelutil.DefaultChannelGroup
 	}
-	if err := r.apiClient.Get(ctx, client.ObjectKey{Name: channelName}, &channel); err != nil {
+	if err := r.reader().Get(ctx, client.ObjectKey{Name: channelName}, &channel); err != nil {
 		if apierrors.IsNotFound(err) {
 			if candidate == "" {
 				log.Infof(ctx, "channel %q not found, skipping y-stream target selection", channelName)

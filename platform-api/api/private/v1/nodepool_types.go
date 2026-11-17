@@ -337,6 +337,10 @@ type NodePoolStatus struct {
 	// +patchMergeKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// iamDispatch retains private target-bound dispatch authority across retries.
+	// +optional
+	IAMDispatch *IAMDispatchState `json:"iamDispatch,omitempty"`
+
 	// version is the last OpenShift version observed as applied to this
 	// NodePool. It does not advance merely because an upgrade was requested.
 	// +orlop:public

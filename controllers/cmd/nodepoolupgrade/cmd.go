@@ -29,7 +29,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.NodePool{}).
 				WithOptions(rf.ControllerOpts()).
-				Complete(nodepoolupgrade.NewReconciler(mgr.GetClient())); err != nil {
+				Complete(nodepoolupgrade.NewReconciler(mgr.GetClient()).WithAPIReader(mgr.GetAPIReader())); err != nil {
 				return fmt.Errorf("setup NodePool upgrade controller: %w", err)
 			}
 			return mgr.Start(cmd.Context())

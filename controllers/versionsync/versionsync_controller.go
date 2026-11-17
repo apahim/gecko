@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openshift-online/gecko/controllers/util/logger"
@@ -41,6 +42,9 @@ type Controller struct {
 	cincinnatiClient        *versionresolution.CincinnatiClient
 	log                     logger.Logger
 	apiClient               client.Client
+	catalogReader           client.Reader
+	availabilityMu          sync.Mutex
+	upstreamFailure         string
 }
 
 func NewController(
@@ -64,6 +68,10 @@ func NewCIController(source *ReleaseControllerClient, log logger.Logger, apiClie
 func (c *Controller) Start(ctx context.Context) error {
 	log := c.log.With("controller", "version-sync-controller")
 	log.Info(ctx, "starting")
+	availabilityCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); c.availabilityLoop(availabilityCtx, log) }()
+	defer func() { cancel(); <-done }()
 
 	c.sync(ctx, log)
 
@@ -104,15 +112,15 @@ func (c *Controller) sync(ctx context.Context, log logger.Logger) {
 	}
 	if err != nil {
 		log.Errorf(ctx, "fetch failed, preserving previous version snapshot: %v", err)
-		c.reportDefaults(ctx, log, channels, nil, "FetchFailed")
+		c.reportSourceDefaults(ctx, log, nil, "FetchFailed")
 		return
 	}
 	if err := c.apply(ctx, log, desired); err != nil {
 		log.Errorf(ctx, "apply failed: %v", err)
-		c.reportDefaults(ctx, log, channels, nil, "ApplyFailed")
+		c.reportSourceDefaults(ctx, log, nil, "ApplyFailed")
 		return
 	}
-	c.reportDefaults(ctx, log, channels, desired, "")
+	c.reportSourceDefaults(ctx, log, desired, "")
 }
 
 // fetchCIVersions gathers the complete snapshot before any Version is changed.
@@ -187,9 +195,16 @@ func (c *Controller) reportDefaults(ctx context.Context, log logger.Logger, chan
 			condition.Reason = "DefaultVersionUnavailable"
 			condition.Message = fmt.Sprintf("Pinned default %q is not in this Channel's synchronized catalog", channel.Spec.InstallDefaultVersion)
 			if spec, ok := desired[channel.Spec.InstallDefaultVersion]; ok && containsString(spec.ChannelGroups, channel.Name) {
-				condition.Status = metav1.ConditionTrue
-				condition.Reason = "DefaultVersionAvailable"
-				condition.Message = fmt.Sprintf("Pinned default %q is in this Channel's synchronized catalog", channel.Spec.InstallDefaultVersion)
+				var release privatev1.Version
+				if err := c.reader().Get(ctx, client.ObjectKey{Name: channel.Spec.InstallDefaultVersion}, &release); err != nil {
+					condition.Status, condition.Reason, condition.Message = metav1.ConditionUnknown, "VersionReadFailed", "Pinned default Version could not be read"
+				} else if privatev1.IsVersionAvailable(&release) {
+					condition.Status = metav1.ConditionTrue
+					condition.Reason = "DefaultVersionAvailable"
+					condition.Message = fmt.Sprintf("Pinned default %q is available in this Channel", channel.Spec.InstallDefaultVersion)
+				} else {
+					condition.Message = "Pinned default Version is not currently available"
+				}
 			}
 		}
 		meta.SetStatusCondition(&channel.Status.Conditions, condition)
@@ -322,6 +337,13 @@ func (c *Controller) apply(
 	log logger.Logger,
 	desired map[string]privatev1.VersionSpec,
 ) error {
+	var templateSnapshot privatev1.WIFConfigTemplateList
+	if err := c.reader().List(ctx, &templateSnapshot); err != nil {
+		return fmt.Errorf("read complete IAM template snapshot failed")
+	}
+	if _, err := privatev1.SelectWIFConfigTemplate("0.0.0", templateSnapshot.Items); err != nil {
+		return fmt.Errorf("IAM template snapshot contains an invalid boundary")
+	}
 	var current privatev1.VersionList
 	if err := c.apiClient.List(ctx, &current); err != nil {
 		return fmt.Errorf("list versions: %w", err)
@@ -337,7 +359,11 @@ func (c *Controller) apply(
 	// Update existing Versions first.
 	for name, spec := range desired {
 		version, found := existing[name]
-		if !found || specEqual(&version.Spec, &spec) {
+		if !found {
+			continue
+		}
+		spec.WIFConfigTemplateRef = version.Spec.WIFConfigTemplateRef
+		if specEqual(&version.Spec, &spec) {
 			continue
 		}
 
@@ -361,12 +387,26 @@ func (c *Controller) apply(
 			},
 			Spec: spec,
 		}
+		selected, err := privatev1.SelectWIFConfigTemplate(name, templateSnapshot.Items)
+		if err != nil {
+			return fmt.Errorf("upstream release metadata is invalid")
+		}
+		if selected != nil {
+			if ref, err := privatev1.WIFConfigReference(selected); err == nil {
+				version.Spec.WIFConfigTemplateRef = ref
+			}
+		}
 
 		if err := c.apiClient.Create(ctx, version); err != nil {
 			return fmt.Errorf("create version %q: %w", name, err)
 		}
 
 		log.Infof(ctx, "created Version %s", name)
+	}
+	// Reconcile readiness before any destructive catalog aging. A failed IAM read
+	// preserves current catalog entries and never clears their immutable pins.
+	if err := c.refresh(ctx, log, false); err != nil {
+		return err
 	}
 
 	// Delete stale Versions only after the complete snapshot has been applied.
@@ -433,6 +473,9 @@ func isSupportedVersion(version string, minimumMajor, minimumMinor int) bool {
 }
 
 func specEqual(a, b *privatev1.VersionSpec) bool {
+	if !equality.Semantic.DeepEqual(a.WIFConfigTemplateRef, b.WIFConfigTemplateRef) {
+		return false
+	}
 	if a.ReleaseImage != b.ReleaseImage {
 		return false
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/openshift-online/gecko/controllers/util/catalog"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -32,15 +33,24 @@ const (
 // Reconciler owns upgrade scheduling and status. Installation controllers retain
 // ownership of release resolution, resource application, and observed pool health.
 type Reconciler struct {
-	client client.Client
-	now    func() time.Time
+	client    client.Client
+	apiReader client.Reader
+	now       func() time.Time
+}
+
+func (r *Reconciler) WithAPIReader(reader client.Reader) *Reconciler { r.apiReader = reader; return r }
+func (r *Reconciler) reader() client.Reader {
+	if r.apiReader != nil {
+		return r.apiReader
+	}
+	return r.client
 }
 
 func NewReconciler(c client.Client) *Reconciler { return &Reconciler{client: c, now: time.Now} }
 
 func (r *Reconciler) Reconcile(ctx context.Context, key reconcile.Request) (reconcile.Result, error) {
 	var pool privatev1.NodePool
-	if err := r.client.Get(ctx, key.NamespacedName, &pool); err != nil {
+	if err := r.reader().Get(ctx, key.NamespacedName, &pool); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 	if !pool.DeletionTimestamp.IsZero() {
@@ -95,7 +105,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, key reconcile.Request) (reco
 
 func (r *Reconciler) observe(ctx context.Context, before, pool *privatev1.NodePool) (reconcile.Result, error) {
 	if !privatev1.NodePoolUpgradeSubmissionStarted(pool) {
-		if c := meta.FindStatusCondition(pool.Status.Conditions, "NodePoolVersionResolved"); c != nil && c.ObservedGeneration == pool.Generation && c.Status == metav1.ConditionFalse {
+		if pool.Status.Version != pool.Spec.Release.Version {
+			if err := r.validate(ctx, pool, pool.Spec.Release.Version); err != nil {
+				var blocked *catalog.UnavailableError
+				if !errors.As(err, &blocked) {
+					return r.validationResult(ctx, before, pool, err)
+				}
+				conditions(pool, metav1.ConditionFalse, metav1.ConditionTrue, blocked.Reason, blocked.Message)
+				return r.persist(ctx, before, pool, waitInterval)
+			}
+		}
+		if c := meta.FindStatusCondition(pool.Status.Conditions, "NodePoolVersionResolved"); c != nil && c.Status == metav1.ConditionFalse && c.ObservedGeneration == pool.Generation && !catalog.RecoverableReason(c.Reason) {
 			return r.fail(ctx, before, pool, "VersionResolutionFailed", "The desired release could not be resolved before submission")
 		}
 		if c := meta.FindStatusCondition(pool.Status.Conditions, "NodePoolResourcesApplied"); c != nil && c.ObservedGeneration == pool.Generation && c.Status == metav1.ConditionFalse && c.Reason == "ManifestBuildFailed" {
@@ -138,20 +158,28 @@ func (e *validationError) Error() string { return e.message }
 
 func (r *Reconciler) validate(ctx context.Context, pool *privatev1.NodePool, target string) error {
 	var cluster privatev1.Cluster
-	if err := r.client.Get(ctx, types.NamespacedName{Namespace: pool.Namespace, Name: pool.Spec.ClusterID}, &cluster); err != nil {
+	if err := r.reader().Get(ctx, types.NamespacedName{Namespace: pool.Namespace, Name: pool.Spec.ClusterID}, &cluster); err != nil {
 		return fmt.Errorf("read Cluster for upgrade: %w", err)
 	}
 	var release privatev1.Version
-	if err := r.client.Get(ctx, types.NamespacedName{Name: target}, &release); err != nil {
+	if err := r.reader().Get(ctx, types.NamespacedName{Name: target}, &release); err != nil {
 		return fmt.Errorf("read Version for upgrade: %w", err)
 	}
 	if err := privatev1.ValidateNodePoolUpgradeTarget(pool, &cluster, &release, target); err != nil {
 		return &validationError{err.Error()}
 	}
+	if _, err := catalog.Prerequisites(ctx, r.reader(), &cluster, target, catalog.NodePoolRequestedGroup(pool)); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (r *Reconciler) validationResult(ctx context.Context, before, pool *privatev1.NodePool, err error) (reconcile.Result, error) {
+	var blocked *catalog.UnavailableError
+	if errors.As(err, &blocked) {
+		conditions(pool, metav1.ConditionFalse, metav1.ConditionFalse, blocked.Reason, blocked.Message)
+		return r.persist(ctx, before, pool, waitInterval)
+	}
 	var invalid *validationError
 	if !errors.As(err, &invalid) {
 		return reconcile.Result{}, err

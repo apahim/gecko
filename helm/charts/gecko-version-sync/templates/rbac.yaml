@@ -7,6 +7,12 @@ metadata:
     {{- include "gecko-version-sync.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["wifconfigtemplates"]
+    verbs: ["get", "list"]
+  - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["versions/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["gcp.managed.openshift.io"]
     resources: ["versions"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["gcp.managed.openshift.io"]

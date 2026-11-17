@@ -23,13 +23,22 @@ import (
 const (
 	adapterName         = "nodepool-vr-controller"
 	defaultChannelGroup = "candidate"
-	requeueStable       = 5 * time.Minute
+	requeueStable       = 30 * time.Second
 )
 
 // Reconciler resolves the OCP release image for a node pool from the Version catalog.
 type Reconciler struct {
-	log    logger.Logger
-	client client.Client
+	log       logger.Logger
+	client    client.Client
+	apiReader client.Reader
+}
+
+func (r *Reconciler) WithAPIReader(reader client.Reader) *Reconciler { r.apiReader = reader; return r }
+func (r *Reconciler) reader() client.Reader {
+	if r.apiReader != nil {
+		return r.apiReader
+	}
+	return r.client
 }
 
 // NewReconciler creates a new nodepool-vr Reconciler.
@@ -46,7 +55,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	nodepoolID := req.Name
 
 	var np privatev1.NodePool
-	if err := r.client.Get(ctx, req.NamespacedName, &np); err != nil {
+	if err := r.reader().Get(ctx, req.NamespacedName, &np); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.log.Infof(ctx, "nodepool-vr: nodepool %s not found, skipping", nodepoolID)
 			return reconcile.Result{}, nil
@@ -54,11 +63,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("nodepool-vr: get nodepool %s: %w", nodepoolID, err)
 	}
 
+	if !np.DeletionTimestamp.IsZero() {
+		return reconcile.Result{}, nil
+	}
 	// Verify the parent cluster still exists.
 	clusterID := np.Spec.ClusterID
 	clusterKey := types.NamespacedName{Namespace: req.Namespace, Name: clusterID}
 	var cluster privatev1.Cluster
-	if err := r.client.Get(ctx, clusterKey, &cluster); err != nil {
+	if err := r.reader().Get(ctx, clusterKey, &cluster); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.log.Infof(ctx, "nodepool-vr: cluster %s not found for nodepool %s, skipping", clusterID, nodepoolID)
 			return reconcile.Result{}, nil
@@ -88,7 +100,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if !privatev1.NodePoolReleaseApproved(&np) {
 		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	if catalog.ResolutionRejected(meta.FindStatusCondition(np.Status.Conditions, "NodePoolVersionResolved"), np.Generation) {
+	if !privatev1.CommittedIAMDispatch(np.Status.IAMDispatch, string(np.UID), string(cluster.UID), np.Status.VersionResolution) && catalog.ResolutionRejected(meta.FindStatusCondition(np.Status.Conditions, "NodePoolVersionResolved"), np.Generation) {
 		return reconcile.Result{}, nil
 	}
 	version := np.Spec.Release.Version
@@ -103,58 +115,64 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("nodepool-vr: build channel for nodepool %s: %w", nodepoolID, err)
 	}
 
-	// Check already resolved — both version and channel group must match to skip re-resolution.
-	if vr := np.Status.VersionResolution; vr != nil &&
-		vr.ReleaseVersion == version &&
-		vr.ChannelGroup == channelGroup {
-		r.log.Infof(ctx, "nodepool-vr: nodepool %s: version %s channel %s already resolved, waiting for next event", nodepoolID, version, channelGroup)
-		return reconcile.Result{}, nil
+	committed := np.Status.VersionResolution != nil && np.Status.VersionResolution.ReleaseVersion == version && np.Status.VersionResolution.ChannelGroup == channelGroup && privatev1.CommittedIAMDispatch(np.Status.IAMDispatch, string(np.UID), string(cluster.UID), np.Status.VersionResolution)
+	var release *privatev1.Version
+	if !committed {
+		release, err = catalog.Available(ctx, r.reader(), version, channelGroup)
+		if err != nil {
+			return r.catalogFailure(ctx, &np, err)
+		}
+	}
+	// Check already resolved — retain the pinned image, not cached readiness.
+	if catalog.ResolutionMatches(np.Status.VersionResolution, version, channelGroup, release, committed) {
+		if meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{Type: "NodePoolVersionResolved", Status: metav1.ConditionTrue, Reason: "VersionResolved", Message: "Installation release has a pinned payload and IAM contract", ObservedGeneration: np.Generation}) {
+			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
+				return reconcile.Result{}, err
+			}
+		}
+		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	r.log.Infof(ctx, "nodepool-vr: nodepool %s: resolving version %s via channel %s", nodepoolID, version, channel)
 
-	image, err := catalog.Resolve(ctx, r.client, version, channelGroup)
-	if err != nil {
-		var unavailable *catalog.UnavailableError
-		if !errors.As(err, &unavailable) {
-			return reconcile.Result{}, fmt.Errorf("nodepool-vr: catalog lookup for nodepool %s: %w", nodepoolID, err)
-		}
-		if meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
-			Type:               "NodePoolVersionResolved",
-			Status:             metav1.ConditionFalse,
-			Reason:             unavailable.Reason,
-			Message:            unavailable.Message,
-			ObservedGeneration: np.Generation,
-		}) {
-			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
-				return reconcile.Result{}, fmt.Errorf("nodepool-vr: update nodepool status %s: %w", nodepoolID, err)
-			}
-		}
-		return reconcile.Result{}, nil
-	}
-
 	// Write VR result and NodePoolVersionResolved condition to status.
 	np.Status.VersionResolution = &privatev1.VersionResolutionResult{
-		ReleaseImage:      image,
-		ReleaseVersion:    version,
-		CincinnatiChannel: channel,
-		ChannelGroup:      channelGroup,
+		ReleaseImage:         release.Spec.ReleaseImage,
+		WIFConfigTemplateRef: release.Spec.WIFConfigTemplateRef.DeepCopy(),
+		ReleaseVersion:       version,
+		CincinnatiChannel:    channel,
+		ChannelGroup:         channelGroup,
 	}
 	meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolVersionResolved",
 		Status:             metav1.ConditionTrue,
 		Reason:             "VersionResolved",
-		Message:            fmt.Sprintf("Version %s resolved to image %s", version, image),
+		Message:            fmt.Sprintf("Version %s resolved from the available catalog", version),
 		ObservedGeneration: np.Generation,
 	})
 	if err := r.client.Status().Update(ctx, &np); err != nil {
 		if apierrors.IsConflict(err) {
-			return reconcile.Result{}, nil
+			return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("nodepool-vr: update nodepool status %s: %w", nodepoolID, err)
 	}
+	r.log.Info(ctx, "release resolved from the available catalog")
+	return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
+}
 
-	r.log.Infof(ctx, "nodepool-vr: nodepool %s: resolved version %s", nodepoolID, version)
-	return reconcile.Result{RequeueAfter: requeueStable}, nil
+func (r *Reconciler) catalogFailure(ctx context.Context, p *privatev1.NodePool, err error) (reconcile.Result, error) {
+	var unavailable *catalog.UnavailableError
+	if !errors.As(err, &unavailable) {
+		return reconcile.Result{}, err
+	}
+	if meta.SetStatusCondition(&p.Status.Conditions, metav1.Condition{Type: "NodePoolVersionResolved", Status: metav1.ConditionFalse, Reason: unavailable.Reason, Message: unavailable.Message, ObservedGeneration: p.Generation}) {
+		if err := r.client.Status().Update(ctx, p); err != nil && !apierrors.IsConflict(err) {
+			return reconcile.Result{}, fmt.Errorf("update nodepool status failed")
+		}
+	}
+	if catalog.ResolutionRejected(meta.FindStatusCondition(p.Status.Conditions, "NodePoolVersionResolved"), p.Generation) {
+		return reconcile.Result{}, nil
+	}
+	return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 // buildChannel constructs the Cincinnati channel name from a version string and channel group.

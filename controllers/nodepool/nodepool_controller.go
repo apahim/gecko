@@ -8,6 +8,7 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/nodepool/manifest"
+	"github.com/openshift-online/gecko/controllers/util/catalog"
 	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -33,6 +34,15 @@ type Reconciler struct {
 	transport transport.Client
 	log       logger.Logger
 	client    client.Client
+	apiReader client.Reader
+}
+
+func (r *Reconciler) WithAPIReader(reader client.Reader) *Reconciler { r.apiReader = reader; return r }
+func (r *Reconciler) reader() client.Reader {
+	if r.apiReader != nil {
+		return r.apiReader
+	}
+	return r.client
 }
 
 // New creates a new nodepool Reconciler.
@@ -52,7 +62,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// Read nodepool from cache.
 	var np privatev1.NodePool
-	if err := r.client.Get(ctx, req.NamespacedName, &np); err != nil {
+	if err := r.reader().Get(ctx, req.NamespacedName, &np); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Infof(ctx, "nodepool %s not found, skipping", nodepoolID)
 			return reconcile.Result{}, nil
@@ -66,7 +76,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	var cluster privatev1.Cluster
 	clusterFound := true
 	clusterKey := types.NamespacedName{Namespace: req.Namespace, Name: clusterID}
-	if err := r.client.Get(ctx, clusterKey, &cluster); err != nil {
+	if err := r.reader().Get(ctx, clusterKey, &cluster); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: get cluster: %w", err)
 		}
@@ -93,99 +103,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil // re-reconcile with finalizer in place
 	}
 
-	// Gate: cluster placement must be ready.
-	if cluster.Status.PlacementResult == nil || cluster.Status.PlacementResult.ManagementClusterName == "" {
-		if setWaitingNPConditions(&np, "PlacementNotReady", "Waiting for cluster placement to select a management cluster") {
-			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
-				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
-			}
-		}
-		log.Infof(ctx, "placement not ready for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
-		return reconcile.Result{RequeueAfter: requeuePending}, nil
+	ready, err := r.prerequisitesReady(ctx, &np, &cluster)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if !ready {
+		return r.observeResources(ctx, &np, &cluster)
 	}
 
-	// Gate: nodepool VR must be ready.
-	if np.Status.VersionResolution == nil || np.Status.VersionResolution.ReleaseVersion == "" {
-		if setWaitingNPConditions(&np, "VersionResolutionNotReady", "Waiting for nodepool version resolution") {
-			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
-				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
-			}
-		}
-		log.Infof(ctx, "nodepool VR not ready for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
-		return reconcile.Result{RequeueAfter: requeuePending}, nil
+	iamReady, err := r.iamReady(ctx, &np, &cluster)
+	if err != nil {
+		return reconcile.Result{}, err
 	}
-
-	// While a desired upgrade waits for approval, continue reconciling the
-	// observed release so scaling and fresh health feedback are not blocked.
-	version := installationVersion(&np)
-	// Gate: VR must match the release currently permitted for installation.
-	if np.Status.VersionResolution.ReleaseVersion != version {
-		msg := fmt.Sprintf("VR version %q does not match spec version %q",
-			np.Status.VersionResolution.ReleaseVersion, version)
-		if setWaitingNPConditions(&np, "VersionMismatch", msg) {
-			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
-				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
-			}
-		}
-		log.Infof(ctx, "nodepool VR version %q does not match spec version %q, requeueing after %s",
-			np.Status.VersionResolution.ReleaseVersion, version, requeuePending)
-		return reconcile.Result{RequeueAfter: requeuePending}, nil
+	if !iamReady {
+		return r.observeResources(ctx, &np, &cluster)
 	}
-
-	// Extract nodepool GCP platform fields.
-	var machineType, zone string
-	var diskSizeGB int64
-	var diskType string
-	if gcp := np.Spec.Platform.GCP; gcp != nil {
-		machineType = gcp.MachineType
-		diskSizeGB = gcp.DiskSizeGB
-		diskType = gcp.DiskType
-		zone = gcp.Zone
-	}
-	if machineType == "" {
-		machineType = manifest.DefaultMachineType
-	}
-	if diskSizeGB == 0 {
-		diskSizeGB = manifest.DefaultDiskSizeGB
-	}
-	if diskType == "" {
-		diskType = manifest.DefaultDiskType
-	}
-
-	// Extract cluster GCP platform fields.
-	var gcpRegion, gcpSubnet string
-	if gcp := cluster.Spec.Platform.GCP; gcp != nil {
-		gcpRegion = gcp.Region
-		gcpSubnet = gcp.Subnet
-	}
-	if zone == "" && gcpRegion != "" {
-		zone = gcpRegion + "-a"
-	}
-
-	replicas := defaultReplicas
-	if np.Spec.NodeCount != nil {
-		replicas = *np.Spec.NodeCount
-	}
-	safeName := cluster.Spec.SafeName
-	if safeName == "" {
-		safeName = privatev1.DefaultSafeName(cluster.Name, cluster.UID)
-	}
-
-	manifests, err := manifest.Build(manifest.Input{
-		NodePoolID:         nodepoolID,
-		NodePoolName:       np.Name,
-		NodePoolGeneration: np.Generation,
-		ClusterID:          string(cluster.UID),
-		ClusterName:        safeName,
-		Replicas:           replicas,
-		MachineType:        machineType,
-		GCPRegion:          gcpRegion,
-		Zone:               zone,
-		GCPSubnet:          gcpSubnet,
-		DiskSizeGB:         diskSizeGB,
-		DiskType:           diskType,
-		ReleaseImage:       np.Status.VersionResolution.ReleaseImage,
-	})
+	manifests, err := manifest.Build(manifestInput(&np, &cluster))
 	if err != nil {
 		return reconcile.Result{}, r.preparationFailure(ctx, &np, err)
 	}
@@ -197,7 +130,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	managementCluster := cluster.Status.PlacementResult.ManagementClusterName
 
-	mwStatus, err := r.applyResources(ctx, &np, managementCluster, groupKey, manifests)
+	mwStatus, err := r.applyResources(ctx, &np, &cluster, managementCluster, groupKey, manifests)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply resources: %w", err)
 	}
@@ -209,7 +142,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	// Write nodepool status conditions — only update if something changed.
-	if r.applyStatusConditions(&np, string(cluster.UID), mwStatus) {
+	statusChanged := r.applyStatusConditions(&np, string(cluster.UID), mwStatus)
+	if mwStatus != nil && !mwStatus.Stale {
+		statusChanged = privatev1.PromoteIAMDispatch(np.Status.IAMDispatch, np.Status.Version) || statusChanged
+	}
+	if statusChanged {
 		if err := r.client.Status().Update(ctx, &np); err != nil {
 			if apierrors.IsConflict(err) {
 				return reconcile.Result{}, nil
@@ -235,6 +172,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	log.Infof(ctx, "nodepool reconciler: nodepool %s reconciled, requeueing after %s", nodepoolID, requeueStable)
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
+}
+
+func (r *Reconciler) prerequisitesReady(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster) (bool, error) {
+	var reason, message string
+	switch {
+	case cluster.Status.PlacementResult == nil || cluster.Status.PlacementResult.ManagementClusterName == "":
+		reason, message = "PlacementNotReady", "Waiting for cluster placement to select a management cluster"
+	case np.Status.VersionResolution == nil || np.Status.VersionResolution.ReleaseVersion == "":
+		reason, message = "VersionResolutionNotReady", "Waiting for nodepool version resolution"
+	case np.Status.VersionResolution.ReleaseVersion != installationVersion(np):
+		reason, message = "VersionMismatch", fmt.Sprintf("VR version %q does not match spec version %q", np.Status.VersionResolution.ReleaseVersion, installationVersion(np))
+	default:
+		return true, nil
+	}
+	if setWaitingNPConditions(np, reason, message) {
+		if err := r.client.Status().Update(ctx, np); err != nil && !apierrors.IsConflict(err) {
+			return false, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
+		}
+	}
+	return false, nil
 }
 
 // handleDeletion cleans up management-cluster resources and removes the finalizer.
@@ -324,19 +281,28 @@ func (r *Reconciler) preparationFailure(ctx context.Context, np *privatev1.NodeP
 // applyResources persists the dispatch boundary before transport can write the
 // target. An unknown result remains locked across errors or restarts; recovery
 // after dispatch is intentionally outside the pre-submission cancellation flow.
-func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool, managementCluster, groupKey string, manifests [][]byte) (*transport.Status, error) {
+func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, managementCluster, groupKey string, manifests [][]byte) (*transport.Status, error) {
 	upgrading := privatev1.NodePoolUpgradeActive(np) && np.Spec.Release.Version != np.Status.Version
-	if !upgrading {
-		return r.transport.Apply(ctx, managementCluster, groupKey, manifests)
+	receipt, persist, err := r.freshDispatch(ctx, np, cluster)
+	if err != nil {
+		if _, writeErr := r.iamCondition(ctx, np, err); writeErr != nil {
+			return nil, writeErr
+		}
+		return &transport.Status{Stale: true}, nil
 	}
-	submitted := meta.FindStatusCondition(np.Status.Conditions, privatev1.NodePoolUpgradeSubmitted)
-	if submitted == nil || submitted.Status == metav1.ConditionFalse {
+	if persist {
 		before := np.DeepCopy()
-		meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
-			Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionUnknown,
-			Reason: "Dispatching", Message: "The desired release is being dispatched to the management cluster",
-			ObservedGeneration: np.Generation,
-		})
+		if np.Status.IAMDispatch == nil {
+			np.Status.IAMDispatch = &privatev1.IAMDispatchState{}
+		}
+		np.Status.IAMDispatch.Pending = receipt
+		if upgrading {
+			meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
+				Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionUnknown,
+				Reason: "Dispatching", Message: "The desired release is being dispatched to the management cluster",
+				ObservedGeneration: np.Generation,
+			})
+		}
 		if err := r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsConflict(err) {
 			return nil, fmt.Errorf("persist upgrade dispatch boundary: %w", err)
 		}
@@ -346,7 +312,7 @@ func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool,
 	if err != nil {
 		return nil, err
 	}
-	if submitted.Status != metav1.ConditionTrue {
+	if upgrading && !meta.IsStatusConditionTrue(np.Status.Conditions, privatev1.NodePoolUpgradeSubmitted) {
 		before := np.DeepCopy()
 		meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionTrue,
@@ -365,10 +331,7 @@ func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool,
 
 // installationVersion keeps unapproved release intent out of applied manifests.
 func installationVersion(np *privatev1.NodePool) string {
-	if !privatev1.NodePoolReleaseApproved(np) {
-		return np.Status.Version
-	}
-	return np.Spec.Release.Version
+	return catalog.NodePoolInstallationVersion(np)
 }
 
 // setWaitingNPConditions sets NodePoolResourcesApplied and NodePoolAvailable to Unknown.
