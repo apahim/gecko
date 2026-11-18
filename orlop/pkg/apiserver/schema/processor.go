@@ -62,6 +62,15 @@ func (p *Processor) Process(ctx context.Context, obj, oldObj interface{}) field.
 	// 3. Apply defaults
 	defaulting.Default(obj, p.structural)
 
+	// 3.5 Normalize integer-typed fields to int64. encoding/json decodes all
+	// numbers as float64, but the CEL validator cannot convert a float64 to a
+	// CEL int for an integer-typed field; transition rules (self == oldSelf)
+	// would fail with "invalid data, expected int, got float64" even when the
+	// value is unchanged. Both obj and oldObj go through JSON round-trips on
+	// some paths, so both are normalized against the same structural schema.
+	normalizeIntegers(p.structural, obj)
+	normalizeIntegers(p.structural, oldObj)
+
 	// 4. Validate against OpenAPI schema
 	var errs field.ErrorList
 	result := p.validator.Validate(obj)
