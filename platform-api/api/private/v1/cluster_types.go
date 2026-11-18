@@ -546,6 +546,13 @@ type ClusterStatus struct {
 	// +optional
 	IAMDispatch *IAMDispatchState `json:"iamDispatch,omitempty"`
 
+	// iamRequirements describes known control-plane IAM contracts. Incomplete
+	// means the list must not be used to narrow permissions. It is an observation,
+	// not authorization to dispatch a release or proof of cloud IAM state.
+	// +orlop:public
+	// +optional
+	IAMRequirements *IAMRequirementsStatus `json:"iamRequirements,omitempty"`
+
 	// PlacementResult is written by the placement controller.
 	// Not exposed on the public API.
 	// +optional

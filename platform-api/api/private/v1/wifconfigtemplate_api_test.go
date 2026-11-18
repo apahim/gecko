@@ -167,6 +167,35 @@ func TestClusterIAMPublicPatchAPI(t *testing.T) {
 	if valid.Code != http.StatusOK {
 		t.Fatalf("valid history-preserving PATCH: %d %s", valid.Code, valid.Body.String())
 	}
+	// Customer spec writes must never manufacture a Complete controller-owned
+	// requirements view. This field is an observation, not an assertion.
+	forged := apiWIFRequest(t, router, http.MethodPatch, path, "application/merge-patch+json", map[string]any{"status": map[string]any{"iamRequirements": map[string]any{"state": "Complete", "observedGeneration": 1, "objectUID": "cluster-uid", "clusterUID": "cluster-uid"}}})
+	if forged.Code < 200 || forged.Code >= 300 && forged.Code < 400 || forged.Code >= 500 {
+		t.Fatalf("status isolation patch failed unexpectedly: %d %s", forged.Code, forged.Body.String())
+	}
+	// A full public PUT is also unable to turn an assertion into controller
+	// status; the resource may reject the request or preserve stored status.
+	currentForPUT, err := store.Get(t.Context(), "customer", "test-cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicObject, err := converter.PrivateToPublic(currentForPUT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := publicObject.(*publicv1.Cluster)
+	put.Status.IAMRequirements = &publicv1.IAMRequirementsStatus{State: "Complete", ObjectUID: "cluster-uid", ClusterUID: "cluster-uid", ObservedGeneration: 1}
+	forged = apiWIFRequest(t, router, http.MethodPut, path, "application/json", put)
+	if forged.Code < 200 || forged.Code >= 300 && forged.Code < 400 || forged.Code >= 500 {
+		t.Fatalf("status isolation PUT failed unexpectedly: %d %s", forged.Code, forged.Body.String())
+	}
+	afterForgery, err := store.Get(t.Context(), "customer", "test-cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterForgery.(*privatev1.Cluster).Status.IAMRequirements != nil {
+		t.Fatal("customer PATCH forged a controller-owned IAM requirements status")
+	}
 	for _, test := range []struct {
 		name, content string
 		body          any

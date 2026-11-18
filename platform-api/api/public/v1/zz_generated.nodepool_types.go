@@ -336,6 +336,13 @@ type NodePoolStatus struct {
 	// +patchMergeKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// iamRequirements describes known worker IAM contracts. Incomplete means
+	// this view must not be used to narrow permissions. Parent Cluster and other
+	// NodePools must be inspected separately before preparing an IAM update.
+
+	// +optional
+	IAMRequirements *IAMRequirementsStatus `json:"iamRequirements,omitempty"`
+
 	// version is the last OpenShift version observed as applied to this
 	// NodePool. It does not advance merely because an upgrade was requested.
 

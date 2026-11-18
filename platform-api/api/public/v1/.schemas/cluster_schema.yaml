@@ -529,6 +529,116 @@ properties:
           version:
             type: string
         type: object
+      iamRequirements:
+        description: |-
+          IAMRequirementsStatus is a read-only projection of known release contracts,
+          not a dispatch receipt, cloud attestation, or authorization for an IAM update.
+          A client must re-read all related resources and require Complete at the same
+          object generation before using this view to prepare a permission retention plan.
+        properties:
+          clusterUID:
+            maxLength: 128
+            type: string
+          dispatched:
+            description: |-
+              IAMReleaseRequirement identifies the release and immutable IAM contract of
+              previously committed work. This does not assert that cloud IAM was applied.
+            properties:
+              channelGroup:
+                maxLength: 128
+                type: string
+              releaseImage:
+                maxLength: 3072
+                type: string
+              releaseVersion:
+                maxLength: 128
+                type: string
+              templateRef:
+                description: WIFConfigTemplateReference pins both resource identity
+                  and executable content.
+                properties:
+                  digest:
+                    maxLength: 71
+                    pattern: ^sha256:[0-9a-f]{64}$
+                    type: string
+                  name:
+                    maxLength: 32
+                    type: string
+                  uid:
+                    maxLength: 128
+                    type: string
+                required:
+                - digest
+                - name
+                - uid
+                type: object
+            required:
+            - channelGroup
+            - releaseImage
+            - releaseVersion
+            - templateRef
+            type: object
+          lastRefreshTime:
+            format: date-time
+            type: string
+          objectUID:
+            maxLength: 128
+            type: string
+          observedGeneration:
+            format: int64
+            minimum: 0
+            type: integer
+          pending:
+            description: |-
+              IAMReleaseRequirement identifies the release and immutable IAM contract of
+              previously committed work. This does not assert that cloud IAM was applied.
+            properties:
+              channelGroup:
+                maxLength: 128
+                type: string
+              releaseImage:
+                maxLength: 3072
+                type: string
+              releaseVersion:
+                maxLength: 128
+                type: string
+              templateRef:
+                description: WIFConfigTemplateReference pins both resource identity
+                  and executable content.
+                properties:
+                  digest:
+                    maxLength: 71
+                    pattern: ^sha256:[0-9a-f]{64}$
+                    type: string
+                  name:
+                    maxLength: 32
+                    type: string
+                  uid:
+                    maxLength: 128
+                    type: string
+                required:
+                - digest
+                - name
+                - uid
+                type: object
+            required:
+            - channelGroup
+            - releaseImage
+            - releaseVersion
+            - templateRef
+            type: object
+          state:
+            enum:
+            - Complete
+            - Incomplete
+            maxLength: 10
+            type: string
+        required:
+        - clusterUID
+        - objectUID
+        - observedGeneration
+        - state
+        type: object
     type: object
 required:
 - spec

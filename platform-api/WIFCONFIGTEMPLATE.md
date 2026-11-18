@@ -147,3 +147,32 @@ worker manifest receives only the Cluster's explicit immutable default Compute S
 Phase 2 deliberately keeps application writes disabled. Positive coverage and
 upgrade tests use local fixtures only. A template's verified assertion alone does
 not authorize a Cluster or independently establish runtime permissions.
+
+## Read-only IAM requirements (Phase 4 code-first)
+
+Cluster and NodePool public `status.iamRequirements` are **observations**, not
+dispatch receipts or cloud IAM attestation. They expose the exact release,
+payload and immutable template reference of the last observed dispatch and of
+any committed pending delivery. Their `state` is `Incomplete` when a required
+identity/receipt cannot be established, the observed version differs from known
+receipts, progress feedback is missing/Unknown/True for an observed release, or
+the desired release is not represented by the running/pending work. A missing
+`iamRequirements` field is also incomplete. Historic Cluster application
+assertions are not themselves evidence that a workload is still running.
+
+`observedGeneration` binds the view to the object's generation. `objectUID` and
+`clusterUID` bind it to exact resource instances. `lastRefreshTime` records the
+controller's last reconciliation of this view; it is **not** the age of cloud IAM
+verification or a guarantee of fresh transport feedback. On a healthy stable
+reconcile the view is refreshed at most once every five minutes. A future IAM
+update client must require `state=Complete`, matching generation/UIDs, a bounded
+age (and no future timestamp), and a complete, freshly re-read Cluster/NodePool
+inventory. If feedback is stale or missing, or any of these checks fail, it must
+refuse to narrow running permissions. A complete view is not authorization to
+start an upgrade or to append an IAM application record.
+
+This field is additive, optional and controller-owned. API/schema support must
+be deployed before compatible controllers write it. Old controllers may drop it
+during a mixed-version rollout; missing means incomplete. No IAM update executor,
+new template, gate activation or live upgrade is included in this code-first
+slice.
