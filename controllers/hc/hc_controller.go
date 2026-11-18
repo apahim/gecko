@@ -104,7 +104,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	var gcpProjectID, gcpRegion, gcpNetwork, gcpSubnet, gcpEndpointAccess string
 	var wifProjectNumber, wifPoolID, wifProviderID string
 	var nodePoolEmail, controlPlaneEmail, cloudControllerEmail string
-	var storageEmail, imageRegistryEmail, networkEmail string
+	var storageEmail, imageRegistryEmail, networkEmail, ingressEmail string
 	if gcp := cluster.Spec.Platform.GCP; gcp != nil {
 		gcpProjectID = gcp.ProjectID
 		gcpRegion = gcp.Region
@@ -122,38 +122,51 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			storageEmail = sa.StorageEmail
 			imageRegistryEmail = sa.ImageRegistryEmail
 			networkEmail = sa.NetworkEmail
+			if sa.IngressEmail != nil {
+				ingressEmail = *sa.IngressEmail
+			}
 		}
 	}
 
-	// Build manifests.
+	// Build manifests. The ingress default certificate is staged: request it
+	// once HyperShift has published the ACME delegation CNAME, then reference it
+	// once cert-manager has produced the serving secret.
+	enableIngress := ingressEmail != ""
+	includeIngressCertificate := enableIngress && ingressCertificateRequested(&cluster)
+	includeDefaultIngressCert := includeIngressCertificate &&
+		(ingressCertificateReady(&cluster) || ingressDefaultCertificateApplied(&cluster))
+
 	// TODO: CreatedBy is not yet in the orlop ClusterSpec.
 	mwInput := manifest.Input{
-		ClusterID:            string(cluster.UID),
-		ClusterName:          safeName,
-		Generation:           cluster.Generation,
-		CreatedBy:            cluster.Annotations[constants.AnnotationCreatedBy],
-		InfraID:              cluster.Spec.InfraID,
-		IssuerURL:            cluster.Spec.IssuerURL,
-		GCPProjectID:         gcpProjectID,
-		GCPRegion:            gcpRegion,
-		GCPNetwork:           gcpNetwork,
-		GCPSubnet:            gcpSubnet,
-		GCPEndpointAccess:    gcpEndpointAccess,
-		WIFProjectNumber:     wifProjectNumber,
-		WIFPoolID:            wifPoolID,
-		WIFProviderID:        wifProviderID,
-		NodePoolEmail:        nodePoolEmail,
-		ControlPlaneEmail:    controlPlaneEmail,
-		CloudControllerEmail: cloudControllerEmail,
-		StorageEmail:         storageEmail,
-		ImageRegistryEmail:   imageRegistryEmail,
-		NetworkEmail:         networkEmail,
-		ReleaseImage:         vr.ReleaseImage,
-		ReleaseChannel:       vr.CincinnatiChannel,
-		BaseDomain:           placement.BaseDomain,
-		PullSecretStoreName:  r.pullSecretStoreName,
-		PullSecretGCPKey:     r.pullSecretGCPKey,
-		ResourceLabels:       r.customerLabels,
+		ClusterID:                 string(cluster.UID),
+		ClusterName:               safeName,
+		Generation:                cluster.Generation,
+		CreatedBy:                 cluster.Annotations[constants.AnnotationCreatedBy],
+		InfraID:                   cluster.Spec.InfraID,
+		IssuerURL:                 cluster.Spec.IssuerURL,
+		GCPProjectID:              gcpProjectID,
+		GCPRegion:                 gcpRegion,
+		GCPNetwork:                gcpNetwork,
+		GCPSubnet:                 gcpSubnet,
+		GCPEndpointAccess:         gcpEndpointAccess,
+		WIFProjectNumber:          wifProjectNumber,
+		WIFPoolID:                 wifPoolID,
+		WIFProviderID:             wifProviderID,
+		NodePoolEmail:             nodePoolEmail,
+		ControlPlaneEmail:         controlPlaneEmail,
+		CloudControllerEmail:      cloudControllerEmail,
+		StorageEmail:              storageEmail,
+		ImageRegistryEmail:        imageRegistryEmail,
+		NetworkEmail:              networkEmail,
+		IngressEmail:              ingressEmail,
+		IncludeIngressCertificate: includeIngressCertificate,
+		IncludeDefaultIngressCert: includeDefaultIngressCert,
+		ReleaseImage:              vr.ReleaseImage,
+		ReleaseChannel:            vr.CincinnatiChannel,
+		BaseDomain:                placement.BaseDomain,
+		PullSecretStoreName:       r.pullSecretStoreName,
+		PullSecretGCPKey:          r.pullSecretGCPKey,
+		ResourceLabels:            r.customerLabels,
 	}
 
 	manifests, err := manifest.Build(mwInput)
@@ -173,7 +186,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	// Write status conditions — only update if something changed.
-	statusChanged, err := r.applyStatusConditions(&cluster, mwStatus)
+	statusChanged, err := r.applyStatusConditions(&cluster, mwStatus, enableIngress, includeIngressCertificate, includeDefaultIngressCert)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("%s: apply status feedback: %w", adapterName, err)
 	}
@@ -362,7 +375,7 @@ func (r *Reconciler) setWaitingConditions(cluster *privatev1.Cluster, reason, me
 
 // applyStatusConditions derives conditions from the resource status and writes them to the cluster.
 // Returns true if any condition changed.
-func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus *transport.Status) (bool, error) {
+func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus *transport.Status, enableIngress, ingressCertRequested, ingressCertApplied bool) (bool, error) {
 	gen := cluster.Generation
 
 	if mwStatus == nil {
@@ -387,7 +400,26 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
-		return a || b || c, nil
+		e, f := false, false
+		if enableIngress {
+			e = meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+				Type:               "IngressCredentialsReady",
+				Status:             metav1.ConditionFalse,
+				Reason:             "ResourcesNotFound",
+				Message:            "Resources have not been applied yet",
+				ObservedGeneration: gen,
+			})
+		}
+		if ingressCertRequested {
+			f = meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+				Type:               "IngressCertificateReady",
+				Status:             metav1.ConditionFalse,
+				Reason:             "ResourcesNotFound",
+				Message:            "Resources have not been applied yet",
+				ObservedGeneration: gen,
+			})
+		}
+		return a || b || c || e || f, nil
 	}
 
 	// Derive ResourcesApplied from top-level conditions.
@@ -415,20 +447,46 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 		availableStatus = v
 	}
 
+	// HostedClusterResult (including the observed HyperShift conditions) is only
+	// touched once something has been observed at least once. Before that, there
+	// is nothing meaningful to report and the field stays nil.
+	resultChanged := false
+	if hasHCFeedback || cluster.Status.HostedClusterResult != nil {
+		var err error
+		resultChanged, err = r.applyHostedClusterResult(cluster, hasHCFeedback, hcFeedback, gen)
+		if err != nil {
+			return false, fmt.Errorf("%s: apply hosted cluster result: %w", adapterName, err)
+		}
+	}
+
 	// Derive ApiCertificateReady from Certificate resource status.
-	certKey := transport.ResourceKey("cert-manager.io", "v1", "certificates", clusterNS, "external-api-cert")
-	certStatus := string(metav1.ConditionFalse)
-	certReason := "CertificateNotReady"
-	certMessage := ""
-	if certFeedback, ok := mwStatus.ResourceStatuses[certKey]; ok {
-		if v, ok := certFeedback["readyCondition"]; ok {
-			// Validate condition value - only accept True/False/Unknown
-			if v == string(metav1.ConditionTrue) || v == string(metav1.ConditionFalse) || v == string(metav1.ConditionUnknown) {
-				certStatus = v
-				if v == string(metav1.ConditionTrue) {
-					certReason = "CertificateReady"
-				}
-			}
+	certStatus, certReason, certMessage := certificateReadyCondition(mwStatus.ResourceStatuses,
+		transport.ResourceKey("cert-manager.io", "v1", "certificates", clusterNS, "external-api-cert"))
+
+	// Ingress readiness is only reported for clusters that enable Ingress.
+	var ingressCredentials, ingressDefaultCert *metav1.Condition
+	if enableIngress && cluster.Status.HostedClusterResult != nil {
+		ingressCredentials = meta.FindStatusCondition(cluster.Status.HostedClusterResult.ObservedConditions, "IngressCredentialsFound")
+		ingressDefaultCert = meta.FindStatusCondition(cluster.Status.HostedClusterResult.ObservedConditions, "IngressDefaultCertificateSynced")
+	}
+
+	// Gate availability on ingress readiness. HyperShift treats a missing ingress
+	// certificate as non-fatal, but Gecko does not report such a cluster as available.
+	availableReason := "HostedClusterNotAvailable"
+	if availableStatus == "True" {
+		availableReason = "HostedClusterAvailable"
+	}
+	availableMessage := ""
+	if availableStatus == "True" {
+		switch {
+		case ingressCredentials != nil && ingressCredentials.Status == metav1.ConditionFalse:
+			availableStatus = string(metav1.ConditionFalse)
+			availableReason = ingressCredentials.Reason
+			availableMessage = ingressCredentials.Message
+		case ingressDefaultCert != nil && ingressDefaultCert.Status == metav1.ConditionFalse:
+			availableStatus = string(metav1.ConditionFalse)
+			availableReason = ingressDefaultCert.Reason
+			availableMessage = ingressDefaultCert.Message
 		}
 	}
 
@@ -439,14 +497,11 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 		Message:            appliedMessage,
 		ObservedGeneration: gen,
 	})
-	availableReason := "HostedClusterNotAvailable"
-	if availableStatus == "True" {
-		availableReason = "HostedClusterAvailable"
-	}
 	b := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "HostedClusterAvailable",
 		Status:             metav1.ConditionStatus(availableStatus),
 		Reason:             availableReason,
+		Message:            availableMessage,
 		ObservedGeneration: gen,
 	})
 	d := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
@@ -457,19 +512,146 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 		ObservedGeneration: gen,
 	})
 
-	// HostedClusterResult (including the observed HyperShift/CVO conditions) is only
-	// touched once something has been observed at least once. Before that, there is
-	// nothing meaningful to report and the field stays nil.
-	c := false
-	if hasHCFeedback || cluster.Status.HostedClusterResult != nil {
-		var err error
-		c, err = r.applyHostedClusterResult(cluster, hasHCFeedback, hcFeedback, gen)
-		if err != nil {
-			return false, fmt.Errorf("%s: apply hosted cluster result: %w", adapterName, err)
+	changed := a || b || d || resultChanged
+	changed = applyIngressConditions(cluster, mwStatus, ingressCredentials, ingressDefaultCert,
+		ingressCertRequested, ingressCertApplied, hasHCFeedback, clusterNS, gen) || changed
+
+	return changed, nil
+}
+
+// applyIngressConditions writes the Gecko-owned ingress conditions: the
+// HyperShift-observed credentials and default-certificate sync, the
+// cert-manager certificate readiness, and the locally-owned reference marker.
+func applyIngressConditions(cluster *privatev1.Cluster, mwStatus *transport.Status, ingressCredentials, ingressDefaultCert *metav1.Condition,
+	ingressCertRequested, ingressCertApplied, hasHCFeedback bool, clusterNS string, gen int64) bool {
+	changed := false
+	if ingressCredentials != nil {
+		changed = meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "IngressCredentialsReady",
+			Status:             ingressCredentials.Status,
+			Reason:             ingressCredentials.Reason,
+			Message:            ingressCredentials.Message,
+			ObservedGeneration: gen,
+		}) || changed
+	}
+	if ingressDefaultCert != nil {
+		changed = meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "IngressDefaultCertificateReady",
+			Status:             ingressDefaultCert.Status,
+			Reason:             ingressDefaultCert.Reason,
+			Message:            ingressDefaultCert.Message,
+			ObservedGeneration: gen,
+		}) || changed
+	}
+	if ingressCertRequested {
+		ingressCertStatus, ingressCertReason, ingressCertMessage := certificateReadyCondition(mwStatus.ResourceStatuses,
+			transport.ResourceKey("cert-manager.io", "v1", "certificates", clusterNS, "ingress-default-cert"))
+		changed = meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "IngressCertificateReady",
+			Status:             metav1.ConditionStatus(ingressCertStatus),
+			Reason:             ingressCertReason,
+			Message:            ingressCertMessage,
+			ObservedGeneration: gen,
+		}) || changed
+	}
+	// The reference marker is owned by Gecko, not derived from HyperShift
+	// feedback: HyperShift can only report IngressDefaultCertificateSynced
+	// after the reference has been applied, so a feedback-derived marker could
+	// not cover the window between the first apply and the first report.
+	if ingressCertApplied {
+		changed = meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "IngressDefaultCertificateApplied",
+			Status:             metav1.ConditionTrue,
+			Reason:             "ReferenceApplied",
+			Message:            "HostedCluster references the ingress default certificate",
+			ObservedGeneration: gen,
+		}) || changed
+	}
+	// When fresh HostedCluster feedback omits an ingress observation that was
+	// previously reported, mark the derived condition Unknown rather than
+	// leaving the last value in place: conditions are consumed by automations
+	// and must not go stale. A missing feedback document (empty read) is not
+	// evidence the observation disappeared, so the reset only applies to fresh
+	// feedback.
+	if hasHCFeedback {
+		if ingressCredentials == nil {
+			changed = resetConditionToUnknown(cluster, "IngressCredentialsReady", "IngressCredentialsFound", gen) || changed
+		}
+		if ingressDefaultCert == nil {
+			changed = resetConditionToUnknown(cluster, "IngressDefaultCertificateReady", "IngressDefaultCertificateSynced", gen) || changed
 		}
 	}
+	return changed
+}
 
-	return a || b || c || d, nil
+// resetConditionToUnknown marks an existing condition Unknown, reporting which
+// HyperShift observation is no longer provided. Conditions that do not exist
+// yet are left absent.
+func resetConditionToUnknown(cluster *privatev1.Cluster, conditionType, observation string, gen int64) bool {
+	if meta.FindStatusCondition(cluster.Status.Conditions, conditionType) == nil {
+		return false
+	}
+	return meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		Type:               conditionType,
+		Status:             metav1.ConditionUnknown,
+		Reason:             "ObservationNotReported",
+		Message:            "HyperShift is not reporting " + observation,
+		ObservedGeneration: gen,
+	})
+}
+
+// certificateReadyCondition derives a Ready-style condition from a cert-manager
+// Certificate resource status.
+func certificateReadyCondition(statuses map[string]map[string]string, key string) (status, reason, message string) {
+	status, reason, message = string(metav1.ConditionFalse), "CertificateNotReady", ""
+	if feedback, ok := statuses[key]; ok {
+		if v, ok := feedback["readyCondition"]; ok {
+			if v == string(metav1.ConditionTrue) || v == string(metav1.ConditionFalse) || v == string(metav1.ConditionUnknown) {
+				status = v
+				if v == string(metav1.ConditionTrue) {
+					reason = "CertificateReady"
+				}
+			}
+		}
+	}
+	return status, reason, message
+}
+
+// observedHCCondition returns a condition from the previous reconciliation's
+// HostedCluster feedback.
+func observedHCCondition(cluster *privatev1.Cluster, conditionType string) *metav1.Condition {
+	if cluster.Status.HostedClusterResult == nil {
+		return nil
+	}
+	return meta.FindStatusCondition(cluster.Status.HostedClusterResult.ObservedConditions, conditionType)
+}
+
+// ingressCertificateRequested reports whether the ingress Certificate has been
+// requested. HyperShift reports GCPACMECNAMEAvailable=True once the ACME
+// delegation CNAME exists. Once the Certificate has reported status, keep
+// managing it even if feedback is momentarily absent.
+func ingressCertificateRequested(cluster *privatev1.Cluster) bool {
+	if c := observedHCCondition(cluster, "GCPACMECNAMEAvailable"); c != nil && c.Status == metav1.ConditionTrue {
+		return true
+	}
+	return meta.FindStatusCondition(cluster.Status.Conditions, "IngressCertificateReady") != nil
+}
+
+// ingressCertificateReady reports whether cert-manager produced the ingress
+// serving secret.
+func ingressCertificateReady(cluster *privatev1.Cluster) bool {
+	c := meta.FindStatusCondition(cluster.Status.Conditions, "IngressCertificateReady")
+	return c != nil && c.Status == metav1.ConditionTrue
+}
+
+// ingressDefaultCertificateApplied reports whether the HostedCluster already
+// references the ingress Certificate. Once referenced, keep the reference so a
+// transient feedback gap cannot remove it. The marker is set by Gecko when the
+// reference is rendered, not derived from HyperShift feedback, so it also
+// covers the window before HyperShift first reports the reference.
+func ingressDefaultCertificateApplied(cluster *privatev1.Cluster) bool {
+	c := meta.FindStatusCondition(cluster.Status.Conditions, "IngressDefaultCertificateApplied")
+	return c != nil && c.Status == metav1.ConditionTrue
 }
 
 // applyHostedClusterResult writes HC-owned HostedCluster feedback to

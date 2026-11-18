@@ -110,6 +110,15 @@ Reconciles `Cluster` resources. Builds and applies HostedCluster manifests to th
 
 Builds HyperShift HostedCluster manifests from the cluster spec (GCP platform fields, workload identity, service accounts, networking) and applies them via the transport layer. Tracks `ResourcesApplied`, `HostedClusterAvailable`, and `ApiCertificateReady` conditions.
 
+**Ingress capability.** Ingress is enabled only when `spec.platform.gcp.workloadIdentity.serviceAccountsRef.ingressEmail` is set. HyperShift treats `spec.capabilities` as immutable, so existing clusters (no ingress email) keep `Ingress` in the disabled list and are not changed. An Ingress-enabled cluster also gets `spec.platform.gcp.delegation.acmeChallengeTarget` pointing at `_acme-challenge.ingress.<cluster>-<slug>.<baseDomain>`, which lets the management-cluster cert-manager solve the `*.apps` DNS-01 challenge through the control plane operator's CNAME.
+
+**Ingress default certificate.** The certificate is staged:
+1. The HostedCluster is created with Ingress enabled and the ACME delegation target, but no certificate.
+2. Once HyperShift reports `GCPACMECNAMEAvailable=True`, a cert-manager `Certificate` (`ingress-default-cert`) is added for `*.apps.in.<cluster>-<slug>.<baseDomain>`.
+3. Once that Certificate is `Ready`, `spec.operatorConfiguration.ingressOperator.defaultCertificate.name` references it. HyperShift copies the secret into the control plane namespace and reports `IngressDefaultCertificateSynced`.
+
+Tracks `IngressCredentialsReady`, `IngressCertificateReady`, and `IngressDefaultCertificateReady`. When either HyperShift ingress condition is `False`, the cluster is not reported as available.
+
 ### nodepool-controller
 
 Reconciles `NodePool` resources. Builds and applies NodePool manifests to the management cluster where the parent cluster is placed.

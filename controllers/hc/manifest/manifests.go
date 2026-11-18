@@ -30,6 +30,9 @@ type Input struct {
 	StorageEmail                 string
 	ImageRegistryEmail           string
 	NetworkEmail                 string
+	IngressEmail                 string // non-empty enables the Ingress capability
+	IncludeIngressCertificate    bool   // add the ingress default Certificate once the ACME CNAME exists
+	IncludeDefaultIngressCert    bool   // reference the ingress Certificate from the HostedCluster once it is ready
 	ReleaseImage                 string
 	ReleaseChannel               string
 	BaseDomain                   string
@@ -119,7 +122,29 @@ func buildManifests(input Input, clusterNS, hcNS string) ([][]byte, error) {
 		return nil, err
 	}
 
-	return [][]byte{ns, es, cert, hc, job}, nil
+	manifests := [][]byte{ns, es, cert, hc, job}
+	if input.IncludeIngressCertificate {
+		ingressCert, err := buildIngressCertificate(input, clusterNS)
+		if err != nil {
+			return nil, err
+		}
+		manifests = append(manifests, ingressCert)
+	}
+	return manifests, nil
+}
+
+// ingressDomain returns the guest ingress domain for the DNS fields set below.
+// HyperShift's BaseDomain is the configured dns.baseDomain when
+// baseDomainPrefix is empty, and its IngressDomain is "apps." + BaseDomain.
+func ingressDomain(input Input) string {
+	return fmt.Sprintf("apps.in.%s-%s.%s", input.ClusterName, input.Slug, input.BaseDomain)
+}
+
+// acmeChallengeTarget returns the name in the regional zone that the
+// management-cluster cert-manager writes DNS-01 TXT records to. HyperShift
+// publishes a CNAME from _acme-challenge.<ingressDomain> to this target.
+func acmeChallengeTarget(input Input) string {
+	return fmt.Sprintf("_acme-challenge.ingress.%s-%s.%s", input.ClusterName, input.Slug, input.BaseDomain)
 }
 
 func buildNamespace(input Input, clusterNS string) ([]byte, error) {
@@ -236,6 +261,55 @@ func buildCertificate(input Input, clusterNS string) ([]byte, error) {
 	return raw, nil
 }
 
+// buildIngressCertificate builds the cert-manager Certificate for the guest
+// ingress wildcard. The management-cluster issuer solves its DNS-01 challenge
+// through the delegation CNAME published by the control plane operator.
+func buildIngressCertificate(input Input, clusterNS string) ([]byte, error) {
+	genStr := strconv.FormatInt(input.Generation, 10)
+	obj := map[string]any{
+		"apiVersion": "cert-manager.io/v1",
+		"kind":       "Certificate",
+		"metadata": map[string]any{
+			"name":      "ingress-default-cert",
+			"namespace": clusterNS,
+			"labels": map[string]any{
+				"gcp.managed.openshift.io/cluster-id":    input.ClusterID,
+				"gcp.managed.openshift.io/managed-by":    "hc-controller",
+				"gcp.managed.openshift.io/resource-type": "certificate",
+			},
+			"annotations": map[string]any{
+				"gcp.managed.openshift.io/generation": genStr,
+			},
+		},
+		"spec": map[string]any{
+			"subject": map[string]any{
+				"organizations": []any{"Red Hat - Hypershift"},
+			},
+			"usages":      []any{"server auth", "client auth"},
+			"duration":    "2160h",
+			"renewBefore": "720h",
+			"privateKey": map[string]any{
+				"algorithm":      "RSA",
+				"encoding":       "PKCS1",
+				"size":           2048,
+				"rotationPolicy": "Always",
+			},
+			"dnsNames":   []any{"*." + ingressDomain(input)},
+			"secretName": "ingress-default-cert",
+			"issuerRef": map[string]any{
+				"name":  "public-issuer",
+				"kind":  "ClusterIssuer",
+				"group": "cert-manager.io",
+			},
+		},
+	}
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("hc manifest: marshal ingress certificate: %w", err)
+	}
+	return raw, nil
+}
+
 func buildHostedCluster(input Input, clusterNS string) ([]byte, error) {
 	genStr := strconv.FormatInt(input.Generation, 10)
 	apiHostname := fmt.Sprintf("api.%s-%s.%s", input.ClusterName, input.Slug, input.BaseDomain)
@@ -330,13 +404,7 @@ func buildHostedCluster(input Input, clusterNS string) ([]byte, error) {
 					},
 				},
 			},
-			"capabilities": map[string]any{
-				"disabled": []any{
-					"ImageRegistry",
-					"Console",
-					"Ingress",
-				},
-			},
+			"capabilities": buildCapabilities(input),
 			"configuration": map[string]any{
 				"apiServer": map[string]any{
 					"servingCerts": map[string]any{
@@ -376,6 +444,16 @@ func buildHostedCluster(input Input, clusterNS string) ([]byte, error) {
 			},
 		},
 	}
+	if input.IncludeDefaultIngressCert {
+		obj["spec"].(map[string]any)["operatorConfiguration"] = map[string]any{
+			"ingressOperator": map[string]any{
+				"defaultCertificate": map[string]any{
+					"name": "ingress-default-cert",
+				},
+			},
+		}
+	}
+
 	raw, err := json.Marshal(obj)
 	if err != nil {
 		return nil, fmt.Errorf("hc manifest: marshal hosted cluster: %w", err)
@@ -383,7 +461,31 @@ func buildHostedCluster(input Input, clusterNS string) ([]byte, error) {
 	return raw, nil
 }
 
+// buildCapabilities keeps the existing disabled capabilities and enables
+// Ingress only when an ingress service account is configured. HyperShift treats
+// capabilities as immutable, so this result must stay stable for existing
+// clusters (which have no ingress service account).
+func buildCapabilities(input Input) map[string]any {
+	disabled := []any{"ImageRegistry", "Console"}
+	if input.IngressEmail == "" {
+		disabled = append(disabled, "Ingress")
+	}
+	return map[string]any{"disabled": disabled}
+}
+
 func buildGCPPlatform(input Input) map[string]any {
+	saEmails := map[string]any{
+		"nodePool":        input.NodePoolEmail,
+		"controlPlane":    input.ControlPlaneEmail,
+		"cloudController": input.CloudControllerEmail,
+		"storage":         input.StorageEmail,
+		"imageRegistry":   input.ImageRegistryEmail,
+		"network":         input.NetworkEmail,
+	}
+	if input.IngressEmail != "" {
+		saEmails["ingress"] = input.IngressEmail
+	}
+
 	gcp := map[string]any{
 		"project": input.GCPProjectID,
 		"region":  input.GCPRegion,
@@ -397,18 +499,16 @@ func buildGCPPlatform(input Input) map[string]any {
 		},
 		"endpointAccess": input.GCPEndpointAccess,
 		"workloadIdentity": map[string]any{
-			"projectNumber": input.WIFProjectNumber,
-			"poolID":        input.WIFPoolID,
-			"providerID":    input.WIFProviderID,
-			"serviceAccountsEmails": map[string]any{
-				"nodePool":        input.NodePoolEmail,
-				"controlPlane":    input.ControlPlaneEmail,
-				"cloudController": input.CloudControllerEmail,
-				"storage":         input.StorageEmail,
-				"imageRegistry":   input.ImageRegistryEmail,
-				"network":         input.NetworkEmail,
-			},
+			"projectNumber":         input.WIFProjectNumber,
+			"poolID":                input.WIFPoolID,
+			"providerID":            input.WIFProviderID,
+			"serviceAccountsEmails": saEmails,
 		},
+	}
+	if input.IngressEmail != "" {
+		gcp["delegation"] = map[string]any{
+			"acmeChallengeTarget": acmeChallengeTarget(input),
+		}
 	}
 	if len(input.ResourceLabels) > 0 {
 		keys := make([]string, 0, len(input.ResourceLabels))

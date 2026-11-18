@@ -388,6 +388,25 @@ type ServiceAccountsRef struct {
 	// +required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkEmail is immutable"
 	NetworkEmail string `json:"networkEmail,omitempty"`
+
+	// ingress is the Google Service Account email for the cluster Ingress Operator
+	// that publishes the default IngressController's *.apps Cloud DNS records.
+	// This GSA requires the following IAM role:
+	// - roles/dns.admin (DNS Admin - for managing records in the ingress managed zone)
+	// See cmd/infra/gcp/iam-bindings.json for the authoritative role definitions.
+	// Format: service-account-name@project-id.iam.gserviceaccount.com
+	//
+	// Supplying this value enables the Ingress capability when the cluster is
+	// created. The value must belong to the cluster's GCP project. This field is
+	// immutable, and the Ingress capability cannot be enabled after creation.
+	//
+	// +orlop:public
+	// +optional
+	// +kubebuilder:validation:MinLength=37
+	// +kubebuilder:validation:MaxLength=85
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ingressEmail is immutable"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\\\.iam\\\\.gserviceaccount\\\\.com$')",message="ingressEmail must be a valid GCP service account email (format: name@project.iam.gserviceaccount.com)"
+	IngressEmail *string `json:"ingressEmail,omitempty"`
 }
 
 // GCPResourceLabel is a label applied to GCP resources.
@@ -603,8 +622,8 @@ type HostedClusterResult struct {
 	// +optional
 	// +listType=set
 	AvailableUpdates []string `json:"availableUpdates,omitempty"`
-	// ObservedConditions are HyperShift/CVO upgrade-readiness conditions normalized
-	// by the hc-controller from raw HostedCluster feedback. This field is recalculated
+	// ObservedConditions are HyperShift conditions normalized by the hc-controller
+	// from raw HostedCluster feedback (upgrade readiness and ingress readiness). This field is recalculated
 	// in full on every reconciliation; a condition type absent from HostedCluster
 	// feedback is omitted rather than left stale. Consumers should treat an absent
 	// condition as unknown. This is private HC feedback used by Gecko controllers and is

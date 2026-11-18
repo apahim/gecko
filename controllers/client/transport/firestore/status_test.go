@@ -294,3 +294,38 @@ func TestExtractNPFields(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractResourceStatuses_HostedCluster_IngressConditions(t *testing.T) {
+	hcJSON, err := json.Marshal(map[string]any{
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "IngressCredentialsFound", "status": "True", "reason": "AsExpected"},
+				map[string]any{"type": "IngressDefaultCertificateSynced", "status": "False", "reason": "SecretNotFound", "message": "missing"},
+				map[string]any{"type": "GCPACMECNAMEAvailable", "status": "True", "reason": "GCPSuccess"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ref := kubeapplier.ResourceReference{
+		Group: "hypershift.openshift.io", Version: "v1beta1",
+		Resource: "hostedclusters", Namespace: "clusters-abc", Name: "my-hc",
+	}
+	reads := []kubeapplier.ReadDesire{makeReadDesire(ref, hcJSON)}
+	statuses, err := extractResourceStatuses(reads)
+	require.NoError(t, err)
+
+	key := "hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/my-hc"
+	var conditions []metav1.Condition
+	require.NoError(t, json.Unmarshal([]byte(statuses[key]["versionConditions"]), &conditions))
+	require.Len(t, conditions, 3)
+
+	byType := map[string]metav1.Condition{}
+	for _, condition := range conditions {
+		byType[condition.Type] = condition
+	}
+	require.Equal(t, metav1.ConditionTrue, byType["IngressCredentialsFound"].Status)
+	require.Equal(t, metav1.ConditionFalse, byType["IngressDefaultCertificateSynced"].Status)
+	require.Equal(t, "SecretNotFound", byType["IngressDefaultCertificateSynced"].Reason)
+	require.Equal(t, metav1.ConditionTrue, byType["GCPACMECNAMEAvailable"].Status)
+}

@@ -362,3 +362,91 @@ func TestBuild_PullSecretStoreName(t *testing.T) {
 		require.Equal(t, "gcp-secret-manager", storeRef["name"])
 	})
 }
+
+func TestBuild_IngressDisabledWithoutEmail(t *testing.T) {
+	input := testInput()
+	input.IngressEmail = ""
+
+	manifests, err := manifest.Build(input)
+	require.NoError(t, err)
+	require.Len(t, manifests, 5)
+
+	var hc map[string]any
+	require.NoError(t, json.Unmarshal(manifests[3], &hc))
+	spec := hc["spec"].(map[string]any)
+
+	require.Equal(t, []any{"ImageRegistry", "Console", "Ingress"},
+		spec["capabilities"].(map[string]any)["disabled"])
+
+	gcp := spec["platform"].(map[string]any)["gcp"].(map[string]any)
+	saEmails := gcp["workloadIdentity"].(map[string]any)["serviceAccountsEmails"].(map[string]any)
+	require.NotContains(t, saEmails, "ingress")
+	require.NotContains(t, gcp, "delegation")
+	require.NotContains(t, spec, "operatorConfiguration")
+}
+
+func TestBuild_IngressEnabledWithEmail(t *testing.T) {
+	input := testInput()
+	input.IngressEmail = "ingress@project.iam.gserviceaccount.com"
+
+	manifests, err := manifest.Build(input)
+	require.NoError(t, err)
+	require.Len(t, manifests, 5)
+
+	var hc map[string]any
+	require.NoError(t, json.Unmarshal(manifests[3], &hc))
+	spec := hc["spec"].(map[string]any)
+
+	require.Equal(t, []any{"ImageRegistry", "Console"},
+		spec["capabilities"].(map[string]any)["disabled"])
+
+	gcp := spec["platform"].(map[string]any)["gcp"].(map[string]any)
+	saEmails := gcp["workloadIdentity"].(map[string]any)["serviceAccountsEmails"].(map[string]any)
+	require.Equal(t, input.IngressEmail, saEmails["ingress"])
+	require.Equal(t, "_acme-challenge.ingress.my-cluster-safe-alice.example.com",
+		gcp["delegation"].(map[string]any)["acmeChallengeTarget"])
+
+	require.NotContains(t, spec, "operatorConfiguration")
+}
+
+func TestBuild_IngressCertificateStaged(t *testing.T) {
+	input := testInput()
+	input.IngressEmail = "ingress@project.iam.gserviceaccount.com"
+	input.IncludeIngressCertificate = true
+
+	manifests, err := manifest.Build(input)
+	require.NoError(t, err)
+	require.Len(t, manifests, 6)
+
+	var cert map[string]any
+	require.NoError(t, json.Unmarshal(manifests[5], &cert))
+	require.Equal(t, "Certificate", cert["kind"])
+	require.Equal(t, "ingress-default-cert", cert["metadata"].(map[string]any)["name"])
+
+	certSpec := cert["spec"].(map[string]any)
+	require.Equal(t, "ingress-default-cert", certSpec["secretName"])
+	require.Equal(t, []any{"*.apps.in.my-cluster-safe-alice.example.com"}, certSpec["dnsNames"])
+	require.Equal(t, "public-issuer", certSpec["issuerRef"].(map[string]any)["name"])
+
+	var hc map[string]any
+	require.NoError(t, json.Unmarshal(manifests[3], &hc))
+	require.NotContains(t, hc["spec"].(map[string]any), "operatorConfiguration")
+}
+
+func TestBuild_DefaultIngressCertificateReference(t *testing.T) {
+	input := testInput()
+	input.IngressEmail = "ingress@project.iam.gserviceaccount.com"
+	input.IncludeIngressCertificate = true
+	input.IncludeDefaultIngressCert = true
+
+	manifests, err := manifest.Build(input)
+	require.NoError(t, err)
+	require.Len(t, manifests, 6)
+
+	var hc map[string]any
+	require.NoError(t, json.Unmarshal(manifests[3], &hc))
+	operatorConfig := hc["spec"].(map[string]any)["operatorConfiguration"].(map[string]any)
+	ingressOperator := operatorConfig["ingressOperator"].(map[string]any)
+	require.Equal(t, "ingress-default-cert",
+		ingressOperator["defaultCertificate"].(map[string]any)["name"])
+}
