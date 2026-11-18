@@ -210,6 +210,13 @@ spanner:
   # bound via Workload Identity to a GCP service account with
   # roles/spanner.databaseAdmin, separate from the Deployment's KSA.
   migration:
+    # Optional complete image override to keep a completed, idempotent migration
+    # Job unchanged when only the API runtime image changes. Set all three
+    # fields together; empty values inherit the API image as before.
+    image:
+      registry: ""
+      repository: ""
+      tag: ""
     serviceAccount:
       create: true
       # Name override. Defaults to "<fullname>-migrate".

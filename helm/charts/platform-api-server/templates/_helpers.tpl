@@ -40,6 +40,14 @@ app.kubernetes.io/version: {{ .Values.image.tag | default .Chart.AppVersion | qu
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
+{{/* Keep the migration Job's version label pinned to its own image tag. */}}
+{{- define "platform-api-server.migrationLabels" -}}
+helm.sh/chart: {{ include "platform-api-server.chart" . }}
+{{ include "platform-api-server.selectorLabels" . }}
+app.kubernetes.io/version: {{ default .Values.image.tag .Values.spanner.migration.image.tag | default .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
 {{/*
 Selector labels
 */}}
@@ -91,6 +99,13 @@ Validate required values that must not remain as placeholders.
 {{- end -}}
 {{- end -}}
 {{- if .Values.spanner.enabled -}}
+{{- $migrationImage := .Values.spanner.migration.image -}}
+{{- if and (or $migrationImage.registry $migrationImage.repository $migrationImage.tag) (not (and $migrationImage.registry $migrationImage.repository $migrationImage.tag)) -}}
+{{- fail "spanner.migration.image requires registry, repository, and tag together" -}}
+{{- end -}}
+{{- if or (and $migrationImage.registry (or (not (trim (toString $migrationImage.registry))) (eq (trim (toString $migrationImage.registry)) "CHANGE_ME"))) (and $migrationImage.repository (or (not (trim (toString $migrationImage.repository))) (eq (trim (toString $migrationImage.repository)) "CHANGE_ME"))) (and $migrationImage.tag (or (not (trim (toString $migrationImage.tag))) (eq (trim (toString $migrationImage.tag)) "CHANGE_ME"))) -}}
+{{- fail "spanner.migration.image must use non-empty concrete registry, repository, and tag" -}}
+{{- end -}}
 {{- if not .Values.spanner.projectId -}}
 {{- fail "spanner.projectId must be set when spanner is enabled" -}}
 {{- end -}}
