@@ -102,7 +102,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 		return reconcile.Result{}, nil // re-reconcile with finalizer in place
 	}
-
 	ready, err := r.prerequisitesReady(ctx, &np, &cluster)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -145,6 +144,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	statusChanged := r.applyStatusConditions(&np, string(cluster.UID), mwStatus)
 	if mwStatus != nil && !mwStatus.Stale {
 		statusChanged = privatev1.PromoteIAMDispatch(np.Status.IAMDispatch, np.Status.Version) || statusChanged
+	}
+	// Nil transport feedback cannot refresh an old requirements observation.
+	if mwStatus != nil {
+		statusChanged = privatev1.SyncNodePoolIAMRequirements(&np, &cluster) || statusChanged
 	}
 	if statusChanged {
 		if err := r.client.Status().Update(ctx, &np); err != nil {
@@ -296,6 +299,7 @@ func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool,
 			np.Status.IAMDispatch = &privatev1.IAMDispatchState{}
 		}
 		np.Status.IAMDispatch.Pending = receipt
+		privatev1.SyncNodePoolIAMRequirements(np, cluster)
 		if upgrading {
 			meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 				Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionUnknown,

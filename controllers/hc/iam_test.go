@@ -54,6 +54,10 @@ func TestInitialIAMDispatchIsDurableBeforeApplyAndRedelivers(t *testing.T) {
 	require.NoError(t, store.Get(t.Context(), client.ObjectKeyFromObject(c), current))
 	require.NotNil(t, current.Status.IAMDispatch.Pending)
 	require.Equal(t, *v.Spec.WIFConfigTemplateRef, current.Status.IAMDispatch.Pending.TemplateRef)
+	require.NotNil(t, current.Status.IAMRequirements)
+	require.Equal(t, "Complete", current.Status.IAMRequirements.State)
+	require.Equal(t, *v.Spec.WIFConfigTemplateRef, current.Status.IAMRequirements.Pending.TemplateRef)
+	require.Nil(t, current.Status.IAMRequirements.Dispatched)
 	// Crash/restart after commit, then revoke eligibility before RPC redelivery.
 	w.Spec.Verified = new(false)
 	require.NoError(t, store.Update(t.Context(), w))
@@ -233,6 +237,8 @@ func TestControllerPromotesOnlyNonStaleFeedbackAtomically(t *testing.T) {
 				} else {
 					require.Nil(t, current.Status.IAMDispatch.Pending)
 					require.Equal(t, pending, current.Status.IAMDispatch.Dispatched)
+					require.NotNil(t, current.Status.IAMRequirements)
+					require.Equal(t, pending.TemplateRef, current.Status.IAMRequirements.Dispatched.TemplateRef)
 					require.Equal(t, 1, count)
 				}
 			})

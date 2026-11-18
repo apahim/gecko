@@ -71,6 +71,7 @@ func (r *Reconciler) observeResources(ctx context.Context, c *privatev1.Cluster,
 	if c.Status.HostedClusterResult != nil {
 		changed = privatev1.PromoteIAMDispatch(c.Status.IAMDispatch, c.Status.HostedClusterResult.Version) || changed
 	}
+	changed = privatev1.SyncClusterIAMRequirements(c) || changed
 	if changed {
 		if err := r.client.Status().Update(ctx, c); err != nil && !apierrors.IsConflict(err) {
 			return reconcile.Result{}, err

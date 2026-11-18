@@ -979,6 +979,9 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 		{Type: "HostedClusterAvailable", Status: metav1.ConditionFalse, Reason: "HostedClusterNotAvailable", Message: "", ObservedGeneration: 2},
 		{Type: "ApiCertificateReady", Status: metav1.ConditionFalse, Reason: "CertificateNotReady", Message: "", ObservedGeneration: 2},
 	}
+	// Pre-populate the read-only IAM view as well: this test covers a fully
+	// converged status, not the one-time backfill of an older Cluster.
+	privatev1.SyncClusterIAMRequirements(cluster)
 
 	tr := mock.New()
 	tr.StatusOverrides[mcName+"/"+groupKey] = &transport.Status{
@@ -994,6 +997,20 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 15*time.Second, result.RequeueAfter) // HostedClusterAvailable=False → requeuePending
 	require.False(t, storeClient.statusWriter.called, "Status.Update should not be called when conditions are unchanged")
+}
+
+func TestReconcile_BackfillsIAMRequirementsForRetainedCluster(t *testing.T) {
+	c := buildReadyCluster("retained", "5.0.2")
+	previous := c.Status.IAMDispatch.DeepCopy()
+	tr := mock.New()
+	r, store := buildReconciler(t, c, nil, tr, nil)
+	_, err := r.Reconcile(t.Context(), clusterReq(c.Name))
+	require.NoError(t, err)
+	require.True(t, store.statusWriter.called, "retained object should acquire a read-only requirements view")
+	updated := store.statusWriter.captured.(*privatev1.Cluster)
+	require.NotNil(t, updated.Status.IAMRequirements)
+	require.Equal(t, string(c.UID), updated.Status.IAMRequirements.ClusterUID)
+	require.Equal(t, previous, updated.Status.IAMDispatch, "projection must not change private dispatch authority")
 }
 
 // TestReconcile_StatusUpdateConflict_ReturnsNoError verifies that a conflict error on

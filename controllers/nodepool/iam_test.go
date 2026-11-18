@@ -59,6 +59,9 @@ func TestNodePoolExactIAMAndInitialDispatchBoundary(t *testing.T) {
 	require.NoError(t, store.Get(t.Context(), client.ObjectKeyFromObject(p), current))
 	require.NotNil(t, current.Status.IAMDispatch.Pending)
 	require.Equal(t, string(c.UID), current.Status.IAMDispatch.Pending.ClusterUID)
+	require.NotNil(t, current.Status.IAMRequirements)
+	require.Equal(t, "Complete", current.Status.IAMRequirements.State)
+	require.Equal(t, *v.Spec.WIFConfigTemplateRef, current.Status.IAMRequirements.Pending.TemplateRef)
 	_, err = r.Reconcile(t.Context(), npReq(p.Namespace, p.Name))
 	require.NoError(t, err)
 	require.Len(t, tr.ApplyCalls, 1)
@@ -129,6 +132,8 @@ func TestObservePromotesOnlyNonStaleFeedbackInOneWrite(t *testing.T) {
 			} else {
 				require.Nil(t, current.Status.IAMDispatch.Pending)
 				require.Equal(t, pending, current.Status.IAMDispatch.Dispatched)
+				require.NotNil(t, current.Status.IAMRequirements)
+				require.Equal(t, pending.TemplateRef, current.Status.IAMRequirements.Dispatched.TemplateRef)
 				require.Equal(t, 1, writes)
 				require.Equal(t, "5.0.0", current.Status.Version)
 			}

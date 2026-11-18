@@ -289,6 +289,21 @@ func buildReconciler(
 	return New(tr, newTestLogger(t), storeClient), storeClient
 }
 
+func TestReconcile_BackfillsIAMRequirementsForRetainedNodePool(t *testing.T) {
+	p := testNodePool("5.0.2")
+	c := testCluster(true, true)
+	tr := mock.New()
+	r, store := buildReconciler(t, p, c, tr, nil, nil, nil)
+	previous := p.Status.IAMDispatch.DeepCopy()
+	_, err := r.Reconcile(t.Context(), npReq(p.Namespace, p.Name))
+	require.NoError(t, err)
+	require.True(t, store.statusWriter.called, "retained NodePool should acquire a read-only requirements view")
+	updated := store.statusWriter.captured.(*privatev1.NodePool)
+	require.NotNil(t, updated.Status.IAMRequirements)
+	require.Equal(t, string(c.UID), updated.Status.IAMRequirements.ClusterUID)
+	require.Equal(t, previous, updated.Status.IAMDispatch, "projection must not change private dispatch authority")
+}
+
 // ---------------------------------------------------------------------------
 // Test cases – early exits: NodePool get
 // ---------------------------------------------------------------------------

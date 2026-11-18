@@ -69,6 +69,7 @@ func (r *Reconciler) observeResources(ctx context.Context, p *privatev1.NodePool
 	}
 	changed := r.applyStatusConditions(p, string(c.UID), status)
 	changed = privatev1.PromoteIAMDispatch(p.Status.IAMDispatch, p.Status.Version) || changed
+	changed = privatev1.SyncNodePoolIAMRequirements(p, c) || changed
 	if changed {
 		if err := r.client.Status().Update(ctx, p); err != nil && !apierrors.IsConflict(err) {
 			return reconcile.Result{}, err

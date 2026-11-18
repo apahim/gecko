@@ -42,6 +42,7 @@ func (r *Reconciler) applyResources(ctx context.Context, c *privatev1.Cluster, m
 			c.Status.IAMDispatch = &privatev1.IAMDispatchState{}
 		}
 		c.Status.IAMDispatch.Pending = receipt
+		privatev1.SyncClusterIAMRequirements(c)
 		if upgrading {
 			clusterSubmissionCondition(c, metav1.ConditionUnknown, "Dispatching", "The exact release and IAM contract are committed for dispatch")
 		}

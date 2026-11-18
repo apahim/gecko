@@ -93,7 +93,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 		return reconcile.Result{}, nil // re-reconcile with finalizer in place
 	}
-
 	ready, err := r.prerequisitesReady(ctx, &cluster, log)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -188,6 +187,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	if mwStatus != nil && !mwStatus.Stale && cluster.Status.HostedClusterResult != nil {
 		statusChanged = privatev1.PromoteIAMDispatch(cluster.Status.IAMDispatch, cluster.Status.HostedClusterResult.Version) || statusChanged
+	}
+	// A nil transport response is not fresh feedback; do not refresh the
+	// read-only view's timestamp from old status on such a response.
+	if mwStatus != nil {
+		statusChanged = privatev1.SyncClusterIAMRequirements(&cluster) || statusChanged
 	}
 	if statusChanged {
 		if err := r.client.Status().Update(ctx, &cluster); err != nil {
