@@ -121,3 +121,43 @@ properties:
 		t.Fatalf("mixed int64/float64 representation rejected: %v", errs.ToAggregate())
 	}
 }
+
+// TestNormalizeIntegers_Int64Boundaries pins the conversion boundaries.
+// float64(math.MaxInt64) rounds up to 2^63, so 2^63 itself is outside int64
+// range and must be left as float64 (an int64 conversion would be
+// implementation-dependent). The preceding representable float64 and -2^63
+// are in range and must convert.
+func TestNormalizeIntegers_Int64Boundaries(t *testing.T) {
+	const schemaYAML = `
+type: object
+properties:
+  spec:
+    type: object
+    properties:
+      hostPrefix:
+        type: integer
+        format: int32
+`
+
+	processor := newProcessor(t, schemaYAML)
+
+	for _, tc := range []struct {
+		name    string
+		value   float64
+		wantInt bool
+	}{
+		{"two_pow_63_out_of_range", 9223372036854775808.0, false},      // 2^63
+		{"preceding_representable_float", 9223372036854774784.0, true}, // 2^63 - 1024
+		{"negative_two_pow_63_in_range", -9223372036854775808.0, true}, // -2^63
+		{"zero", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := map[string]any{"spec": map[string]any{"hostPrefix": tc.value}}
+			processor.Process(t.Context(), obj, nil)
+			got := obj["spec"].(map[string]any)["hostPrefix"]
+			if _, ok := got.(int64); ok != tc.wantInt {
+				t.Fatalf("value %v: got %T, want int64=%v", tc.value, got, tc.wantInt)
+			}
+		})
+	}
+}

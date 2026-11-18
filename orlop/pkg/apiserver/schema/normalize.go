@@ -76,5 +76,8 @@ func normalizeChild(s *structuralschema.Structural, v interface{}) interface{} {
 }
 
 func isInt64(v float64) bool {
-	return v == math.Trunc(v) && v >= math.MinInt64 && v <= math.MaxInt64
+	// The upper bound is exclusive: float64(math.MaxInt64) rounds up to 2^63,
+	// so an inclusive <= would admit 2^63, whose int64 conversion is
+	// implementation-dependent. -2^63 is exactly representable and in range.
+	return v == math.Trunc(v) && v >= math.MinInt64 && v < 0x1p63
 }
