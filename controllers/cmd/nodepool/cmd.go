@@ -48,9 +48,5 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().String("gar-repository", "", "Ignored; retained for compatibility")
-	cmd.Flags().String("iam-namespace", "", "Ignored; retained for compatibility")
-	_ = cmd.Flags().MarkDeprecated("gar-repository", "ignored; GAR access is reconciled independently")
-	_ = cmd.Flags().MarkDeprecated("iam-namespace", "ignored; GAR access is reconciled independently")
 	return cmd
 }

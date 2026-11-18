@@ -132,14 +132,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
-	if cluster.Spec.Platform.GCP == nil || cluster.Spec.Platform.GCP.ProjectID != np.Namespace {
-		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: cluster must target customer project %s", np.Namespace)
-	}
-
-	if ready, err := r.recordWorkerCleanupTarget(ctx, &np, &cluster); err != nil || !ready {
-		return reconcile.Result{RequeueAfter: requeuePending}, err
-	}
-
 	// Extract nodepool GCP platform fields.
 	var machineType, zone string
 	var diskSizeGB int64
@@ -256,11 +248,11 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 		return reconcile.Result{}, nil
 	}
 
-	mcName, err := r.workerCleanupTarget(np, cluster, clusterFound)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if mcName != "" {
+	// Only call transport.Delete if resources were applied to an MC.
+	if clusterFound &&
+		meta.FindStatusCondition(np.Status.Conditions, "NodePoolResourcesApplied") != nil &&
+		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
+		mcName := cluster.Status.PlacementResult.ManagementClusterName
 
 		groupKey, err := transport.NodePoolGroupKey(np.Namespace, np.Spec.ClusterID, np.Name)
 		if err != nil {
@@ -301,7 +293,7 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: cleanup delete desires: %w", err)
 		}
 	} else {
-		log.Infof(ctx, "nodepool reconciler: no worker cleanup target for nodepool %s, skipping transport cleanup", np.Name)
+		log.Infof(ctx, "nodepool reconciler: parent cluster not available for nodepool %s, skipping transport cleanup", np.Name)
 	}
 
 	controllerutil.RemoveFinalizer(np, constants.FinalizerNodePool)
@@ -411,8 +403,6 @@ func setWaitingNPConditions(np *privatev1.NodePool, reason, message string) bool
 // Returns true if any condition changed.
 func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID string, mwStatus *transport.Status) bool {
 	gen := np.Generation
-	// Retire the old gate condition as part of normal resource status updates.
-	removedGARCondition := meta.RemoveStatusCondition(&np.Status.Conditions, "NodePoolGARAccessReady")
 
 	if mwStatus == nil {
 		a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
@@ -433,7 +423,7 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 			Reason:             "AsExpected",
 			ObservedGeneration: gen,
 		})
-		return a || b || c || removedGARCondition
+		return a || b || c
 	}
 
 	// Extract conditions from top-level applied conditions.
@@ -532,7 +522,7 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 		Reason:             progressingReason,
 		ObservedGeneration: gen,
 	})
-	return a || b || c || d || versionChanged || removedGARCondition
+	return a || b || c || d || versionChanged
 }
 
 // defaultReplicas is the hardcoded default for this POC.
