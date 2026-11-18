@@ -55,13 +55,13 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			if err := mgr.Add(kccCache); err != nil {
 				return fmt.Errorf("register IAMPolicyMember cache: %w", err)
 			}
-			rec, err := garaccess.New(cmd.Context(), log, mgr.GetAPIReader(), kcc, config)
+			rec, err := garaccess.New(log, mgr.GetAPIReader(), kcc, config)
 			if err != nil {
 				return fmt.Errorf("create GAR access reconciler: %w", err)
 			}
 			if err := ctrl.NewControllerManagedBy(mgr).
 				Named("gar-access").
-				Watches(&privatev1.NodePool{}, handler.EnqueueRequestsFromMapFunc(nodePoolToProject)).
+				Watches(&privatev1.Cluster{}, handler.EnqueueRequestsFromMapFunc(clusterToProject)).
 				WatchesRawSource(source.Kind(kccCache, client.Object(garaccess.NewPolicyMember()), handler.EnqueueRequestsFromMapFunc(rec.PolicyMemberToProject))).
 				WithOptions(rf.ControllerOpts()).
 				Complete(rec); err != nil {
@@ -75,6 +75,6 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 	return cmd
 }
 
-func nodePoolToProject(_ context.Context, obj client.Object) []reconcile.Request {
+func clusterToProject(_ context.Context, obj client.Object) []reconcile.Request {
 	return []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: obj.GetNamespace()}}}
 }

@@ -15,13 +15,13 @@ const (
 	DefaultIAMNamespace = "gecko-system"
 )
 
-// Config is shared by the grant controller and the NodePool provisioning gate.
+// Config configures the background GAR grant controller.
 type Config struct {
 	Repository   string
 	IAMNamespace string
 }
 
-// Validate rejects incomplete configuration before either controller starts.
+// Validate rejects incomplete configuration before the grant controller starts.
 func (c Config) Validate() error {
 	if !regexp.MustCompile(`^projects/[a-z0-9-]+/locations/[a-z0-9-]+/repositories/[a-z0-9._-]+$`).MatchString(c.Repository) {
 		return fmt.Errorf("gar-repository must be projects/PROJECT/locations/LOCATION/repositories/REPOSITORY")

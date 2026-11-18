@@ -72,12 +72,4 @@ Validate required values.
 {{- if not (trim (toString .Values.image.tag)) -}}
 {{- fail "image.tag must be set (e.g. --set image.tag=abc1234)" -}}
 {{- end -}}
-{{- $garRepository := required "garAccess.repository must be set" .Values.garAccess.repository | toString -}}
-{{- if not (regexMatch "^projects/[a-z0-9-]+/locations/[a-z0-9-]+/repositories/[a-z0-9._-]+$" $garRepository) -}}
-{{- fail "garAccess.repository must be a full projects/PROJECT/locations/LOCATION/repositories/REPO name" -}}
-{{- end -}}
-{{- $iamNamespace := required "garAccess.iamNamespace must be set" .Values.garAccess.iamNamespace | toString -}}
-{{- if or (gt (len $iamNamespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $iamNamespace)) -}}
-{{- fail "garAccess.iamNamespace must be a valid Kubernetes namespace (a DNS label of at most 63 characters)" -}}
-{{- end -}}
 {{- end }}

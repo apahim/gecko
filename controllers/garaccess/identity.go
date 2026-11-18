@@ -1,51 +1,27 @@
 package garaccess
 
 import (
-	"context"
 	"fmt"
 	"regexp"
 
-	"google.golang.org/api/compute/v1"
-	"google.golang.org/api/iam/v1"
+	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 )
 
-var defaultComputeAccountPattern = regexp.MustCompile(`^[1-9][0-9]*-compute@developer\.gserviceaccount\.com$`)
+var projectNumberPattern = regexp.MustCompile(`^[1-9][0-9]{0,24}$`)
 
-type identityLookup struct {
-	compute *compute.Service
-	iam     *iam.Service
-}
-
-func newIdentityLookup(ctx context.Context) (*identityLookup, error) {
-	computeClient, err := compute.NewService(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("create Compute client: %w", err)
+// customerPrincipalSet uses accepted Cluster setup data. This flow assumes the
+// WIF pool and worker resources belong to the same customer project.
+func customerPrincipalSet(cluster *privatev1.Cluster) (string, error) {
+	if cluster == nil || cluster.Spec.Platform.GCP == nil {
+		return "", fmt.Errorf("Cluster must specify its GCP project")
 	}
-	iamClient, err := iam.NewService(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("create IAM client: %w", err)
+	gcp := cluster.Spec.Platform.GCP
+	if cluster.Namespace == "" || gcp.ProjectID != cluster.Namespace {
+		return "", fmt.Errorf("Cluster GCP project must match its customer namespace")
 	}
-	return &identityLookup{compute: computeClient, iam: iamClient}, nil
-}
-
-func (l *identityLookup) customerMember(ctx context.Context, projectID string) (string, error) {
-	project, err := l.compute.Projects.Get(projectID).Context(ctx).Do()
-	if err != nil {
-		return "", fmt.Errorf("get Compute project %s: %w", projectID, err)
+	projectNumber := gcp.WorkloadIdentity.ProjectNumber
+	if !projectNumberPattern.MatchString(projectNumber) {
+		return "", fmt.Errorf("Cluster project number must be a positive decimal without leading zeros")
 	}
-	// Compute's resource ID is not the GCP project number used in the email.
-	// Use Google's default account, then verify ownership and state through IAM.
-	email := project.DefaultServiceAccount
-	if project.Name != projectID || !defaultComputeAccountPattern.MatchString(email) {
-		return "", fmt.Errorf("project %s has no valid default Compute service account", projectID)
-	}
-	name := fmt.Sprintf("projects/%s/serviceAccounts/%s", projectID, email)
-	account, err := l.iam.Projects.ServiceAccounts.Get(name).Context(ctx).Do()
-	if err != nil {
-		return "", fmt.Errorf("get default Compute account for %s: %w", projectID, err)
-	}
-	if account.ProjectId != projectID || account.Email != email || account.Disabled {
-		return "", fmt.Errorf("default Compute account for %s must belong to the project and be enabled", projectID)
-	}
-	return "serviceAccount:" + email, nil
+	return fmt.Sprintf("principalSet://cloudresourcemanager.googleapis.com/projects/%s/type/ServiceAccount", projectNumber), nil
 }

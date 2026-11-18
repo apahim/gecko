@@ -18,25 +18,20 @@ import (
 
 const retryPending = 5 * time.Second
 
-// Reconciler maintains one shared grant per customer account and repository.
+// Reconciler maintains one shared grant per customer project and repository.
 type Reconciler struct {
-	reader   client.Reader
-	kcc      client.Client
-	identity *identityLookup
-	config   Config
-	log      logger.Logger
+	reader client.Reader
+	kcc    client.Client
+	config Config
+	log    logger.Logger
 }
 
 // New requires a direct Gecko API reader and a direct regional KCC client.
-func New(ctx context.Context, log logger.Logger, reader client.Reader, kcc client.Client, config Config) (*Reconciler, error) {
+func New(log logger.Logger, reader client.Reader, kcc client.Client, config Config) (*Reconciler, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	identity, err := newIdentityLookup(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &Reconciler{reader: reader, kcc: kcc, identity: identity, config: config, log: log}, nil
+	return &Reconciler{reader: reader, kcc: kcc, config: config, log: log}, nil
 }
 
 // Reconcile uses the logical customer-project namespace as its queue key.
@@ -45,34 +40,43 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if project == "" {
 		return reconcile.Result{}, fmt.Errorf("customer project namespace is empty")
 	}
-	consumers, err := r.consumers(ctx, project)
+	consumers, member, err := r.consumers(ctx, project)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	r.log.Infof(ctx, "gar-access: customer project %s has %d NodePools", project, len(consumers))
+	r.log.Infof(ctx, "gar-access: customer project %s has %d Clusters", project, len(consumers))
 	if len(consumers) == 0 {
 		return r.removeGrants(ctx, project)
-	}
-	member, err := r.identity.customerMember(ctx, project)
-	if err != nil {
-		return reconcile.Result{}, err
 	}
 	return r.ensureGrant(ctx, project, member, strings.Join(consumers, "\n"))
 }
 
-func (r *Reconciler) consumers(ctx context.Context, project string) ([]string, error) {
-	var pools privatev1.NodePoolList
-	if err := r.reader.List(ctx, &pools, client.InNamespace(project)); err != nil {
-		return nil, fmt.Errorf("list NodePools for customer project %s: %w", project, err)
+func (r *Reconciler) consumers(ctx context.Context, project string) ([]string, string, error) {
+	var clusters privatev1.ClusterList
+	if err := r.reader.List(ctx, &clusters, client.InNamespace(project)); err != nil {
+		return nil, "", fmt.Errorf("list Clusters for customer project %s: %w", project, err)
 	}
-	consumers := make([]string, 0, len(pools.Items))
-	for _, pool := range pools.Items {
-		// No replica/deletion filtering or parent lookup: every extant pool counts,
-		// even if its parent is unavailable while cleanup is in progress.
-		consumers = append(consumers, pool.Spec.ClusterID+"/"+pool.Name)
+	consumers := make([]string, 0, len(clusters.Items))
+	member := ""
+	// Every extant Cluster counts, including deleting Clusters and those
+	// without NodePools. The Cluster finalizer protects normal worker cleanup.
+	for i := range clusters.Items {
+		cluster := &clusters.Items[i]
+		if cluster.Namespace != project {
+			return nil, "", fmt.Errorf("Cluster %s must belong to customer project %s", cluster.Name, project)
+		}
+		clusterMember, err := customerPrincipalSet(cluster)
+		if err != nil {
+			return nil, "", fmt.Errorf("resolve GAR identity for Cluster %s: %w", cluster.Name, err)
+		}
+		if member != "" && member != clusterMember {
+			return nil, "", fmt.Errorf("Clusters in customer project %s disagree on the project number", project)
+		}
+		member = clusterMember
+		consumers = append(consumers, cluster.Name)
 	}
 	sort.Strings(consumers)
-	return consumers, nil
+	return consumers, member, nil
 }
 
 // PolicyMemberToProject recovers reconciliation on KCC updates and restarts.

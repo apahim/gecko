@@ -50,7 +50,24 @@ func (r *Reconciler) ensureGrant(ctx context.Context, project, member, consumers
 	return reconcile.Result{}, nil
 }
 
+// Cluster finalization owns worker cleanup. GAR retains access for every extant
+// Cluster, including deleting Clusters, without duplicating NodePool inventory.
+func (r *Reconciler) clustersRemain(ctx context.Context, project string) (bool, error) {
+	consumers, _, err := r.consumers(ctx, project)
+	if err != nil {
+		return false, err
+	}
+	return len(consumers) != 0, nil
+}
+
 func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcile.Result, error) {
+	remaining, err := r.clustersRemain(ctx, project)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if remaining {
+		return reconcile.Result{RequeueAfter: retryPending}, nil
+	}
 	policies := &unstructured.UnstructuredList{}
 	policies.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: "iam.cnrm.cloud.google.com", Version: "v1beta1", Kind: "IAMPolicyMemberList",
@@ -71,7 +88,7 @@ func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcil
 		if !policy.GetDeletionTimestamp().IsZero() {
 			return reconcile.Result{RequeueAfter: retryPending}, nil
 		}
-		// A new consumer must not provision through a grant being revoked.
+		// Mark revocation before the final live Cluster-inventory check.
 		if policy.GetAnnotations()[stateAnnotation] != "draining" {
 			annotations := policy.GetAnnotations()
 			if annotations == nil {
@@ -84,11 +101,11 @@ func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcil
 				return reconcile.Result{}, fmt.Errorf("mark GAR Reader grant draining for %s: %w", project, err)
 			}
 		}
-		consumers, err := r.consumers(ctx, project)
+		remaining, err := r.clustersRemain(ctx, project)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
-		if len(consumers) != 0 {
+		if remaining {
 			return reconcile.Result{RequeueAfter: retryPending}, nil
 		}
 		uid, version := policy.GetUID(), policy.GetResourceVersion()

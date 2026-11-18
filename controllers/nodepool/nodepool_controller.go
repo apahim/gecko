@@ -33,7 +33,6 @@ type Reconciler struct {
 	transport transport.Client
 	log       logger.Logger
 	client    client.Client
-	GARAccess GARAccessGate
 }
 
 // New creates a new nodepool Reconciler.
@@ -133,7 +132,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
-	if ready, err := r.garAccessReady(ctx, &np, &cluster); err != nil || !ready {
+	if cluster.Spec.Platform.GCP == nil || cluster.Spec.Platform.GCP.ProjectID != np.Namespace {
+		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: cluster must target customer project %s", np.Namespace)
+	}
+
+	if ready, err := r.recordWorkerCleanupTarget(ctx, &np, &cluster); err != nil || !ready {
 		return reconcile.Result{RequeueAfter: requeuePending}, err
 	}
 
@@ -408,6 +411,8 @@ func setWaitingNPConditions(np *privatev1.NodePool, reason, message string) bool
 // Returns true if any condition changed.
 func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID string, mwStatus *transport.Status) bool {
 	gen := np.Generation
+	// Retire the old gate condition as part of normal resource status updates.
+	removedGARCondition := meta.RemoveStatusCondition(&np.Status.Conditions, "NodePoolGARAccessReady")
 
 	if mwStatus == nil {
 		a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
@@ -428,7 +433,7 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 			Reason:             "AsExpected",
 			ObservedGeneration: gen,
 		})
-		return a || b || c
+		return a || b || c || removedGARCondition
 	}
 
 	// Extract conditions from top-level applied conditions.
@@ -527,7 +532,7 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 		Reason:             progressingReason,
 		ObservedGeneration: gen,
 	})
-	return a || b || c || d || versionChanged
+	return a || b || c || d || versionChanged || removedGARCondition
 }
 
 // defaultReplicas is the hardcoded default for this POC.

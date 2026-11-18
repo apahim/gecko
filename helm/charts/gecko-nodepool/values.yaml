@@ -14,10 +14,6 @@ logLevel: info
 logFormat: json
 workers: 10
 
-garAccess:
-  repository: projects/gcp-hcp-commons-dev/locations/northamerica-northeast2/repositories/gcp-hcp-quay
-  iamNamespace: gecko-system
-
 serviceAccount:
   create: true
   annotations: {}
