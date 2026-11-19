@@ -29,16 +29,23 @@ cleanup, and does not block NodePools. No hardcoded mapping or cloud lookup is u
 
 ## Configuration and permissions
 
-The GAR chart exposes these development defaults; override them for other targets:
+`garAccess.repository` is required and must be the full Terraform-selected GAR
+repository name. Replace the placeholders below; there is no development fallback:
 
 ```yaml
 garAccess:
-  repository: projects/gcp-hcp-commons-dev/locations/northamerica-northeast2/repositories/gcp-hcp-quay
+  repository: projects/PROJECT/locations/LOCATION/repositories/gcp-hcp-quay
   iamNamespace: gecko-system
 ```
 
-The namespace must already exist, support KCC, and outlive Clusters. Dynamic
-repository wiring and customer bootstrap remain separate work.
+Regional Terraform publishes this name as the Argo root Helm value
+`gar_quay_repository`. The regional Argo Application must pass it to the chart as
+`garAccess.repository`; the chart supplies `--gar-repository` to the controller.
+Gecko does not read the `argocd-cluster` Secret directly. Missing or malformed
+repository values fail Helm rendering or controller startup.
+
+`garAccess.iamNamespace` defaults to `gecko-system`. The namespace must already
+exist, support KCC, and outlive Clusters. Customer bootstrap remains separate work.
 
 Infrastructure Terraform must delegate these permissions on the selected
 repository to the regional KCC Google service account:
@@ -61,7 +68,8 @@ status writes. NodePool has no KCC access and consumes no GAR configuration.
   deletes only matching Gecko-managed objects with UID/resource-version guards.
   This is not a cross-API transaction; forced finalizer removal bypasses teardown.
 
-Declarations have deterministic names, project labels, a
+Declarations use `gar-quay-reader-<hash>` names (hashing repository, member, and
+role), project labels, a
 `gcp.managed.openshift.io/gar-consumers` annotation listing Cluster names, and no
 per-Cluster owner references. Existing default-SA grants are not automatically
 converted or removed while Clusters remain.

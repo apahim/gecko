@@ -8,12 +8,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-const (
-	// DefaultRepository is the preconfigured shared dev Quay pull-through cache.
-	DefaultRepository = "projects/gcp-hcp-commons-dev/locations/northamerica-northeast2/repositories/gcp-hcp-quay"
-	// DefaultIAMNamespace outlives individual HostedClusters and NodePools.
-	DefaultIAMNamespace = "gecko-system"
-)
+// DefaultIAMNamespace outlives individual HostedClusters and NodePools.
+const DefaultIAMNamespace = "gecko-system"
 
 // Config configures the background GAR grant controller.
 type Config struct {
@@ -23,6 +19,9 @@ type Config struct {
 
 // Validate rejects incomplete configuration before the grant controller starts.
 func (c Config) Validate() error {
+	if c.Repository == "" {
+		return fmt.Errorf("gar-repository must be set")
+	}
 	if !regexp.MustCompile(`^projects/[a-z0-9-]+/locations/[a-z0-9-]+/repositories/[a-z0-9._-]+$`).MatchString(c.Repository) {
 		return fmt.Errorf("gar-repository must be projects/PROJECT/locations/LOCATION/repositories/REPOSITORY")
 	}

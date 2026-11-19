@@ -29,7 +29,7 @@ func NewPolicyMember() *unstructured.Unstructured {
 func desiredGrant(config Config, project, member string) *unstructured.Unstructured {
 	obj := NewPolicyMember()
 	hash := sha256.Sum256([]byte(config.Repository + "\n" + member + "\n" + readerRole))
-	obj.SetName(fmt.Sprintf("gar-reader-%x", hash[:12]))
+	obj.SetName(fmt.Sprintf("gar-quay-reader-%x", hash[:12]))
 	obj.SetNamespace(config.IAMNamespace)
 	obj.SetLabels(map[string]string{managedLabel: managedBy, projectLabel: project})
 	obj.SetAnnotations(map[string]string{

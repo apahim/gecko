@@ -70,7 +70,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			return mgr.Start(cmd.Context())
 		},
 	}
-	cmd.Flags().StringVar(&config.Repository, "gar-repository", garaccess.DefaultRepository, "GAR resource: projects/PROJECT/locations/LOCATION/repositories/REPOSITORY")
+	cmd.Flags().StringVar(&config.Repository, "gar-repository", "", "Required GAR resource: projects/PROJECT/locations/LOCATION/repositories/REPOSITORY")
 	cmd.Flags().StringVar(&config.IAMNamespace, "iam-namespace", garaccess.DefaultIAMNamespace, "Existing regional namespace for shared IAMPolicyMembers")
 	return cmd
 }

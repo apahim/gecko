@@ -11,7 +11,9 @@ logLevel: info
 logFormat: json
 
 garAccess:
-  repository: projects/gcp-hcp-commons-dev/locations/northamerica-northeast2/repositories/gcp-hcp-quay
+  # Required full repository name, supplied by the regional deployment.
+  # Format: projects/PROJECT/locations/LOCATION/repositories/gcp-hcp-quay
+  repository: ""
   iamNamespace: gecko-system
 
 serviceAccount:
