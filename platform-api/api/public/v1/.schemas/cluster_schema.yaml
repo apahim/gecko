@@ -321,6 +321,16 @@ properties:
                         x-kubernetes-validations:
                         - message: imageRegistryEmail is immutable
                           rule: self == oldSelf
+                      ingressEmail:
+                        maxLength: 85
+                        minLength: 37
+                        type: string
+                        x-kubernetes-validations:
+                        - message: ingressEmail is immutable
+                          rule: self == oldSelf
+                        - message: 'ingressEmail must be a valid GCP service account
+                            email (format: name@project.iam.gserviceaccount.com)'
+                          rule: self.matches('^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$')
                       networkEmail:
                         type: string
                         x-kubernetes-validations:

@@ -109,12 +109,13 @@ func TestClusterReleaseCatalogAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	stores := map[string]storage.ResourceStore{
+		"Cluster": clusterStore,
+		"Version": versionStore,
+	}
 	factory := func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
-		switch gvk.Kind {
-		case "Cluster":
-			return clusterStore, nil
-		case "Version":
-			return versionStore, nil
+		if store := stores[gvk.Kind]; store != nil {
+			return store, nil
 		}
 		return memory.NewMemoryStore(resourceType, scheme, gvk), nil
 	}

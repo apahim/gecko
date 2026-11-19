@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/go-toolset:1.26.10-1794208260 AS builder
+FROM registry.access.redhat.com/ubi9/go-toolset:1.27.3-1794518352 AS builder
 WORKDIR /opt/app-root/src
 # Build context must be the repo root (gecko/).
 # The replace directives in controllers/go.mod reference ../platform-api and ../orlop.
@@ -11,7 +11,7 @@ COPY platform-api/ platform-api/
 COPY controllers/ controllers/
 RUN cd controllers && CGO_ENABLED=0 GOOS=linux go build -o /opt/app-root/src/gecko-controllers .
 
-FROM registry.access.redhat.com/ubi9/ubi-micro:9.8-1794184668
+FROM registry.access.redhat.com/ubi9/ubi-micro:9.9-1794478307
 
 LABEL name="gecko-controllers" \
       com.redhat.component="gecko-controllers" \

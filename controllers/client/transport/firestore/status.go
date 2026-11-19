@@ -122,7 +122,8 @@ func extractResourceStatuses(reads []kubeapplier.ReadDesire) (map[string]map[str
 //   - version: first .status.version.history[].version where state == "Completed"
 //   - desiredVersion: .status.version.desired.version
 //   - availableVersions: JSON-encoded .status.version.availableUpdates[].version
-//   - versionConditions: JSON-encoded upgrade-related HostedCluster conditions
+//   - versionConditions: JSON-encoded HostedCluster conditions consumed by Gecko
+//     (upgrade readiness and ingress readiness)
 func extractHCFields(raw []byte) (map[string]string, error) {
 	fields := map[string]string{}
 
@@ -180,7 +181,8 @@ func extractHCFields(raw []byte) (map[string]string, error) {
 	for _, condition := range obj.Status.Conditions {
 		switch condition.Type {
 		case "ClusterVersionUpgradeable", "ClusterVersionProgressing", "ClusterVersionAvailable",
-			"ClusterVersionReleaseAccepted", "ClusterVersionSucceeding", "Degraded":
+			"ClusterVersionReleaseAccepted", "ClusterVersionSucceeding", "Degraded",
+			"IngressCredentialsFound", "IngressDefaultCertificateSynced", "GCPACMECNAMEAvailable":
 			versionConditions = append(versionConditions, condition)
 		}
 	}

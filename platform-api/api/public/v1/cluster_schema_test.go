@@ -56,6 +56,74 @@ func TestClusterSchemaRejectsInvalidReleaseVersions(t *testing.T) {
 	}
 }
 
+func TestClusterSchemaIngressEmail(t *testing.T) {
+	processor := newClusterSchemaProcessor(t)
+	clusterWithEmail := func(email string) map[string]any {
+		cluster := validCluster("5.0.0-ec.6")
+		cluster.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsRef.IngressEmail = &email
+		return clusterAsMap(t, cluster)
+	}
+	// A well-formed email and an omitted field both pass.
+	cluster := validCluster("5.0.0-ec.6")
+	if errs := processor.Process(context.Background(), clusterAsMap(t, cluster), nil); len(errs) > 0 {
+		t.Fatalf("expected omitted ingressEmail to pass schema validation, got: %v", errs)
+	}
+	if errs := processor.Process(context.Background(), clusterWithEmail("ingress@test-project.iam.gserviceaccount.com"), nil); len(errs) > 0 {
+		t.Fatalf("expected well-formed ingressEmail to pass schema validation, got: %v", errs)
+	}
+
+	for _, email := range []string{
+		// An explicitly present empty string is rejected: the field is
+		// *string-optional, so unset means omitted or null, not "".
+		"",
+		"a@test-project.iam.gserviceaccount.com",
+		"@test-project.iam.gserviceaccount.com",
+		"ing ress@test-project.iam.gserviceaccount.com",
+		"Ingress@test-project.iam.gserviceaccount.com",
+		"x@y@test-project.iam.gserviceaccount.com",
+		"ingress@test-project.iam.gserviceaccount.comm",
+	} {
+		t.Run("reject-"+email, func(t *testing.T) {
+			errs := processor.Process(context.Background(), clusterWithEmail(email), nil)
+			if len(errs) == 0 {
+				t.Fatalf("expected ingressEmail %q to fail schema validation", email)
+			}
+		})
+	}
+}
+
+// TestClusterSchemaIngressEmailImmutability verifies that the CEL rules
+// reject adding, removing, and changing ingressEmail on update. The field's
+// own rule covers changes; the enclosing non-optional workloadIdentity struct
+// rule covers add and remove.
+func TestClusterSchemaIngressEmailImmutability(t *testing.T) {
+	processor := newClusterSchemaProcessor(t)
+	clusterWithEmail := func(email string) map[string]any {
+		cluster := validCluster("5.0.0-ec.6")
+		cluster.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsRef.IngressEmail = &email
+		return clusterAsMap(t, cluster)
+	}
+	withoutEmail := func() map[string]any {
+		cluster := validCluster("5.0.0-ec.6")
+		return clusterAsMap(t, cluster)
+	}
+	for _, tc := range []struct {
+		name    string
+		old, nw map[string]any
+	}{
+		{name: "add", old: withoutEmail(), nw: clusterWithEmail("ingress@test-project.iam.gserviceaccount.com")},
+		{name: "remove", old: clusterWithEmail("ingress@test-project.iam.gserviceaccount.com"), nw: withoutEmail()},
+		{name: "change", old: clusterWithEmail("ingress@test-project.iam.gserviceaccount.com"), nw: clusterWithEmail("ingress2@test-project.iam.gserviceaccount.com")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := processor.Process(context.Background(), tc.nw, tc.old)
+			if len(errs) == 0 {
+				t.Fatalf("expected %s of ingressEmail to be rejected", tc.name)
+			}
+		})
+	}
+}
+
 func TestClusterSchemaChannelGroup(t *testing.T) {
 	processor := newClusterSchemaProcessor(t)
 	for _, group := range []string{"stable", "fast", "candidate", "eus", "nightly", "dev-preview", "a", strings.Repeat("a", 63)} {

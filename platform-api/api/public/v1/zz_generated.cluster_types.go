@@ -381,6 +381,25 @@ type ServiceAccountsRef struct {
 	// +required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkEmail is immutable"
 	NetworkEmail string `json:"networkEmail,omitempty"`
+
+	// ingress is the Google Service Account email for the cluster Ingress Operator
+	// that publishes the default IngressController's *.apps Cloud DNS records.
+	// This GSA requires the following IAM role:
+	// - roles/dns.admin (DNS Admin - for managing records in the ingress managed zone)
+	// See cmd/infra/gcp/iam-bindings.json for the authoritative role definitions.
+	// Format: service-account-name@project-id.iam.gserviceaccount.com
+	//
+	// Supplying this value enables the Ingress capability when the cluster is
+	// created. The value must belong to the cluster's GCP project. This field is
+	// immutable, and the Ingress capability cannot be enabled after creation.
+	//
+
+	// +optional
+	// +kubebuilder:validation:MinLength=37
+	// +kubebuilder:validation:MaxLength=85
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ingressEmail is immutable"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\\\.iam\\\\.gserviceaccount\\\\.com$')",message="ingressEmail must be a valid GCP service account email (format: name@project.iam.gserviceaccount.com)"
+	IngressEmail *string `json:"ingressEmail,omitempty"`
 }
 
 // GCPResourceLabel is a label applied to GCP resources.

@@ -39,6 +39,9 @@ func (c *Cluster) ValidateCreate(ctx context.Context) error {
 	if c.Spec.SafeName != DefaultSafeName(c.Name, c.UID) {
 		return fmt.Errorf("spec.safeName must be the default safe name for metadata.name")
 	}
+	if err := c.validateIngressEmail(); err != nil {
+		return err
+	}
 	if err := c.validateReleaseCatalog(ctx); err != nil {
 		return err
 	}
@@ -82,12 +85,36 @@ func (c *Cluster) ValidateUpdate(ctx context.Context, oldObj runtime.Object) err
 		if c.Spec.SafeName != DefaultSafeName(c.Name, c.UID) {
 			return fmt.Errorf("spec.safeName must be the default safe name for metadata.name")
 		}
+		if err := c.validateIngressEmail(); err != nil {
+			return err
+		}
 		return c.validateMaintenanceConfig(enforceSchedulingLimits)
 	}
 	if c.Spec.SafeName != oldCluster.Spec.SafeName {
 		return fmt.Errorf("spec.safeName is immutable")
 	}
+	if err := c.validateIngressEmail(); err != nil {
+		return err
+	}
 	return c.validateMaintenanceConfig(enforceSchedulingLimits)
+}
+
+// validateIngressEmail verifies that a configured ingress service account
+// belongs to the cluster's GCP project, matching HyperShift's API validation.
+func (c *Cluster) validateIngressEmail() error {
+	gcp := c.Spec.Platform.GCP
+	if gcp == nil || gcp.WorkloadIdentity.ServiceAccountsRef == nil {
+		return nil
+	}
+	email := gcp.WorkloadIdentity.ServiceAccountsRef.IngressEmail
+	if email == nil || *email == "" {
+		return nil
+	}
+	suffix := "@" + gcp.ProjectID + ".iam.gserviceaccount.com"
+	if !strings.HasSuffix(*email, suffix) {
+		return fmt.Errorf("spec.platform.gcp.workloadIdentity.serviceAccountsRef.ingressEmail must belong to project %q", gcp.ProjectID)
+	}
+	return nil
 }
 
 // ValidateDelete validates Cluster deletion.

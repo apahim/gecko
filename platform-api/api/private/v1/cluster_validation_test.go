@@ -424,3 +424,40 @@ func TestClusterAutomaticCancellationOnlyRestoresUnsubmittedObservedVersion(t *t
 		})
 	}
 }
+
+func clusterWithIngressEmail(projectID, email string) *Cluster {
+	c := validClusterWithWindow()
+	c.Spec.Platform.GCP = &GCPClusterPlatform{
+		ProjectID: projectID,
+		WorkloadIdentity: WorkloadIdentitySpec{
+			ServiceAccountsRef: &ServiceAccountsRef{IngressEmail: &email},
+		},
+	}
+	return c
+}
+
+func TestClusterValidateCreate_IngressEmail(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		email   string
+		wantErr bool
+	}{
+		{name: "empty is allowed", email: ""},
+		{name: "matching project is allowed", email: "ingress@my-project-123.iam.gserviceaccount.com"},
+		{name: "other project is rejected", email: "ingress@other-project.iam.gserviceaccount.com", wantErr: true},
+		{name: "not a service account is rejected", email: "ingress@example.com", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := clusterWithIngressEmail("my-project-123", tc.email).ValidateCreate(t.Context())
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected ingress email validation error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateCreate() error = %v", err)
+			}
+		})
+	}
+}

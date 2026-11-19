@@ -58,8 +58,8 @@ func TestClusterUpdateReleaseCatalogValidation(t *testing.T) {
 	if err := rolled.ValidateUpdate(t.Context(), old); err != nil {
 		t.Fatal(err)
 	}
-	cancelled := old.DeepCopy()
-	if err := cancelled.ValidateUpdate(t.Context(), old); err != nil {
+	canceled := old.DeepCopy()
+	if err := canceled.ValidateUpdate(t.Context(), old); err != nil {
 		t.Fatal(err)
 	}
 
