@@ -376,7 +376,8 @@ func (s *PostgresStore) List(ctx context.Context, opts storage.ListOptions) (cli
 		return nil, fmt.Errorf("failed to create list object: %w", err)
 	}
 
-	list := listObj.(*unstructured.UnstructuredList)
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(listGVK)
 	list.SetResourceVersion(strconv.FormatInt(maxRV, 10))
 	list.Items = items
 
@@ -398,7 +399,10 @@ func (s *PostgresStore) List(ctx context.Context, opts storage.ListOptions) (cli
 		}
 	}
 
-	return list, nil
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(list.UnstructuredContent(), listObj); err != nil {
+		return nil, fmt.Errorf("failed to decode list object: %w", err)
+	}
+	return listObj.(client.ObjectList), nil
 }
 
 // Update implements ResourceStore.

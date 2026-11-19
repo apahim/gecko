@@ -12,6 +12,8 @@ import (
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -317,6 +319,43 @@ func TestPostgresStore_Get(t *testing.T) {
 }
 
 func TestPostgresStore_List(t *testing.T) {
+	t.Run("returns typed lists when registered in the scheme", func(t *testing.T) {
+		store, cleanup := setupTestStore(t)
+		defer cleanup()
+
+		store.scheme = runtime.NewScheme()
+		if err := corev1.AddToScheme(store.scheme); err != nil {
+			t.Fatal(err)
+		}
+		store.gvk = corev1.SchemeGroupVersion.WithKind("ConfigMap")
+		obj := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "default"},
+			Data:       map[string]string{"key": "value"},
+		}
+		obj.SetGroupVersionKind(store.gvk)
+		if err := store.Create(context.Background(), obj); err != nil {
+			t.Fatalf("Create() failed: %v", err)
+		}
+
+		listObj, err := store.List(context.Background(), storage.ListOptions{Namespace: "default"})
+		if err != nil {
+			t.Fatalf("List() failed: %v", err)
+		}
+		list, ok := listObj.(*corev1.ConfigMapList)
+		if !ok {
+			t.Fatalf("List() returned %T, want *v1.ConfigMapList", listObj)
+		}
+		if len(list.Items) != 1 {
+			t.Fatalf("Expected 1 object, got %d", len(list.Items))
+		}
+		if list.Items[0].Name != obj.Name || list.Items[0].Data["key"] != "value" {
+			t.Errorf("List() returned unexpected object: %#v", list.Items[0])
+		}
+		if list.ResourceVersion == "" || list.Items[0].ResourceVersion == "" {
+			t.Error("List or item resourceVersion not set")
+		}
+	})
+
 	t.Run("lists objects in namespace", func(t *testing.T) {
 		store, cleanup := setupTestStore(t)
 		defer cleanup()
