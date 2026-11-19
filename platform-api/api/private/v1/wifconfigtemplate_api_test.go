@@ -205,6 +205,8 @@ func TestClusterIAMPublicPatchAPI(t *testing.T) {
 		{"null gcp", "application/merge-patch+json", map[string]any{"spec": map[string]any{"platform": map[string]any{"gcp": nil}}}},
 		{"edit digest", "application/json-patch+json", []map[string]any{{"op": "replace", "path": "/spec/platform/gcp/iam/templateApplications/0/digest", "value": "sha256:" + strings.Repeat("0", 64)}}},
 		{"stale version", "application/merge-patch+json", map[string]any{"metadata": map[string]any{"resourceVersion": "999999"}}},
+		{"wrong UID JSON test", "application/json-patch+json", []map[string]any{{"op": "test", "path": "/metadata/uid", "value": "replacement-cluster"}, {"op": "add", "path": "/metadata/labels", "value": map[string]string{"cas": "must-not-write"}}}},
+		{"stale revision JSON test", "application/json-patch+json", []map[string]any{{"op": "test", "path": "/metadata/resourceVersion", "value": "999999"}, {"op": "add", "path": "/metadata/labels", "value": map[string]string{"cas": "must-not-write"}}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			res := apiWIFRequest(t, router, http.MethodPatch, path, test.content, test.body)
@@ -226,6 +228,40 @@ func TestClusterIAMPublicPatchAPI(t *testing.T) {
 	res := apiWIFRequest(t, router, http.MethodPut, path, "application/json", pub)
 	if res.Code < 400 || res.Code >= 500 {
 		t.Fatalf("PUT removal: %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestPrivateVersionPayloadEditAdvancesCatalogGeneration(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := privatev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	gvk := privatev1.GroupVersion.WithKind("Version")
+	store := memory.NewMemoryStore("versions", scheme, gvk)
+	v := &privatev1.Version{TypeMeta: metav1.TypeMeta{APIVersion: privatev1.GroupVersion.String(), Kind: "Version"}, ObjectMeta: metav1.ObjectMeta{Name: "5.0.0", UID: "version-uid", Generation: 7}, Spec: privatev1.VersionSpec{ChannelGroups: []string{"candidate"}, ReleaseImage: "quay.io/example/release@sha256:old"}}
+	if err := store.Create(t.Context(), v); err != nil {
+		t.Fatal(err)
+	}
+	h := handlers.NewResourceHandler(store, maintenanceClusterSchemaProcessor(t, privatev1.VersionSchemaYAML), gvk, "versions", scheme, logr.Discard())
+	router := chi.NewRouter()
+	router.Put("/versions/{name}", h.Update)
+	stored, err := store.Get(t.Context(), "", "5.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := stored.(*privatev1.Version).DeepCopy()
+	updated.Spec.ReleaseImage = "quay.io/example/release@sha256:new"
+	res := apiWIFRequest(t, router, http.MethodPut, "/versions/5.0.0", "application/json", updated)
+	if res.Code != http.StatusOK {
+		t.Fatalf("private payload update failed: %d %s", res.Code, res.Body.String())
+	}
+	stored, err = store.Get(t.Context(), "", "5.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := stored.(*privatev1.Version)
+	if got.Generation != 8 || got.UID != "version-uid" || got.Spec.ReleaseImage != updated.Spec.ReleaseImage {
+		t.Fatalf("payload edit did not change pinned catalog identity: %+v", got)
 	}
 }
 
