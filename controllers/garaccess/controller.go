@@ -63,14 +63,14 @@ func (r *Reconciler) consumers(ctx context.Context, project string) ([]string, s
 	for i := range clusters.Items {
 		cluster := &clusters.Items[i]
 		if cluster.Namespace != project {
-			return nil, "", fmt.Errorf("Cluster %s must belong to customer project %s", cluster.Name, project)
+			return nil, "", fmt.Errorf("cluster %s must belong to customer project %s", cluster.Name, project)
 		}
 		clusterMember, err := customerPrincipalSet(cluster)
 		if err != nil {
 			return nil, "", fmt.Errorf("resolve GAR identity for Cluster %s: %w", cluster.Name, err)
 		}
 		if member != "" && member != clusterMember {
-			return nil, "", fmt.Errorf("Clusters in customer project %s disagree on the project number", project)
+			return nil, "", fmt.Errorf("clusters in customer project %s disagree on the project number", project)
 		}
 		member = clusterMember
 		consumers = append(consumers, cluster.Name)
