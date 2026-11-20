@@ -55,6 +55,29 @@ func apiWIFRequest(t *testing.T, router http.Handler, method, path, contentType 
 	return response
 }
 
+func apiWIFReadCluster(t *testing.T, store *memory.MemoryStore) *privatev1.Cluster {
+	t.Helper()
+	obj, err := store.Get(t.Context(), "customer", "test-cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return obj.(*privatev1.Cluster)
+}
+
+func apiWIFAssertNoOp(t *testing.T, before, after *privatev1.Cluster) {
+	t.Helper()
+	beforeSpec, _ := json.Marshal(before.Spec)
+	afterSpec, _ := json.Marshal(after.Spec)
+	if !bytes.Equal(beforeSpec, afterSpec) || after.Generation != before.Generation || after.ResourceVersion == before.ResourceVersion {
+		t.Fatal("identical-history JSONPatch changed spec/generation or lacked persisted readback")
+	}
+	beforeStatus, _ := json.Marshal(before.Status)
+	afterStatus, _ := json.Marshal(after.Status)
+	if !bytes.Equal(beforeStatus, afterStatus) {
+		t.Fatal("public JSONPatch changed private controller status")
+	}
+}
+
 func TestWIFTemplatePrivateMutationAPI(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := privatev1.AddToScheme(scheme); err != nil {
@@ -189,29 +212,62 @@ func TestClusterIAMPublicPatchAPI(t *testing.T) {
 	if forged.Code < 200 || forged.Code >= 300 && forged.Code < 400 || forged.Code >= 500 {
 		t.Fatalf("status isolation PUT failed unexpectedly: %d %s", forged.Code, forged.Body.String())
 	}
-	afterForgery, err := store.Get(t.Context(), "customer", "test-cluster")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if afterForgery.(*privatev1.Cluster).Status.IAMRequirements != nil {
+	afterForgery := apiWIFReadCluster(t, store)
+	if afterForgery.Status.IAMRequirements != nil {
 		t.Fatal("customer PATCH forged a controller-owned IAM requirements status")
 	}
+	// Seed private controller bookkeeping that the public schema cannot expose.
+	// A successful public patch must retain it, not just the public status view.
+	afterForgery.Status.IAMDispatch = &privatev1.IAMDispatchState{Dispatched: &privatev1.IAMDispatchReceipt{
+		ObjectUID: string(afterForgery.UID), ClusterUID: string(afterForgery.UID),
+		ReleaseVersion: afterForgery.Spec.Release.Version, ChannelGroup: afterForgery.Spec.Release.ChannelGroup,
+		ReleaseImage: "private-payload", TemplateRef: ref,
+	}}
+	if err := store.Update(t.Context(), afterForgery); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the exact executor protocol through the real converting handler,
+	// not a fake HTTP server. Revoked verification and a closed assertion-write
+	// gate must still permit retaining the identical application history.
+	w.Spec.Verified = new(false)
+	privatev1.SetValidatorDeps(privatev1.ValidatorDeps{AllowIAMApplicationWrites: false, WIFConfigTemplate: func(context.Context, string) (*privatev1.WIFConfigTemplate, error) { return w, nil }})
+	noOp := apiWIFRequest(t, router, http.MethodPatch, path, "application/json-patch+json", []map[string]any{
+		{"op": "test", "path": "/metadata/uid", "value": string(afterForgery.GetUID())},
+		{"op": "test", "path": "/metadata/resourceVersion", "value": afterForgery.GetResourceVersion()},
+		{"op": "replace", "path": "/spec/platform/gcp/iam/templateApplications", "value": gcp.IAM.TemplateApplications},
+	})
+	if noOp.Code != http.StatusOK {
+		t.Fatalf("valid JSONPatch retaining history with both gates closed: %d %s", noOp.Code, noOp.Body.String())
+	}
+	afterNoOp := apiWIFReadCluster(t, store)
+	apiWIFAssertNoOp(t, afterForgery, afterNoOp)
 	for _, test := range []struct {
 		name, content string
 		body          any
+		code          int
+		marker        string
 	}{
-		{"clear applications", "application/merge-patch+json", map[string]any{"spec": map[string]any{"platform": map[string]any{"gcp": map[string]any{"iam": map[string]any{"templateApplications": []any{}}}}}}},
-		{"null iam", "application/merge-patch+json", map[string]any{"spec": map[string]any{"platform": map[string]any{"gcp": map[string]any{"iam": nil}}}}},
-		{"null gcp", "application/merge-patch+json", map[string]any{"spec": map[string]any{"platform": map[string]any{"gcp": nil}}}},
-		{"edit digest", "application/json-patch+json", []map[string]any{{"op": "replace", "path": "/spec/platform/gcp/iam/templateApplications/0/digest", "value": "sha256:" + strings.Repeat("0", 64)}}},
-		{"stale version", "application/merge-patch+json", map[string]any{"metadata": map[string]any{"resourceVersion": "999999"}}},
-		{"wrong UID JSON test", "application/json-patch+json", []map[string]any{{"op": "test", "path": "/metadata/uid", "value": "replacement-cluster"}, {"op": "add", "path": "/metadata/labels", "value": map[string]string{"cas": "must-not-write"}}}},
-		{"stale revision JSON test", "application/json-patch+json", []map[string]any{{"op": "test", "path": "/metadata/resourceVersion", "value": "999999"}, {"op": "add", "path": "/metadata/labels", "value": map[string]string{"cas": "must-not-write"}}}},
+		{"clear applications", "application/merge-patch+json", map[string]any{"spec": map[string]any{"platform": map[string]any{"gcp": map[string]any{"iam": map[string]any{"templateApplications": []any{}}}}}}, http.StatusBadRequest, "validation failed"},
+		{"null iam", "application/merge-patch+json", map[string]any{"spec": map[string]any{"platform": map[string]any{"gcp": map[string]any{"iam": nil}}}}, http.StatusBadRequest, "validation failed"},
+		{"null gcp", "application/merge-patch+json", map[string]any{"spec": map[string]any{"platform": map[string]any{"gcp": nil}}}, http.StatusBadRequest, "validation failed"},
+		{"edit digest", "application/json-patch+json", []map[string]any{{"op": "replace", "path": "/spec/platform/gcp/iam/templateApplications/0/digest", "value": "sha256:" + strings.Repeat("0", 64)}}, http.StatusBadRequest, "validation failed"},
+		{"clear applications JSON", "application/json-patch+json", []map[string]any{{"op": "replace", "path": "/spec/platform/gcp/iam/templateApplications", "value": []any{}}}, http.StatusBadRequest, "validation failed"},
+		{"closed write gate JSON", "application/json-patch+json", []map[string]any{{"op": "add", "path": "/spec/platform/gcp/iam/templateApplications/-", "value": publicv1.WIFConfigTemplateReference{Name: "5.0.1", UID: "new-template", Digest: digest}}}, http.StatusBadRequest, "new IAM application writes are disabled"},
+		{"stale version", "application/merge-patch+json", map[string]any{"metadata": map[string]any{"resourceVersion": "999999"}}, http.StatusConflict, "resource version mismatch"},
+		{"wrong UID JSON test", "application/json-patch+json", []map[string]any{{"op": "test", "path": "/metadata/uid", "value": "replacement-cluster"}, {"op": "add", "path": "/metadata/labels", "value": map[string]string{"cas": "must-not-write"}}}, http.StatusConflict, "JSON patch test failed"},
+		{"stale revision JSON test", "application/json-patch+json", []map[string]any{{"op": "test", "path": "/metadata/uid", "value": string(afterNoOp.GetUID())}, {"op": "test", "path": "/metadata/resourceVersion", "value": "999999"}, {"op": "add", "path": "/metadata/labels", "value": map[string]string{"cas": "must-not-write"}}}, http.StatusConflict, "JSON patch test failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			before := apiWIFReadCluster(t, store)
 			res := apiWIFRequest(t, router, http.MethodPatch, path, test.content, test.body)
-			if res.Code < 400 || res.Code >= 500 {
+			if res.Code != test.code || !strings.Contains(res.Body.String(), test.marker) {
 				t.Fatalf("invalid mutation: %d %s", res.Code, res.Body.String())
+			}
+			after := apiWIFReadCluster(t, store)
+			beforeJSON, _ := json.Marshal(before)
+			afterJSON, _ := json.Marshal(after)
+			if !bytes.Equal(beforeJSON, afterJSON) {
+				t.Fatal("rejected patch changed persisted state")
 			}
 		})
 	}

@@ -152,21 +152,8 @@ func TestClusterIntegerHandlerUpdates(t *testing.T) {
 				if transport.contentType == "application/json-patch+json" {
 					update = []map[string]any{{"op": "add", "path": "/metadata/labels", "value": map[string]any{"numeric-regression": "unchanged"}}}
 				}
-				// The converting public handler supports merge patches only today.
-				// Pin its existing rejection rather than broadening patch semantics
-				// as part of an integer-decoding fix. Private JSON Patch is covered.
-				if public && transport.contentType == "application/json-patch+json" {
-					rr = integerRequest(t, router, method, path+"/"+c.Name, update, http.StatusBadRequest, transport.contentType)
-					if !strings.Contains(rr.Body.String(), "invalid patch JSON") {
-						t.Fatal(rr.Body.String())
-					}
-					stored, err := store.Get(t.Context(), c.Namespace, c.Name)
-					integerNoError(t, err)
-					if stored.(*privatev1.Cluster).Spec.Networking.ClusterNetwork[0].HostPrefix != 23 {
-						t.Fatal("unsupported patch mutated storage")
-					}
-					return
-				}
+				// Public JSONPatch now shares these integer/CEL regressions with
+				// merge-patch and private JSONPatch rather than stopping at parsing.
 				integerRequest(t, router, method, path+"/"+c.Name, update, http.StatusOK, transport.contentType)
 				if !public {
 					integerRequest(t, router, http.MethodPut, path+"/"+c.Name+"/status", map[string]any{"status": map[string]any{"conditions": []any{map[string]any{"type": "IAMPermissionsReady", "status": "False", "reason": "WIFConfigUpdateRequired", "lastTransitionTime": metav1.Now()}}}}, http.StatusOK)
