@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/openshift-online/gecko/platform-api/pkg/ocpversion"
+
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
@@ -51,9 +53,8 @@ func ClusterUpgradeActive(cluster *Cluster) bool {
 	if hc == nil || hc.Version == "" || hc.DesiredVersion == "" {
 		return false
 	}
-	current, currentErr := utilversion.ParseSemantic(hc.Version)
-	desired, desiredErr := utilversion.ParseSemantic(hc.DesiredVersion)
-	return currentErr != nil || desiredErr != nil || current.LessThan(desired)
+	transition, err := ocpversion.ObservedTransition(hc.Version, hc.DesiredVersion)
+	return err != nil || transition
 }
 
 // ClusterReleaseApproved permits initial installation, continued reconciliation
@@ -100,9 +101,7 @@ func ClusterInstallationVersion(cluster *Cluster) string {
 	// Preserve an already dispatched target even if older customer intent differs.
 	hc := cluster.Status.HostedClusterResult
 	if hc != nil {
-		current, a := utilversion.ParseSemantic(hc.Version)
-		desired, b := utilversion.ParseSemantic(hc.DesiredVersion)
-		if a == nil && b == nil && current.LessThan(desired) {
+		if transition, err := ocpversion.ObservedTransition(hc.Version, hc.DesiredVersion); err == nil && transition {
 			return hc.DesiredVersion
 		}
 	}
@@ -123,9 +122,7 @@ func ClusterUpgradeSubmissionStarted(cluster *Cluster) bool {
 	}
 	// Feedback is authoritative for an already dispatched legacy rollout.
 	if hc := cluster.Status.HostedClusterResult; hc != nil {
-		current, a := utilversion.ParseSemantic(hc.Version)
-		desired, b := utilversion.ParseSemantic(hc.DesiredVersion)
-		if a == nil && b == nil && current.LessThan(desired) {
+		if transition, err := ocpversion.ObservedTransition(hc.Version, hc.DesiredVersion); err == nil && transition {
 			return true
 		}
 	}
@@ -185,7 +182,7 @@ func ValidateClusterUpgradeTarget(cluster *Cluster, requested string) error {
 	if IsMinorRelease(requested) && ReleaseMatches(requested, hc.Version) {
 		return nil
 	}
-	current, err := utilversion.ParseSemantic(hc.Version)
+	current, err := ocpversion.Parse(hc.Version)
 	if err != nil {
 		return fmt.Errorf("the observed control-plane version is invalid")
 	}
@@ -193,7 +190,7 @@ func ValidateClusterUpgradeTarget(cluster *Cluster, requested string) error {
 		if !ReleaseMatches(requested, candidate) {
 			continue
 		}
-		target, err := utilversion.ParseSemantic(candidate)
+		target, err := ocpversion.Parse(candidate)
 		if err == nil && current.LessThan(target) {
 			return nil
 		}

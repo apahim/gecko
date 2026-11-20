@@ -9,13 +9,13 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/util/catalog"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
+	"github.com/openshift-online/gecko/platform-api/pkg/ocpversion"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	utilversion "k8s.io/apimachinery/pkg/util/version"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -126,8 +126,8 @@ func (r *Reconciler) observe(ctx context.Context, before, pool *privatev1.NodePo
 		conditions(pool, metav1.ConditionFalse, metav1.ConditionFalse, "UpgradeCompleted", "The NodePool reached the desired version and is healthy")
 		return r.persist(ctx, before, pool, 0)
 	}
-	if current, err := utilversion.ParseSemantic(pool.Status.Version); err == nil {
-		if target, err := utilversion.ParseSemantic(pool.Spec.Release.Version); err == nil && target.LessThan(current) {
+	if current, err := ocpversion.Parse(pool.Status.Version); err == nil {
+		if target, err := ocpversion.Parse(pool.Spec.Release.Version); err == nil && target.LessThan(current) {
 			if !privatev1.NodePoolUpgradeSubmissionStarted(pool) {
 				return r.fail(ctx, before, pool, "TargetSuperseded", "The observed NodePool version is newer than the desired version")
 			}

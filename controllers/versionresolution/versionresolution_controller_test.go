@@ -400,7 +400,7 @@ func TestNextChannelVersion(t *testing.T) {
 		{name: "same minor", version: "4.22.14", fleetMinor: "4.22", want: "4.22.14"},
 		{name: "next minor", version: "4.22.14", fleetMinor: "4.23", want: "4.23.0"},
 		{name: "one minor at a time", version: "4.22.14", fleetMinor: "4.24", want: "4.23.0"},
-		{name: "different major", version: "4.22.14", fleetMinor: "5.0", want: "4.22.14"},
+		{name: "supported naming bridge", version: "4.22.14", fleetMinor: "5.0", want: "5.0.0"},
 	}
 
 	for _, tc := range cases {

@@ -1,0 +1,11 @@
+# INACTIVE example. Merge with reviewed live dev API values; never install alone.
+# Preserve existing Spanner/backend, migration image pin, ESP and prune safeguards.
+iamApplications:
+  enabled: false
+wifConfigTemplates:
+  enabled: true
+  entries:
+    - name: "4.22.0"
+      verified: false
+    - name: "5.0.0"
+      verified: false

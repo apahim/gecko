@@ -11,6 +11,7 @@ import (
 	channelutil "github.com/openshift-online/gecko/controllers/util/channel"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
+	"github.com/openshift-online/gecko/platform-api/pkg/ocpversion"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -202,18 +203,24 @@ func nextChannelVersion(version, fleetMinorVersion string) (string, error) {
 		return version, nil
 	}
 
-	current, err := utilversion.ParseSemantic(version)
+	current, err := ocpversion.Parse(version)
 	if err != nil {
-		return "", fmt.Errorf("parse current version %q: %w", version, err)
+		return "", fmt.Errorf("parse current version: %w", err)
 	}
-	fleetMinor, err := utilversion.ParseSemantic(fleetMinorVersion + ".0")
+	rawFleet, err := utilversion.ParseSemantic(fleetMinorVersion + ".0")
 	if err != nil {
-		return "", fmt.Errorf("parse fleet minor version %q: %w", fleetMinorVersion, err)
+		return "", fmt.Errorf("invalid fleet minor version")
 	}
-
-	if current.Major() != fleetMinor.Major() || current.Minor() >= fleetMinor.Minor() {
+	fleetMinor, err := ocpversion.Normalize(rawFleet)
+	if err != nil {
+		return "", err
+	}
+	if current.Minor() >= fleetMinor.Minor() {
 		return version, nil
 	}
-
-	return fmt.Sprintf("%d.%d.0", current.Major(), current.Minor()+1), nil
+	next, err := ocpversion.NextMinor(current, rawFleet.Major())
+	if err != nil {
+		return "", err
+	}
+	return next.String(), nil
 }

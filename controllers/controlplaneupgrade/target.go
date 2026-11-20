@@ -3,21 +3,23 @@ package controlplaneupgrade
 import (
 	"fmt"
 
+	"github.com/openshift-online/gecko/platform-api/pkg/ocpversion"
+
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 )
 
 // selectZStreamCandidate returns the newest advertised patch release in the same
 // major.minor stream as completed, or "" if none is newer than completed.
 func selectZStreamCandidate(completed string, advertised []string) (string, error) {
-	completedVersion, err := utilversion.ParseSemantic(completed)
+	completedVersion, err := ocpversion.Parse(completed)
 	if err != nil {
-		return "", fmt.Errorf("parse completed version %q: %w", completed, err)
+		return "", fmt.Errorf("parse completed version: %w", err)
 	}
 
 	var selected string
 	var selectedVersion *utilversion.Version
 	for _, candidate := range advertised {
-		candidateVersion, err := utilversion.ParseSemantic(candidate)
+		candidateVersion, err := ocpversion.Parse(candidate)
 		if err != nil {
 			// AvailableUpdates is HyperShift-owned; skip anything Gecko cannot parse
 			// rather than fail the whole reconciliation over one bad entry.
@@ -29,7 +31,7 @@ func selectZStreamCandidate(completed string, advertised []string) (string, erro
 		if !completedVersion.LessThan(candidateVersion) {
 			continue
 		}
-		if selectedVersion == nil || selectedVersion.LessThan(candidateVersion) {
+		if selectedVersion == nil || selectedVersion.LessThan(candidateVersion) || (selectedVersion.EqualTo(candidateVersion) && candidate > selected) {
 			selected = candidate
 			selectedVersion = candidateVersion
 		}
@@ -57,6 +59,12 @@ func isValidCriticalPin(pin, completed string) bool {
 	if pin == "" {
 		return false
 	}
+	// Do not expand emergency bypass authority across raw naming streams.
+	rawPin, a := utilversion.ParseSemantic(pin)
+	rawCompleted, b := utilversion.ParseSemantic(completed)
+	if a != nil || b != nil || rawPin.Major() != rawCompleted.Major() || rawPin.Minor() != rawCompleted.Minor() {
+		return false
+	}
 	selected, err := selectZStreamCandidate(completed, []string{pin})
 	return err == nil && selected == pin
 }
@@ -69,17 +77,14 @@ func isValidCriticalPin(pin, completed string) bool {
 // The fleetMinorVersion is the platform authorization boundary; it must be greater
 // than or equal to the candidate's minor version.
 func selectYStreamCandidate(completed string, advertised []string, fleetMinorVersion string) (string, error) {
-	completedVersion, err := utilversion.ParseSemantic(completed)
+	completedVersion, err := ocpversion.Parse(completed)
 	if err != nil {
-		return "", fmt.Errorf("parse completed version %q: %w", completed, err)
+		return "", fmt.Errorf("parse completed version: %w", err)
 	}
 
-	fleetMinor, err := utilversion.ParseSemantic(fleetMinorVersion + ".0")
+	fleetMinor, err := ocpversion.Parse(fleetMinorVersion + ".0")
 	if err != nil {
-		return "", fmt.Errorf("parse fleet minor version %q: %w", fleetMinorVersion, err)
-	}
-	if fleetMinor.Major() != completedVersion.Major() {
-		return "", fmt.Errorf("fleet minor version %q has a different major version than completed version %q", fleetMinorVersion, completed)
+		return "", fmt.Errorf("parse fleet minor version: %w", err)
 	}
 
 	targetMinor := completedVersion.Minor() + 1
@@ -88,7 +93,7 @@ func selectYStreamCandidate(completed string, advertised []string, fleetMinorVer
 	var selected string
 	var selectedVersion *utilversion.Version
 	for _, candidate := range advertised {
-		candidateVersion, err := utilversion.ParseSemantic(candidate)
+		candidateVersion, err := ocpversion.Parse(candidate)
 		if err != nil {
 			continue
 		}
@@ -106,7 +111,7 @@ func selectYStreamCandidate(completed string, advertised []string, fleetMinorVer
 			continue
 		}
 
-		if selectedVersion == nil || selectedVersion.LessThan(candidateVersion) {
+		if selectedVersion == nil || selectedVersion.LessThan(candidateVersion) || (selectedVersion.EqualTo(candidateVersion) && candidate > selected) {
 			selected = candidate
 			selectedVersion = candidateVersion
 		}

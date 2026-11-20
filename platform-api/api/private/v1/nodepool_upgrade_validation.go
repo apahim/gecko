@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/openshift-online/gecko/platform-api/pkg/ocpversion"
+
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -112,15 +114,15 @@ func ValidateNodePoolUpgradeTarget(pool *NodePool, cluster *Cluster, release *Ve
 	if pool.Status.Version == "" || cluster.Status.HostedClusterResult == nil || cluster.Status.HostedClusterResult.Version == "" {
 		return fmt.Errorf("nodepool and control-plane versions must be observed before requesting an upgrade")
 	}
-	current, err := utilversion.ParseSemantic(pool.Status.Version)
+	current, err := ocpversion.Parse(pool.Status.Version)
 	if err != nil {
 		return fmt.Errorf("the observed NodePool version is invalid")
 	}
-	target, err := utilversion.ParseSemantic(targetVersion)
+	target, err := ocpversion.Parse(targetVersion)
 	if err != nil {
 		return fmt.Errorf("the target must be a semantic version")
 	}
-	controlPlane, err := utilversion.ParseSemantic(cluster.Status.HostedClusterResult.Version)
+	controlPlane, err := ocpversion.Parse(cluster.Status.HostedClusterResult.Version)
 	if err != nil {
 		return fmt.Errorf("the observed control-plane version is invalid")
 	}
@@ -144,9 +146,12 @@ func ValidateNodePoolUpgradeTarget(pool *NodePool, cluster *Cluster, release *Ve
 	return fmt.Errorf("the target version is not available in the NodePool channel group")
 }
 
-// ValidNodePoolUpgradeStep permits sequential minor upgrades and EUS-to-EUS steps.
+// ValidNodePoolUpgradeStep permits logical sequential minors and EUS-to-EUS
+// steps across the supported OpenShift naming bridge, not arbitrary major jumps.
 func ValidNodePoolUpgradeStep(current, target *utilversion.Version, channelGroup string) bool {
-	if current.Major() != target.Major() {
+	current, currentErr := ocpversion.Normalize(current)
+	target, targetErr := ocpversion.Normalize(target)
+	if currentErr != nil || targetErr != nil || !current.LessThan(target) {
 		return false
 	}
 	return target.Minor() == current.Minor() || target.Minor() == current.Minor()+1 ||

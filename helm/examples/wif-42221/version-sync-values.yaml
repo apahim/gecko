@@ -1,0 +1,6 @@
+# INACTIVE dev-only overlay. Merge with existing channel values, not shared defaults.
+channels:
+  candidate:
+    minimumSupportedVersion: "4.22"
+    installDefaultVersion: "5.0.0"
+    fleetMinorVersion: "5.0"

@@ -9,6 +9,7 @@ import (
 	"github.com/openshift-online/gecko/controllers/util/catalog"
 	channelutil "github.com/openshift-online/gecko/controllers/util/channel"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
+	"github.com/openshift-online/gecko/platform-api/pkg/ocpversion"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -46,7 +47,7 @@ func (r *Reconciler) normalizeMinor(ctx context.Context, c *privatev1.Cluster) (
 				continue
 			}
 		}
-		v, err := utilversion.ParseSemantic(release.Name)
+		v, err := ocpversion.Parse(release.Name)
 		if err == nil && (newest == nil || newest.LessThan(v)) {
 			selected, newest = release.Name, v
 		}
@@ -111,8 +112,8 @@ func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, t
 		}
 		return r.block(ctx, c, unavailable.Reason, fmt.Sprintf("Target %s: %s", target, unavailable.Message), unavailable.Reason == "VersionNotInChannelGroup")
 	}
-	current, _ := utilversion.ParseSemantic(c.Status.HostedClusterResult.Version)
-	selected, _ := utilversion.ParseSemantic(target)
+	current, _ := ocpversion.Parse(c.Status.HostedClusterResult.Version)
+	selected, _ := ocpversion.Parse(target)
 	isYStream := current.Major() != selected.Major() || current.Minor() != selected.Minor()
 	if ok, reason, message := healthOK(c.Status.Conditions, c.Status.HostedClusterResult.ObservedConditions, isYStream); !ok {
 		return r.block(ctx, c, reason, message, false)
@@ -175,9 +176,8 @@ func feedbackTarget(completed, desired string) (bool, string) {
 	if desired == "" || desired == completed {
 		return false, ""
 	}
-	current, a := utilversion.ParseSemantic(completed)
-	target, b := utilversion.ParseSemantic(desired)
-	return a != nil || b != nil || current.LessThan(target), desired
+	transition, err := ocpversion.ObservedTransition(completed, desired)
+	return err != nil || transition, desired
 }
 
 func (r *Reconciler) observeUpgrade(ctx context.Context, c *privatev1.Cluster) (reconcile.Result, error) {

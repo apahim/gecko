@@ -75,10 +75,10 @@ func TestSelectZStreamCandidate(t *testing.T) {
 	}
 }
 
-func TestSelectYStreamCandidateRejectsDifferentFleetMajor(t *testing.T) {
-	target, err := selectYStreamCandidate("4.22.14", []string{"4.23.0"}, "5.23")
+func TestSelectYStreamCandidateRejectsUnsupportedFleetMajor(t *testing.T) {
+	target, err := selectYStreamCandidate("4.22.14", []string{"4.23.0"}, "6.0")
 	if err == nil {
-		t.Fatal("expected a fleet major-version mismatch error")
+		t.Fatal("expected an unsupported fleet major error")
 	}
 	if target != "" {
 		t.Fatalf("selected target %q despite mismatched fleet major", target)
