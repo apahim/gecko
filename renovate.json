@@ -1,7 +1,4 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>openshift-online/gcp-hcp//renovate/default"],
-  "gomod": {
-    "postUpdateOptions": ["gomodTidyAll", "gomodUpdateImportPaths"]
-  }
+  "extends": ["github>openshift-online/gcp-hcp//renovate/default"]
 }
