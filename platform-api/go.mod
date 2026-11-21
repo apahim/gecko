@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/open-feature/go-sdk v1.20.0
-	github.com/open-feature/go-sdk-contrib/providers/flagd v0.8.0
+	github.com/open-feature/go-sdk-contrib/providers/flagd v0.8.1
 	github.com/openshift-online/gecko/orlop v0.0.0-00010101000000-000000000000
 	golang.org/x/text v0.44.0
 	k8s.io/apiextensions-apiserver v0.37.2
@@ -50,7 +50,7 @@ require (
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/diegoholiveira/jsonlogic/v3 v3.10.1 // indirect
+	github.com/diegoholiveira/jsonlogic/v3 v3.10.2 // indirect
 	github.com/emicklei/go-restful/v3 v3.14.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.40.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
@@ -97,7 +97,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/open-feature/flagd-schemas v0.2.15 // indirect
-	github.com/open-feature/flagd/core v0.19.2 // indirect
+	github.com/open-feature/flagd/core v0.19.3 // indirect
 	github.com/pandatix/go-abnf v0.5.5 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20260702190614-8ae5a48058df // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
