@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/go-toolset:1.27.3-1795042432 AS builder
+FROM registry.access.redhat.com/ubi9/go-toolset:1.27.3-1795278056 AS builder
 WORKDIR /opt/app-root/src
 # Build context must be the repo root (gecko/).
 # The replace directives in controllers/go.mod reference ../platform-api and ../orlop.
