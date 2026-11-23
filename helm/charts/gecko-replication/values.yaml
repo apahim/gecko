@@ -1,5 +1,8 @@
 # Enable only after the regional API LIST/WATCH contract and Pub/Sub resources
-# have been verified for this environment.
+# have been verified for this environment. Follower write guards must be active
+# before follower consumption is enabled. The first-stage follower relies on
+# periodic inventories to repair stale post-delete deliveries until durable
+# per-key delete ordering is implemented.
 enabled: false
 
 region: ""
@@ -7,9 +10,10 @@ leaderRegion: ""
 leaderGeneration: 0
 replicate: roles.gcp.managed.openshift.io,rolebindings.gcp.managed.openshift.io
 resyncInterval: 30m
-# Maximum encoded bytes buffered in memory during one full snapshot capture.
-# Keep this well below resources.limits.memory below: the controller holds the
-# encoded snapshot plus Go runtime overhead while capturing. Default 32 MiB.
+# Budget per capture, measured as the sum of encoded event sizes. A follower
+# may stage two captures per resource kind. With the two default kinds, the
+# combined accounting limit is 128 MiB. Actual memory also includes maps,
+# temporary allocations, and Go runtime overhead.
 captureMaxBytes: 33554432
 
 pubsub:
@@ -17,9 +21,11 @@ pubsub:
   topicProjectId: ""
   # This region's project where Config Connector creates subscriptions.
   subscriptionProjectId: ""
-  dataTopic: resource-replication
+  dataTopic: resource-replication-data
   controlTopic: resource-replication-control
-  # The leader reads resync requests from its regional control subscription.
+  # Each region owns a data subscription, including the leader.
+  dataSubscription: ""
+  # Each region owns a control subscription for possible promotion.
   controlSubscription: ""
   # Optional chart ownership; Terraform owns the topics in current environments.
   topicOwner: false
@@ -39,7 +45,7 @@ image:
   tag: ""
   pullPolicy: Always
 
-# One leader publisher per region; there is no leader lease.
+# Each region runs one replication controller, whether leader or follower.
 replicaCount: 1
 logLevel: info
 logFormat: json
@@ -51,8 +57,8 @@ serviceAccount:
 resources:
   limits:
     cpu: 500m
-    # Must comfortably exceed captureMaxBytes (the in-memory snapshot) plus Go
-    # runtime overhead to avoid OOMKills during a full capture.
+    # Allow for concurrent follower captures (up to four at defaults),
+    # temporary snapshot processing, and Go runtime overhead.
     memory: 512Mi
   requests:
     cpu: 50m
