@@ -45,11 +45,6 @@ spec:
             - --log-level={{ .Values.logLevel }}
             - --log-format={{ .Values.logFormat }}
             - --workers={{ .Values.workers }}
-            {{- if .Values.garAccess.requireReadyGrant }}
-            - --require-gar-access
-            - --gar-repository={{ .Values.garAccess.repository }}
-            - --iam-namespace={{ .Values.garAccess.iamNamespace }}
-            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

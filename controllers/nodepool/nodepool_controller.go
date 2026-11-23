@@ -30,10 +30,9 @@ const (
 
 // Reconciler implements the nodepool controller reconciliation loop.
 type Reconciler struct {
-	transport     transport.Client
-	log           logger.Logger
-	client        client.Client
-	garAccessGate GARAccessGate
+	transport transport.Client
+	log       logger.Logger
+	client    client.Client
 }
 
 // New creates a new nodepool Reconciler.
@@ -85,9 +84,52 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	ready, result, err := r.prepareNodePool(ctx, &np, &cluster, log)
-	if err != nil || !ready {
-		return result, err
+	// Ensure finalizer is present.
+	if !controllerutil.ContainsFinalizer(&np, constants.FinalizerNodePool) {
+		controllerutil.AddFinalizer(&np, constants.FinalizerNodePool)
+		if err := r.client.Update(ctx, &np); err != nil {
+			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: add finalizer: %w", err)
+		}
+		return reconcile.Result{}, nil // re-reconcile with finalizer in place
+	}
+
+	// Gate: cluster placement must be ready.
+	if cluster.Status.PlacementResult == nil || cluster.Status.PlacementResult.ManagementClusterName == "" {
+		if setWaitingNPConditions(&np, "PlacementNotReady", "Waiting for cluster placement to select a management cluster") {
+			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
+				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
+			}
+		}
+		log.Infof(ctx, "placement not ready for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
+	}
+
+	// Gate: nodepool VR must be ready.
+	if np.Status.VersionResolution == nil || np.Status.VersionResolution.ReleaseVersion == "" {
+		if setWaitingNPConditions(&np, "VersionResolutionNotReady", "Waiting for nodepool version resolution") {
+			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
+				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
+			}
+		}
+		log.Infof(ctx, "nodepool VR not ready for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
+	}
+
+	// While a desired upgrade waits for approval, continue reconciling the
+	// observed release so scaling and fresh health feedback are not blocked.
+	version := installationVersion(&np)
+	// Gate: VR must match the release currently permitted for installation.
+	if np.Status.VersionResolution.ReleaseVersion != version {
+		msg := fmt.Sprintf("VR version %q does not match spec version %q",
+			np.Status.VersionResolution.ReleaseVersion, version)
+		if setWaitingNPConditions(&np, "VersionMismatch", msg) {
+			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
+				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
+			}
+		}
+		log.Infof(ctx, "nodepool VR version %q does not match spec version %q, requeueing after %s",
+			np.Status.VersionResolution.ReleaseVersion, version, requeuePending)
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	// Extract nodepool GCP platform fields.
