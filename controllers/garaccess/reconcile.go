@@ -29,7 +29,11 @@ func (r *Reconciler) ensureGrant(ctx context.Context, project, member, consumers
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("get GAR Reader grant for %s: %w", project, err)
 	}
-	if !matchesGrant(existing, desired) {
+	matches, err := matchesGrant(existing, desired)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if !matches {
 		return reconcile.Result{}, fmt.Errorf("IAMPolicyMember %s does not match the Gecko-owned grant for %s", existing.GetName(), project)
 	}
 	if !existing.GetDeletionTimestamp().IsZero() {
@@ -81,8 +85,18 @@ func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcil
 		if len(r.PolicyMemberToProject(ctx, policy)) == 0 {
 			continue
 		}
-		member, _, _ := unstructured.NestedString(policy.Object, "spec", "member")
-		if !matchesGrant(policy, desiredGrant(r.config, project, member)) {
+		member, found, err := unstructured.NestedString(policy.Object, "spec", "member")
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("read spec.member of IAMPolicyMember %s: %w", policy.GetName(), err)
+		}
+		if !found {
+			return reconcile.Result{}, fmt.Errorf("IAMPolicyMember %s is missing spec.member", policy.GetName())
+		}
+		matches, err := matchesGrant(policy, desiredGrant(r.config, project, member))
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		if !matches {
 			return reconcile.Result{}, fmt.Errorf("refuse to delete unexpected IAMPolicyMember %s", policy.GetName())
 		}
 		if !policy.GetDeletionTimestamp().IsZero() {

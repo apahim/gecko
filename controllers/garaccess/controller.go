@@ -80,12 +80,16 @@ func (r *Reconciler) consumers(ctx context.Context, project string) ([]string, s
 }
 
 // PolicyMemberToProject recovers reconciliation on KCC updates and restarts.
-func (r *Reconciler) PolicyMemberToProject(_ context.Context, obj client.Object) []reconcile.Request {
+func (r *Reconciler) PolicyMemberToProject(ctx context.Context, obj client.Object) []reconcile.Request {
 	policy, ok := obj.(*unstructured.Unstructured)
 	if !ok || policy.GetNamespace() != r.config.IAMNamespace || policy.GetLabels()[managedLabel] != managedBy {
 		return nil
 	}
-	repository, _, _ := unstructured.NestedString(policy.Object, "spec", "resourceRef", "external")
+	repository, _, err := unstructured.NestedString(policy.Object, "spec", "resourceRef", "external")
+	if err != nil {
+		r.log.Errorf(ctx, "gar-access: read spec.resourceRef.external of IAMPolicyMember %s/%s: %v", policy.GetNamespace(), policy.GetName(), err)
+		return nil
+	}
 	project := policy.GetLabels()[projectLabel]
 	if repository != r.config.Repository || project == "" {
 		return nil

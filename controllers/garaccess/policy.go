@@ -3,6 +3,7 @@ package garaccess
 import (
 	"crypto/sha256"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -49,12 +50,12 @@ func desiredGrant(config Config, project, member string) *unstructured.Unstructu
 	return obj
 }
 
-func matchesGrant(existing, desired *unstructured.Unstructured) bool {
+func matchesGrant(existing, desired *unstructured.Unstructured) (bool, error) {
 	if existing.GetName() != desired.GetName() || existing.GetNamespace() != desired.GetNamespace() ||
 		existing.GetLabels()[managedLabel] != managedBy ||
 		existing.GetLabels()[projectLabel] != desired.GetLabels()[projectLabel] ||
 		len(existing.GetOwnerReferences()) != 0 {
-		return false
+		return false, nil
 	}
 	// Compare owned fields, allowing benign KCC defaulting of other spec fields.
 	for _, path := range [][]string{
@@ -63,20 +64,32 @@ func matchesGrant(existing, desired *unstructured.Unstructured) bool {
 		{"spec", "resourceRef", "external"},
 	} {
 		actual, found, err := unstructured.NestedString(existing.Object, path...)
-		if err != nil || !found {
-			return false
+		if err != nil {
+			return false, fmt.Errorf("read %s of IAMPolicyMember %s: %w", strings.Join(path, "."), existing.GetName(), err)
 		}
-		expected, _, _ := unstructured.NestedString(desired.Object, path...)
+		if !found {
+			return false, nil
+		}
+		expected, found, err := unstructured.NestedString(desired.Object, path...)
+		if err != nil {
+			return false, fmt.Errorf("read desired %s of IAMPolicyMember %s: %w", strings.Join(path, "."), desired.GetName(), err)
+		}
+		if !found {
+			return false, fmt.Errorf("desired IAMPolicyMember %s is missing %s", desired.GetName(), strings.Join(path, "."))
+		}
 		if actual != expected {
-			return false
+			return false, nil
 		}
 	}
 	// Alternate identities, conditions, and named targets change the grant contract.
 	for _, path := range [][]string{{"spec", "memberFrom"}, {"spec", "condition"}, {"spec", "resourceRef", "name"}, {"spec", "resourceRef", "namespace"}} {
 		value, found, err := unstructured.NestedFieldNoCopy(existing.Object, path...)
-		if err != nil || (found && value != nil && value != "") {
-			return false
+		if err != nil {
+			return false, fmt.Errorf("read %s of IAMPolicyMember %s: %w", strings.Join(path, "."), existing.GetName(), err)
+		}
+		if found && value != nil && value != "" {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }

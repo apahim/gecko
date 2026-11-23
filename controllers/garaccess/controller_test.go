@@ -1,6 +1,7 @@
 package garaccess
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -346,6 +347,47 @@ func TestReconcileRefusesUnexpectedOwnedDeclarations(t *testing.T) {
 	}
 }
 
+func TestReconcileRejectsMalformedMemberWithoutChangingGrant(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		member interface{}
+	}{
+		{"non-string-member", int64(123)},
+		{"member-object", map[string]interface{}{"unexpected": "member"}},
+		{"missing-member", nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			config := controllerConfig()
+			cluster := controllerCluster("customer-project", "cluster", "123")
+			policy := controllerGrant(config, cluster)
+			spec := policy.Object["spec"].(map[string]interface{})
+			original := spec["member"]
+			if test.member == nil {
+				delete(spec, "member")
+			} else {
+				spec["member"] = test.member
+			}
+			kcc := controllerKCC(policy)
+			before := controllerPolicies(t, kcc)
+			rec := controllerReconciler(t, controllerReader(), kcc, config)
+			request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: cluster.Namespace}}
+			_, err := rec.Reconcile(ctx, request)
+			require.ErrorContains(t, err, "spec.member")
+			require.ErrorContains(t, err, policy.GetName())
+			require.Equal(t, before, controllerPolicies(t, kcc))
+
+			stored := NewPolicyMember()
+			require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
+			stored.Object["spec"].(map[string]interface{})["member"] = original
+			require.NoError(t, kcc.Update(ctx, stored))
+			_, err = rec.Reconcile(ctx, request)
+			require.NoError(t, err, "correcting the member must allow normal cleanup")
+			require.Empty(t, controllerPolicies(t, kcc))
+		})
+	}
+}
+
 func TestReconcilePreservesGrantWhenConsumerArrivesDuringCleanup(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		name := "consumer-arrives"
@@ -545,5 +587,30 @@ func TestPolicyMemberEventsSelectOnlyThisRepositoryAndNamespace(t *testing.T) {
 		other := policy.DeepCopy()
 		change(other)
 		require.Empty(t, rec.PolicyMemberToProject(context.Background(), other))
+	}
+}
+
+func TestPolicyMemberEventsLogMalformedRepository(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		resourceRef interface{}
+	}{
+		{"non-string-repository", map[string]interface{}{"external": int64(123)}},
+		{"non-object-resource-ref", "not-an-object"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			log, err := logger.NewLogger(logger.Config{Level: "info", Format: logger.FormatText, Writer: &output})
+			require.NoError(t, err)
+			config := controllerConfig()
+			rec, err := New(log, nil, nil, config)
+			require.NoError(t, err)
+			policy := controllerGrant(config, controllerCluster("customer-project", "cluster", "123"))
+			policy.Object["spec"].(map[string]interface{})["resourceRef"] = test.resourceRef
+
+			require.Empty(t, rec.PolicyMemberToProject(context.Background(), policy))
+			require.Contains(t, output.String(), "spec.resourceRef.external")
+			require.Contains(t, output.String(), policy.GetNamespace()+"/"+policy.GetName())
+		})
 	}
 }
