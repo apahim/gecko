@@ -140,4 +140,7 @@ For an authorized dev rollout, check:
 An earlier dev build (`53fb6ad`) demonstrated declaration reconciliation and
 automatic restoration of a manually removed Reader membership. That result does
 not validate this optional gate or authenticated image pulls. Gate rollout and
-image-pull validation remain pending. Unit tests are deferred.
+image-pull validation remain pending. Fake-client unit tests cover grant identity,
+reconciliation, guarded cleanup, KCC readiness, command configuration, and the
+optional NodePool gate. They do not verify live IAM propagation or authenticated
+image pulls.
