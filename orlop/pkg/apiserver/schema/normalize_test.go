@@ -141,6 +141,9 @@ properties:
 
 	processor := newProcessor(t, schemaYAML)
 
+	// The boundary cases use extreme values, so only the conversion itself is
+	// asserted; whether the JSON-schema validator accepts them is its concern,
+	// not the normalizer's.
 	for _, tc := range []struct {
 		name    string
 		value   float64
@@ -149,7 +152,6 @@ properties:
 		{"two_pow_63_out_of_range", 9223372036854775808.0, false},      // 2^63
 		{"preceding_representable_float", 9223372036854774784.0, true}, // 2^63 - 1024
 		{"negative_two_pow_63_in_range", -9223372036854775808.0, true}, // -2^63
-		{"zero", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := map[string]any{"spec": map[string]any{"hostPrefix": tc.value}}
@@ -160,4 +162,15 @@ properties:
 			}
 		})
 	}
+
+	// A genuinely valid value must both convert and validate cleanly.
+	t.Run("zero_converts_and_validates", func(t *testing.T) {
+		obj := map[string]any{"spec": map[string]any{"hostPrefix": float64(0)}}
+		if errs := processor.Process(t.Context(), obj, nil); len(errs) > 0 {
+			t.Fatalf("zero value rejected: %v", errs.ToAggregate())
+		}
+		if got := obj["spec"].(map[string]any)["hostPrefix"]; got != int64(0) {
+			t.Fatalf("zero value: got %T(%v), want int64", got, got)
+		}
+	})
 }
