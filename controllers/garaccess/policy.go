@@ -71,8 +71,8 @@ func matchesGrant(existing, desired *unstructured.Unstructured) bool {
 			return false
 		}
 	}
-	// A memberFrom or named resourceRef would introduce another identity/target.
-	for _, path := range [][]string{{"spec", "memberFrom"}, {"spec", "resourceRef", "name"}, {"spec", "resourceRef", "namespace"}} {
+	// Alternate identities, conditions, and named targets change the grant contract.
+	for _, path := range [][]string{{"spec", "memberFrom"}, {"spec", "condition"}, {"spec", "resourceRef", "name"}, {"spec", "resourceRef", "namespace"}} {
 		value, found, err := unstructured.NestedFieldNoCopy(existing.Object, path...)
 		if err != nil || (found && value != nil && value != "") {
 			return false

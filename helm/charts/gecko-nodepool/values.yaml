@@ -14,6 +14,13 @@ logLevel: info
 logFormat: json
 workers: 10
 
+garAccess:
+  # Gate initial downstream NodePool dispatch on KCC-confirmed Reader access.
+  # Leave disabled for deployments without GAR (including current E2E targets).
+  requireReadyGrant: false
+  repository: ""
+  iamNamespace: gecko-system
+
 serviceAccount:
   create: true
   annotations: {}
