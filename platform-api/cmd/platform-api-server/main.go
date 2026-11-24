@@ -200,10 +200,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create NodePool upgrade validator: %v", err)
 	}
+	releaseValidator, err := newClusterReleaseValidator(storageFactory, privateScheme)
+	if err != nil {
+		log.Fatalf("Failed to create Cluster release validator: %v", err)
+	}
 	privatev1.SetValidatorDeps(privatev1.ValidatorDeps{
 		RoleExists:              stores.RoleExists,
 		PlatformRoleExists:      stores.PlatformRoleExists,
 		ValidateNodePoolUpgrade: upgradeValidator.Validate,
+		ValidateClusterRelease:  releaseValidator.Validate,
 	})
 
 	publicResources := getPublicResources()

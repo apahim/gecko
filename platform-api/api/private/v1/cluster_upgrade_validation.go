@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -130,7 +131,7 @@ func ClusterUpgradeSubmissionStarted(cluster *Cluster) bool {
 	return submitted != nil && accepted != nil && submitted.ObservedGeneration >= accepted.ObservedGeneration && submitted.Status != "False"
 }
 
-func (c *Cluster) validateReleaseUpdate(old *Cluster) error {
+func (c *Cluster) validateReleaseUpdate(ctx context.Context, old *Cluster) error {
 	if equality.Semantic.DeepEqual(c.Spec.Release, old.Spec.Release) {
 		return nil
 	}
@@ -158,6 +159,11 @@ func (c *Cluster) validateReleaseUpdate(old *Cluster) error {
 		if meta.IsStatusConditionTrue(old.Status.Conditions, "ResourcesApplied") {
 			return fmt.Errorf("wait for the observed control-plane version before changing spec.release")
 		}
+		if c.Spec.Release.Version != old.Spec.Release.Version {
+			if err := c.validateReleaseCatalog(ctx); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if c.Spec.Release.Version == hc.Version {
@@ -166,7 +172,10 @@ func (c *Cluster) validateReleaseUpdate(old *Cluster) error {
 	if c.Spec.Release.Version == old.Spec.Release.Version {
 		return nil
 	}
-	return ValidateClusterUpgradeTarget(old, c.Spec.Release.Version)
+	if err := ValidateClusterUpgradeTarget(old, c.Spec.Release.Version); err != nil {
+		return err
+	}
+	return c.validateReleaseCatalog(ctx)
 }
 
 // ValidateClusterUpgradeTarget uses stored HostedCluster update edges only.

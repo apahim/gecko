@@ -86,6 +86,10 @@ type ValidatorDeps struct {
 	RoleExists              func(context.Context, string, string) (bool, error)
 	PlatformRoleExists      func(context.Context, string) (bool, error)
 	ValidateNodePoolUpgrade func(context.Context, *NodePool, string) error
+	// ValidateClusterRelease reports whether the Version catalog offers a
+	// release version in a channel group. It receives the effective channel
+	// group (empty spec values already defaulted).
+	ValidateClusterRelease func(context.Context, string, string) error
 }
 
 var validatorDeps struct {

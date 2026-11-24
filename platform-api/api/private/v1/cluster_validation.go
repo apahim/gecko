@@ -35,18 +35,40 @@ func (c *Cluster) Default(_ context.Context) error {
 }
 
 // ValidateCreate validates Cluster creation.
-func (c *Cluster) ValidateCreate(_ context.Context) error {
+func (c *Cluster) ValidateCreate(ctx context.Context) error {
 	if c.Spec.SafeName != DefaultSafeName(c.Name, c.UID) {
 		return fmt.Errorf("spec.safeName must be the default safe name for metadata.name")
 	}
 	if err := c.validateIngressEmail(); err != nil {
 		return err
 	}
+	if err := c.validateReleaseCatalog(ctx); err != nil {
+		return err
+	}
 	return c.validateMaintenanceConfig(true)
 }
 
+// defaultReleaseChannelGroup mirrors the controller-side default for Clusters
+// that omit spec.release.channelGroup.
+const defaultReleaseChannelGroup = "stable"
+
+// validateReleaseCatalog rejects release requests that the platform Version
+// catalog definitively does not offer. It is a no-op when the server has not
+// installed a storage-backed checker, preserving standalone validation tests.
+func (c *Cluster) validateReleaseCatalog(ctx context.Context) error {
+	validate := getValidatorDeps().ValidateClusterRelease
+	if validate == nil || c.Spec.Release.Version == "" {
+		return nil
+	}
+	channelGroup := c.Spec.Release.ChannelGroup
+	if channelGroup == "" {
+		channelGroup = defaultReleaseChannelGroup
+	}
+	return validate(ctx, c.Spec.Release.Version, channelGroup)
+}
+
 // ValidateUpdate validates Cluster updates.
-func (c *Cluster) ValidateUpdate(_ context.Context, oldObj runtime.Object) error {
+func (c *Cluster) ValidateUpdate(ctx context.Context, oldObj runtime.Object) error {
 	oldCluster, ok := oldObj.(*Cluster)
 	if !ok {
 		return fmt.Errorf("expected old object to be *Cluster, got %T", oldObj)
@@ -55,7 +77,7 @@ func (c *Cluster) ValidateUpdate(_ context.Context, oldObj runtime.Object) error
 	// changes or controller status writes. Public updates have already applied
 	// omission/preservation semantics before reaching this validator.
 	enforceSchedulingLimits := !sameMaintenanceTiming(c.Spec.Maintenance, oldCluster.Spec.Maintenance)
-	if err := c.validateReleaseUpdate(oldCluster); err != nil {
+	if err := c.validateReleaseUpdate(ctx, oldCluster); err != nil {
 		return err
 	}
 
