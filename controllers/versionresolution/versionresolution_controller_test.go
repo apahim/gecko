@@ -291,11 +291,17 @@ func TestReconciler_CatalogChangesPreservePinnedImage(t *testing.T) {
 }
 
 func TestReconciler_CatalogRejectionRequiresResubmission(t *testing.T) {
-	for _, missing := range []bool{true, false} {
-		t.Run(fmt.Sprintf("missing=%t", missing), func(t *testing.T) {
+	for _, tc := range []struct{ missing, automatic bool }{
+		{missing: true}, {}, {missing: true, automatic: true}, {automatic: true},
+	} {
+		t.Run(fmt.Sprintf("missing=%t automatic=%t", tc.missing, tc.automatic), func(t *testing.T) {
+			missing := tc.missing
 			ctx := context.Background()
 			cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "hyperfleet", Generation: 1}}
 			cluster.Spec.Release = privatev1.ClusterReleaseSpec{Version: "5.0.0-ec.6", ChannelGroup: "dev-preview"}
+			if tc.automatic {
+				cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "5.0.0-ec.6", TargetSource: "automatic"}
+			}
 			release := catalogVersion("5.0.0-ec.6", "ci-image", "stable")
 			objects := []client.Object{cluster}
 			if !missing {
@@ -305,7 +311,11 @@ func TestReconciler_CatalogRejectionRequiresResubmission(t *testing.T) {
 			r := NewReconciler(newTestLogger(t), apiClient)
 			result, err := r.Reconcile(ctx, clusterReq("cluster"))
 			require.NoError(t, err)
-			require.Equal(t, reconcile.Result{}, result, "catalog rejection must not schedule a retry")
+			wantRetry := reconcile.Result{}
+			if tc.automatic {
+				wantRetry.RequeueAfter = requeueStable
+			}
+			require.Equal(t, wantRetry, result)
 			require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
 			require.Nil(t, cluster.Status.VersionResolution)
 			rejected := *meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved")
@@ -322,6 +332,13 @@ func TestReconciler_CatalogRejectionRequiresResubmission(t *testing.T) {
 			r = NewReconciler(newTestLogger(t), apiClient)
 			result, err = r.Reconcile(ctx, clusterReq("cluster"))
 			require.NoError(t, err)
+			if tc.automatic {
+				require.Equal(t, requeueStable, result.RequeueAfter)
+				require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
+				require.Equal(t, "ci-image", cluster.Status.VersionResolution.ReleaseImage)
+				require.True(t, meta.IsStatusConditionTrue(cluster.Status.Conditions, "VersionResolved"))
+				return
+			}
 			require.Equal(t, reconcile.Result{}, result)
 			require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
 			require.Nil(t, cluster.Status.VersionResolution, "publishing the release must not revive a rejected request")

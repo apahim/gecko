@@ -47,6 +47,14 @@ the unsubmitted platform-selected target cannot later be mistaken for manual int
 completion. Recovery after a dispatched, failed upgrade requires operational
 intervention; changing the desired release is not an implicit rollback.
 
+An unsubmitted automatic upgrade retains its approved target during catalog
+rejection and retries version resolution every five minutes. The upgrade
+controller rechecks health and maintenance while waiting. After 20 minutes it
+records `VersionCatalogWaitExpired`, restores the observed release, and unlocks
+release settings. The persisted wait time survives restarts and unrelated spec
+changes. Terminal manifest failures remain `PreparationFailed` until the spec is
+corrected; already-dispatched rollouts keep their retry protection.
+
 `WithAdmissionGate` is the internal integration point for future progressive
 rollout capacity. A denied gate retains normalized customer intent in spec and reports
 `WaitingForUpgradeCapacity`. The default permits upgrades: this change does not

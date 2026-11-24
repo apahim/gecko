@@ -20,7 +20,8 @@ const (
 )
 
 // ResolutionRejected reports a catalog rejection for the current spec generation.
-// It remains terminal until the user changes the spec or recreates the resource.
+// Consumers choose whether it is terminal: customer-selected releases require a
+// new spec attempt, while an automatic target can wait for catalog recovery.
 func ResolutionRejected(condition *metav1.Condition, generation int64) bool {
 	return condition != nil && condition.Status == metav1.ConditionFalse &&
 		condition.ObservedGeneration == generation &&

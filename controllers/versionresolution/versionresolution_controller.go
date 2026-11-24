@@ -66,9 +66,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 		return reconcile.Result{}, nil
 	}
-	// Catalog rejection is terminal for this spec, including across restarts
-	// and unrelated status or Channel events. A new generation permits retry.
-	if catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) {
+	// Catalog rejection stays terminal for customer-selected versions: the spec
+	// must change to start a new attempt. Automatic upgrade targets are selected
+	// from HostedCluster AvailableUpdates, so their rejection reflects transient
+	// catalog state and is retried until the catalog catches up.
+	retryAfter := catalogRetryAfter(&cluster, version)
+	if catalog.ResolutionRejected(meta.FindStatusCondition(cluster.Status.Conditions, "VersionResolved"), cluster.Generation) && retryAfter == 0 {
 		return reconcile.Result{}, nil
 	}
 
@@ -134,7 +137,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				return reconcile.Result{}, fmt.Errorf("vr: update cluster status %s: %w", clusterID, err)
 			}
 		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{RequeueAfter: retryAfter}, nil
 	}
 
 	// Write VR result and VersionResolved condition to status.
@@ -160,6 +163,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	r.log.Infof(ctx, "vr: cluster %s: resolved version %s", clusterID, version)
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
+}
+
+// catalogRetryAfter retries the advertised automatic target on catalog lag.
+// Customer-selected catalog rejections remain terminal for their generation.
+func catalogRetryAfter(cluster *privatev1.Cluster, version string) time.Duration {
+	result := cluster.Status.ControlPlaneUpgrade
+	if result != nil && result.TargetSource == privatev1.TargetSourceAutomatic && result.TargetVersion == version && result.CompletedTime == nil {
+		return requeueStable
+	}
+	return 0
 }
 
 // buildChannel constructs the Cincinnati channel name from a version string and channel group.

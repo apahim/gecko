@@ -426,7 +426,7 @@ func TestReconcile_NoMaintenanceWindow_AllowsZStreamUpgrade(t *testing.T) {
 	require.Equal(t, requeueConflict, result.RequeueAfter)
 	require.False(t, storeClient.updateCalled)
 	require.Equal(t, "4.15.1", storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetVersion)
-	require.Equal(t, targetSourceAutomatic, storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetSource)
+	require.Equal(t, privatev1.TargetSourceAutomatic, storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetSource)
 }
 
 func TestReconcile_VersionConflictRechecksCluster(t *testing.T) {
@@ -473,7 +473,7 @@ func TestReconcile_NoMaintenanceWindow_AllowsYStreamUpgrade(t *testing.T) {
 	require.Equal(t, requeueConflict, result.RequeueAfter)
 	require.False(t, storeClient.updateCalled)
 	require.Equal(t, "4.23.0-ec.1", storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetVersion)
-	require.Equal(t, targetSourceAutomatic, storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetSource)
+	require.Equal(t, privatev1.TargetSourceAutomatic, storeClient.statusWriter.captured.(*privatev1.Cluster).Status.ControlPlaneUpgrade.TargetSource)
 }
 
 func TestReconcile_NoMaintenanceWindow_StillRequiresHealthyHostedCluster(t *testing.T) {
@@ -1241,11 +1241,12 @@ func TestReconcile_AutomaticPreparationFailureRetainsSourceUntilCleanup(t *testi
 				require.NoError(t, err)
 			}
 			require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version)
-			meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{Type: "VersionResolved", Status: metav1.ConditionFalse, ObservedGeneration: store.cluster.Generation})
+			meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{Type: "ResourcesApplied", Status: metav1.ConditionFalse, Reason: "ManifestBuildFailed", ObservedGeneration: store.cluster.Generation})
 			_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
 			require.NoError(t, err)
 			require.True(t, privatev1.ClusterAutomaticReleaseCanceling(store.cluster))
 			require.Equal(t, "4.23.8", privatev1.ClusterInstallationVersion(store.cluster))
+			require.True(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, conditionDegraded), "manifest preparation failures remain degraded")
 			if failCleanup {
 				store.statusWriter.updateErr = fmt.Errorf("cleanup status unavailable")
 			}
@@ -1262,6 +1263,7 @@ func TestReconcile_AutomaticPreparationFailureRetainsSourceUntilCleanup(t *testi
 			require.NoError(t, err)
 			require.False(t, privatev1.ClusterUpgradeActive(store.cluster))
 			require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+			require.True(t, meta.IsStatusConditionTrue(store.cluster.Status.Conditions, conditionDegraded))
 			// A non-release repair must retry as automation, respecting timing.
 			nextDay := time.Now().UTC().Add(24 * time.Hour)
 			store.cluster.Spec.Maintenance = &privatev1.ClusterMaintenanceSpec{Window: &privatev1.ControlPlaneMaintenanceWindow{
@@ -1284,4 +1286,44 @@ func TestReconcile_AutomaticPreparationFailureRetainsSourceUntilCleanup(t *testi
 			require.Equal(t, "customer", store.cluster.Status.ControlPlaneUpgrade.TargetSource)
 		})
 	}
+}
+
+func TestReconcile_ConfigurationPreparationFailureDoesNotRetry(t *testing.T) {
+	cluster := readyCluster("4.23.8", []string{"4.23.9"})
+	r, store := buildReconciler(t, cluster)
+	store.persistUpdates = true
+	for range 2 {
+		_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+	}
+	require.Equal(t, "4.23.9", store.cluster.Spec.Release.Version)
+
+	// A terminal manifest failure wins over concurrent health loss and catalog lag.
+	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionFalse, Reason: "ManifestBuildFailed",
+		ObservedGeneration: store.cluster.Generation})
+	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{
+		Type: "VersionResolved", Status: metav1.ConditionFalse, Reason: "VersionNotFoundInCatalog",
+		ObservedGeneration: store.cluster.Generation})
+	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{Type: "HostedClusterAvailable", Status: metav1.ConditionFalse})
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Equal(t, "PreparationFailed", store.cluster.Status.ControlPlaneUpgrade.FailureReason)
+	r = NewReconciler(store, testLogger(t))
+	_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.False(t, privatev1.ClusterUpgradeActive(store.cluster))
+	require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+
+	// Health recovery without a spec edit must not re-approve the broken target.
+	meta.SetStatusCondition(&store.cluster.Status.Conditions, metav1.Condition{Type: "HostedClusterAvailable", Status: metav1.ConditionTrue})
+	for range 3 {
+		r = NewReconciler(store, testLogger(t))
+		_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+		require.NoError(t, err)
+	}
+	require.False(t, privatev1.ClusterAutomaticReleasePreparing(store.cluster),
+		"configuration failures must stay blocked until corrected")
+	require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
+	require.Equal(t, "PreparationFailed", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionDegraded).Reason)
 }
