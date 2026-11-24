@@ -409,18 +409,21 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 			Type:               "NodePoolResourcesApplied",
 			Status:             metav1.ConditionFalse,
 			Reason:             "ResourcesNotFound",
+			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
 		b := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolAvailable",
 			Status:             metav1.ConditionFalse,
 			Reason:             "ResourcesNotFound",
+			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
 		c := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolProgressing",
 			Status:             metav1.ConditionFalse,
 			Reason:             "AsExpected",
+			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
 		return a || b || c
@@ -429,10 +432,12 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 	// Extract conditions from top-level applied conditions.
 	appliedStatus := metav1.ConditionStatus("False")
 	appliedReason := "Unknown"
+	appliedMessage := ""
 	for _, c := range mwStatus.Conditions {
 		if c.Type == "Applied" {
 			appliedStatus = c.Status
 			appliedReason = c.Reason
+			appliedMessage = c.Message
 			break
 		}
 	}
@@ -471,55 +476,74 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 		}
 	}
 
+	// HyperShift condition messages are surfaced verbatim on the matching Gecko
+	// conditions when they are not healthy. Reads are nil-safe: a nil rs or an absent
+	// key (feedback extracted before messages were propagated) both yield "".
+	availableMessage := rs["readyConditionMessage"]
+	healthMessage := rs["allNodesHealthyConditionMessage"]
+	machinesMessage := rs["allMachinesReadyConditionMessage"]
+	updatingConfigMessage := rs["updatingConfigConditionMessage"]
+	updatingVersionMessage := rs["updatingVersionConditionMessage"]
+
 	healthStatus := metav1.ConditionFalse
 	healthReason := "NodePoolNotHealthy"
 	if allNodesHealthy == "True" {
 		healthStatus = metav1.ConditionTrue
 		healthReason = "NodePoolHealthy"
+		healthMessage = "" // messages only on problems, mirroring the HC controller
 	}
 
 	availableReason := "NodePoolNotAvailable"
 	if availableStatus == "True" {
 		availableReason = "NodePoolAvailable"
+		availableMessage = ""
 	}
 
 	a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolResourcesApplied",
 		Status:             appliedStatus,
 		Reason:             appliedReason,
+		Message:            appliedMessage,
 		ObservedGeneration: gen,
 	})
 	b := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolAvailable",
 		Status:             metav1.ConditionStatus(availableStatus),
 		Reason:             availableReason,
+		Message:            availableMessage,
 		ObservedGeneration: gen,
 	})
 	c := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolHealthy",
 		Status:             healthStatus,
 		Reason:             healthReason,
+		Message:            healthMessage,
 		ObservedGeneration: gen,
 	})
 
 	progressingStatus := metav1.ConditionFalse
 	progressingReason := "AsExpected"
+	progressingMessage := ""
 	switch {
 	case allMachinesReady != "True":
 		progressingStatus = metav1.ConditionTrue
 		progressingReason = "MachinesNotReady"
+		progressingMessage = machinesMessage
 	case updatingConfig == "True":
 		progressingStatus = metav1.ConditionTrue
 		progressingReason = "UpdatingConfig"
+		progressingMessage = updatingConfigMessage
 	case updatingVersion == "True":
 		progressingStatus = metav1.ConditionTrue
 		progressingReason = "UpdatingVersion"
+		progressingMessage = updatingVersionMessage
 	}
 
 	d := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolProgressing",
 		Status:             progressingStatus,
 		Reason:             progressingReason,
+		Message:            progressingMessage,
 		ObservedGeneration: gen,
 	})
 	return a || b || c || d || versionChanged

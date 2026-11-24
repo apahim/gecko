@@ -209,6 +209,8 @@ func extractHCFields(raw []byte) (map[string]string, error) {
 //   - allMachinesReadyCondition:   .status.conditions[type=AllMachinesReady].status
 //   - updatingConfigCondition:     .status.conditions[type=UpdatingConfig].status
 //   - updatingVersionCondition:    .status.conditions[type=UpdatingVersion].status
+//   - <cond>Reason / <cond>Message: the matching condition's reason / message, emitted
+//     per condition when non-empty (e.g. readyConditionReason, readyConditionMessage)
 func extractNPFields(raw []byte) (map[string]string, error) {
 	fields := map[string]string{}
 
@@ -216,8 +218,10 @@ func extractNPFields(raw []byte) (map[string]string, error) {
 		Status struct {
 			Version    string `json:"version"`
 			Conditions []struct {
-				Type   string `json:"type"`
-				Status string `json:"status"`
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
 			} `json:"conditions"`
 		} `json:"status"`
 	}
@@ -229,17 +233,27 @@ func extractNPFields(raw []byte) (map[string]string, error) {
 	}
 
 	for _, c := range obj.Status.Conditions {
+		var cond string
 		switch c.Type {
 		case "Ready":
-			fields["readyCondition"] = c.Status
+			cond = "readyCondition"
 		case "AllNodesHealthy":
-			fields["allNodesHealthyCondition"] = c.Status
+			cond = "allNodesHealthyCondition"
 		case "AllMachinesReady":
-			fields["allMachinesReadyCondition"] = c.Status
+			cond = "allMachinesReadyCondition"
 		case "UpdatingConfig":
-			fields["updatingConfigCondition"] = c.Status
+			cond = "updatingConfigCondition"
 		case "UpdatingVersion":
-			fields["updatingVersionCondition"] = c.Status
+			cond = "updatingVersionCondition"
+		default:
+			continue
+		}
+		fields[cond] = c.Status
+		if c.Reason != "" {
+			fields[cond+"Reason"] = c.Reason
+		}
+		if c.Message != "" {
+			fields[cond+"Message"] = c.Message
 		}
 	}
 

@@ -266,6 +266,46 @@ func TestExtractNPFields(t *testing.T) {
 			},
 		},
 		{
+			name: "conditions with reason and message",
+			input: `{
+				"status": {
+					"conditions": [
+						{"type": "Ready", "status": "False", "reason": "GCPResourceNotFound", "message": "GCP actuator is failing"},
+						{"type": "AllNodesHealthy", "status": "True", "reason": "AsExpected"},
+						{"type": "AllMachinesReady", "status": "False", "message": "0/1 machines ready"},
+						{"type": "UpdatingConfig", "status": "False"},
+						{"type": "UpdatingVersion", "status": "True", "reason": "Progressing", "message": "Updating to version 4.16.1"}
+					]
+				}
+			}`,
+			expected: map[string]string{
+				"readyCondition":                   "False",
+				"readyConditionReason":             "GCPResourceNotFound",
+				"readyConditionMessage":            "GCP actuator is failing",
+				"allNodesHealthyCondition":         "True",
+				"allNodesHealthyConditionReason":   "AsExpected",
+				"allMachinesReadyCondition":        "False",
+				"allMachinesReadyConditionMessage": "0/1 machines ready",
+				"updatingConfigCondition":          "False",
+				"updatingVersionCondition":         "True",
+				"updatingVersionConditionReason":   "Progressing",
+				"updatingVersionConditionMessage":  "Updating to version 4.16.1",
+			},
+		},
+		{
+			name: "empty reason and message are omitted",
+			input: `{
+				"status": {
+					"conditions": [
+						{"type": "Ready", "status": "True", "reason": "", "message": ""}
+					]
+				}
+			}`,
+			expected: map[string]string{
+				"readyCondition": "True",
+			},
+		},
+		{
 			name:     "observed version is independent of conditions",
 			input:    `{"status": {"version": "4.22.16", "conditions": []}}`,
 			expected: map[string]string{"version": "4.22.16"},
