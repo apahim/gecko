@@ -247,6 +247,9 @@ func validateWIFReference(ctx context.Context, ref WIFConfigTemplateReference, r
 	if template == nil || template.Name != ref.Name || string(template.UID) != ref.UID {
 		return fmt.Errorf("template reference does not identify the retained catalog resource")
 	}
+	if err := template.ValidateCreate(ctx); err != nil {
+		return fmt.Errorf("template reference identifies an invalid catalog contract")
+	}
 	digest, err := WIFConfigDigest(template.Spec)
 	if err != nil || digest != ref.Digest {
 		return fmt.Errorf("template reference does not match the catalog contract digest")

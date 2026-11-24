@@ -343,6 +343,18 @@ func TestWIFLookupFailureCategories(t *testing.T) {
 	SetValidatorDeps(ValidatorDeps{})
 }
 
+func TestWIFReferenceRejectsInvalidStoredContract(t *testing.T) {
+	w := wifTestTemplate(t)
+	w.Spec.Verified = new(true)
+	w.Spec.IAM.Roles[0].Permissions = nil
+	ref := wifTestRef(t, w) // Even a matching digest cannot make an invalid contract executable.
+	SetValidatorDeps(ValidatorDeps{WIFConfigTemplate: func(context.Context, string) (*WIFConfigTemplate, error) { return w, nil }})
+	t.Cleanup(func() { SetValidatorDeps(ValidatorDeps{}) })
+	if err := validateWIFReference(t.Context(), ref, true, "iam-new-1"); err == nil || !strings.Contains(err.Error(), "invalid catalog contract") {
+		t.Fatalf("invalid stored contract accepted: %v", err)
+	}
+}
+
 func TestWIFApplicationHonorsContractNamingLimit(t *testing.T) {
 	w := wifTestTemplate(t)
 	w.Spec.Verified = new(true)
