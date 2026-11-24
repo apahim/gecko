@@ -39,6 +39,42 @@
 
 ## API Flow Examples
 
+### Public converting-handler PATCH contract
+
+`ConvertingResourceHandler` accepts `application/json-patch+json` operation
+arrays (RFC 6902) and `application/merge-patch+json` objects. Media-type
+parameters are accepted. Negative array indices are rejected, and cumulative
+JSONPatch copy amplification is limited to 3 MiB. For compatibility, all other
+content types (including absent, unknown and malformed headers) retain ordinary
+merge-patch behavior. This includes `application/json` and the historical
+`application/strategic-merge-patch+json` alias; it does **not** implement
+strategic merge or server-side apply. Patch errors use sanitized messages.
+
+The stored public object is authorized before patch evaluation, and the
+resulting object is authorized before conversion/storage. Operations run only
+on the public projection. The complete controller-owned private status is
+preserved, even for root replacement, `move`, `copy`, or status case variants.
+Public schema pruning/defaulting, CEL transition rules, private-field filtering,
+and private custom validation still apply.
+
+JSONPatch cannot change server-managed identity or metadata, including removing
+or replacing `metadata.resourceVersion`. An empty/zero stored revision fails
+closed. Its storage update uses the revision of the fetched snapshot without
+server-side replay. Memory and Spanner enforce the revision precondition, so a
+concurrent write conflicts. **The existing Postgres Update implementation does
+not enforce revision CAS:** snapshot tests alone do not prevent a concurrent
+overwrite on that backend. Do not rely on this patch path for concurrency-safe
+IAM assertion writes on Postgres until its storage contract is separately fixed
+and tested. No Postgres change is included here; deployed backend identity must
+be freshly verified before live guard/rollout acceptance.
+
+A failed `test` returns HTTP 409 with the fixed message
+`JSON patch test failed`; malformed operations and invalid results return HTTP
+400. Patch-library errors and compared values are not returned or logged.
+Clients requiring UID/RV preconditions should issue both `test` operations
+before their intended mutation. A successful parse or an arbitrary 4xx is not
+evidence that either test was evaluated.
+
 ### Creating an Object via Private API
 
 ```

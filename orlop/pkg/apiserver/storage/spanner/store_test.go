@@ -577,14 +577,20 @@ func TestSpannerStore_List(t *testing.T) {
 		store.Create(context.Background(), newTestObject(withName("obj3"), withNamespace(ns), withLabels(map[string]string{"env": "prod"})))
 
 		listObj, err := store.List(context.Background(), storage.ListOptions{
-			Namespace: ns,
+			Namespace:   ns,
+			ListOptions: metav1.ListOptions{LabelSelector: "env=prod"},
 		})
 		if err != nil {
 			t.Fatalf("List() failed: %v", err)
 		}
 		list := listObj.(*unstructured.UnstructuredList)
-		if len(list.Items) != 3 {
-			t.Errorf("Expected 3 objects without filter, got %d", len(list.Items))
+		if len(list.Items) != 2 {
+			t.Errorf("Expected 2 prod objects, got %d", len(list.Items))
+		}
+		for _, item := range list.Items {
+			if item.GetLabels()["env"] != "prod" {
+				t.Errorf("selector returned %s with labels %v", item.GetName(), item.GetLabels())
+			}
 		}
 	})
 

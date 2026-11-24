@@ -3,10 +3,12 @@ package memory
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -562,6 +564,41 @@ func TestMemoryStore_Watch(t *testing.T) {
 			t.Error("Expected channel to be closed after stop")
 		}
 	})
+}
+
+func TestMemoryStore_SelectorListAndWatch(t *testing.T) {
+	store := newTestStore()
+	ctx := context.Background()
+	opts := storage.ListOptions{Namespace: "default", ListOptions: metav1.ListOptions{LabelSelector: "app=selected"}}
+	events, stop, err := store.Watch(ctx, opts, "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for _, obj := range []*unstructured.Unstructured{
+		newTestObject(withName("excluded"), withLabels(map[string]string{"app": "other"})),
+		newTestObject(withName("included"), withLabels(map[string]string{"app": "selected"})),
+	} {
+		if err := store.Create(ctx, obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := store.List(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := list.(*unstructured.UnstructuredList).Items
+	if len(items) != 1 || items[0].GetName() != "included" {
+		t.Fatalf("selector LIST returned %#v", items)
+	}
+	select {
+	case event := <-events:
+		if event.Object.GetName() != "included" {
+			t.Fatalf("selector watch returned %s", event.Object.GetName())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("selector watch did not deliver matching event")
+	}
 }
 
 func TestMemoryStore_ResourceVersionIncrement(t *testing.T) {

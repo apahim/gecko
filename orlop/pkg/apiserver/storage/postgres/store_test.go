@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -484,6 +486,96 @@ func TestPostgresStore_Update(t *testing.T) {
 			t.Error("Expected error for missing object, got nil")
 		}
 	})
+}
+
+func TestPostgresStore_UpdateRevisionCAS(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	obj := newTestObject(withName("revision-cas"), withNamespace("default"))
+	if err := store.Create(ctx, obj); err != nil {
+		t.Fatal(err)
+	}
+	left, err := store.Get(ctx, "default", "revision-cas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	right := left.DeepCopyObject().(client.Object)
+	originalRV := left.GetResourceVersion()
+
+	// Both calls carry the same revision. The database must admit exactly one
+	// write, including when the transactions race, and must not broadcast the
+	// rejected write or change the rejected object's resourceVersion.
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, candidate := range []client.Object{left, right} {
+		wg.Add(1)
+		go func(candidate client.Object) {
+			defer wg.Done()
+			<-start
+			results <- store.Update(ctx, candidate)
+		}(candidate)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var success, conflicts int
+	for err := range results {
+		switch {
+		case err == nil:
+			success++
+		case apierrors.IsConflict(err):
+			conflicts++
+		default:
+			t.Fatalf("unexpected update result: %v", err)
+		}
+	}
+	if success != 1 || conflicts != 1 {
+		t.Fatalf("expected one success and one conflict, got %d and %d", success, conflicts)
+	}
+	stored, err := store.Get(ctx, "default", "revision-cas")
+	if err != nil || stored.GetResourceVersion() == originalRV {
+		t.Fatalf("successful update must advance revision: %v, %#v", err, stored)
+	}
+	if left.GetResourceVersion() != originalRV && right.GetResourceVersion() != originalRV {
+		t.Fatal("conflicting update unexpectedly changed the in-memory revision")
+	}
+}
+
+func TestPostgresStore_SelectorListAndWatch(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	opts := storage.ListOptions{Namespace: "default", ListOptions: metav1.ListOptions{LabelSelector: "app=selected"}}
+	events, stop, err := store.Watch(ctx, opts, "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	if err := store.Create(ctx, newTestObject(withName("excluded"), withLabels(map[string]string{"app": "other"}))); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(ctx, newTestObject(withName("included"), withLabels(map[string]string{"app": "selected"}))); err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.List(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := list.(*unstructured.UnstructuredList).Items
+	if len(items) != 1 || items[0].GetName() != "included" {
+		t.Fatalf("selector LIST returned %#v", items)
+	}
+	select {
+	case event := <-events:
+		if event.Object.GetName() != "included" {
+			t.Fatalf("selector watch returned %s", event.Object.GetName())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("selector watch did not deliver matching event")
+	}
 }
 
 func TestPostgresStore_Delete(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -105,6 +106,30 @@ func TestBroadcaster_SubscribeReceivesLiveEvents(t *testing.T) {
 	event := drainUntil(t, eventCh, ns, "obj", eventTimeout)
 	if event.Type != storage.EventAdded {
 		t.Errorf("expected event type %s, got %s", storage.EventAdded, event.Type)
+	}
+}
+
+func TestSpannerStore_SelectorWatch(t *testing.T) {
+	_, store := setupBroadcasterWithStore(t)
+	ns := uniqueNS("bc-labels")
+	events, stop, err := store.Watch(context.Background(), storage.ListOptions{
+		Namespace: ns, ListOptions: metav1.ListOptions{LabelSelector: "app=selected"},
+	}, "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for _, obj := range []*unstructured.Unstructured{
+		newTestObject(withName("excluded"), withNamespace(ns), withLabels(map[string]string{"app": "other"})),
+		newTestObject(withName("included"), withNamespace(ns), withLabels(map[string]string{"app": "selected"})),
+	} {
+		if err := store.Create(context.Background(), obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := drainUntil(t, events, ns, "included", eventTimeout)
+	if event.Object.GetLabels()["app"] != "selected" {
+		t.Fatalf("watch returned non-matching event: %#v", event)
 	}
 }
 

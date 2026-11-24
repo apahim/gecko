@@ -415,10 +415,14 @@ func (s *PostgresStore) Update(ctx context.Context, obj client.Object) error {
 	namespace := obj.GetNamespace()
 	name := obj.GetName()
 
-	// Get current object to check existence
-	_, err = s.Get(ctx, namespace, name)
-	if err != nil {
-		return err
+	// Check the caller's revision in the UPDATE itself, not in a preceding Get:
+	// another writer can commit between a read and an unconditional update.
+	var expectedRV int64
+	if obj.GetResourceVersion() != "" {
+		expectedRV, err = strconv.ParseInt(obj.GetResourceVersion(), 10, 64)
+		if err != nil || expectedRV <= 0 {
+			return apierrors.NewBadRequest("invalid resourceVersion")
+		}
 	}
 
 	// Serialize (without resourceVersion)
@@ -451,15 +455,17 @@ func (s *PostgresStore) Update(ctx context.Context, obj client.Object) error {
 			UPDATE %s
 			SET resource_version = $1, labels = $2, data = $3, updated_at = NOW()
 			WHERE namespace = $4 AND name = $5 AND context_filter = $6
+			  AND ($7 = 0 OR resource_version = $7)
 		`, s.tableName)
-		result, err = tx.ExecContext(ctx, query, rv, labelsJSON, data, namespace, name, filterValue)
+		result, err = tx.ExecContext(ctx, query, rv, labelsJSON, data, namespace, name, filterValue, expectedRV)
 	} else {
 		query = fmt.Sprintf(`
 			UPDATE %s
 			SET resource_version = $1, labels = $2, data = $3, updated_at = NOW()
 			WHERE namespace = $4 AND name = $5
+			  AND ($6 = 0 OR resource_version = $6)
 		`, s.tableName)
-		result, err = tx.ExecContext(ctx, query, rv, labelsJSON, data, namespace, name)
+		result, err = tx.ExecContext(ctx, query, rv, labelsJSON, data, namespace, name, expectedRV)
 	}
 	if err != nil {
 		tx.Rollback()
@@ -468,7 +474,24 @@ func (s *PostgresStore) Update(ctx context.Context, obj client.Object) error {
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
+		// Distinguish a stale revision from a deleted object without turning
+		// the check into a separate read-then-write authorization decision.
+		var exists bool
+		if s.contextFilterKey != nil {
+			query = fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s WHERE namespace = $1 AND name = $2 AND context_filter = $3)", s.tableName)
+			err = tx.QueryRowContext(ctx, query, namespace, name, filterValue).Scan(&exists)
+		} else {
+			query = fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s WHERE namespace = $1 AND name = $2)", s.tableName)
+			err = tx.QueryRowContext(ctx, query, namespace, name).Scan(&exists)
+		}
 		tx.Rollback()
+		if err != nil {
+			return fmt.Errorf("failed to check updated object: %w", err)
+		}
+		if exists {
+			return apierrors.NewConflict(schema.GroupResource{Resource: s.resourceType}, name,
+				fmt.Errorf("resourceVersion does not match stored revision"))
+		}
 		return apierrors.NewNotFound(
 			schema.GroupResource{Resource: s.resourceType},
 			name,

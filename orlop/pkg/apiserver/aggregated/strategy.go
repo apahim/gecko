@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	kjson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -267,7 +268,7 @@ func toMap(obj runtime.Object) (map[string]interface{}, error) {
 		return nil, err
 	}
 	var m map[string]interface{}
-	err = json.Unmarshal(data, &m)
+	err = kjson.Unmarshal(data, &m)
 	return m, err
 }
 
