@@ -1,0 +1,13 @@
+apiVersion: v2
+name: gecko-gar-access
+description: Gecko GAR Access Controller - reconciles Cluster-driven Artifact Registry reader grants
+type: application
+version: 0.1.0
+appVersion: "0.0.1-dev"
+maintainers:
+  - name: GCP HCP Team
+keywords:
+  - gecko
+  - controllers
+  - gar-access
+home: https://github.com/openshift-online/gecko

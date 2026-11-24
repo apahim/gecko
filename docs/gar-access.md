@@ -1,0 +1,128 @@
+# Customer GAR Reader access
+
+`gar-access` watches Gecko Clusters and maintains one repository-scoped
+`roles/artifactregistry.reader` IAMPolicyMember per customer project. Config
+Connector (KCC) applies the declaration to Google Cloud.
+
+Grant reconciliation is asynchronous: it does not gate Cluster or NodePool
+provisioning, change readiness, or pause running workers. Early provisioning can
+encounter downstream image-pull/bootstrap failures while access is pending. No
+service accounts, credential helpers, or image mirrors are created.
+
+## Cluster identity
+
+`controllers/garaccess/identity.go` uses accepted Cluster setup data:
+
+- `spec.platform.gcp.projectID` must match the customer-project namespace.
+- `spec.platform.gcp.workloadIdentity.projectNumber` must be a positive decimal
+  without leading zeros and agree across all Clusters in that project.
+
+```text
+principalSet://cloudresourcemanager.googleapis.com/projects/PROJECT_NUMBER/type/ServiceAccount
+```
+
+This covers current/future project-owned service accounts, not accounts owned by
+another project. It assumes WIF and workers share the customer project, as in
+`gcphcpctl cluster create --setup-infra`; it does not verify that association with
+Google. Malformed identities are logged and excluded from grant identity selection,
+but their Clusters still count for retention. If the initial inventory contains
+Clusters but no eligible identity, Gecko leaves grants unchanged. Conflicting
+eligible identities return an error. These conditions do not trigger grant cleanup
+or block NodePool provisioning. No hardcoded mapping or cloud lookup is used.
+
+## Configuration and permissions
+
+`garAccess.repository` is required and must be the full Terraform-selected GAR
+repository name. Replace the placeholders below; there is no development fallback:
+
+```yaml
+garAccess:
+  repository: projects/PROJECT/locations/LOCATION/repositories/gcp-hcp-quay
+  iamNamespace: gecko-system
+```
+
+Regional Terraform publishes this name as the Argo root Helm value
+`gar_quay_repository`. The regional Argo Application must pass it to the chart as
+`garAccess.repository`; the chart supplies `--gar-repository` to the controller.
+Gecko does not read the `argocd-cluster` Secret directly. Missing or malformed
+repository values fail Helm rendering or controller startup.
+
+`garAccess.iamNamespace` defaults to `gecko-system`. The namespace must already
+exist, support KCC, and outlive Clusters. Customer bootstrap remains separate work.
+
+Infrastructure Terraform must delegate these permissions on the selected
+repository to the regional KCC Google service account:
+
+- `artifactregistry.repositories.getIamPolicy`
+- `artifactregistry.repositories.setIamPolicy`
+
+No customer `compute.projects.get` or `iam.serviceAccounts.get` grant is required.
+GAR has Cluster read/watch and namespace-scoped IAMPolicyMember RBAC, but no Cluster
+status writes. NodePool has no KCC access and consumes no GAR configuration.
+
+## Deferred NodePool gate
+
+An opt-in NodePool provisioning gate is separate follow-up work in
+[GCP-1394](https://redhat.atlassian.net/browse/GCP-1394). It is not included here:
+there are no GAR gate flags, Helm settings, or readiness checks in NodePool.
+
+## Lifecycle
+
+- Existing Clusters are discovered on startup; no recreation is needed.
+- Same-project Clusters share a grant; different projects get separate grants.
+- Every extant Cluster retains access, regardless of readiness or deletion state.
+- Remove the declaration only when its owner namespace is empty and no Cluster
+  in another namespace references the same canonical project number.
+  Normal Cluster finalization owns worker teardown; GAR does not watch NodePools.
+- Cleanup marks the declaration draining, rechecks live Cluster inventory, and
+  deletes only matching Gecko-managed objects with UID/resource-version guards.
+  This is not a cross-API transaction; forced finalizer removal bypasses teardown.
+- Retained cleanup schedules a one-minute retry under the original owner. The
+  declaration may remain `draining` without being deleted; ownership is not
+  transferred to another namespace.
+
+Declarations use `gar-quay-reader-<hash>` names (hashing repository, member, and
+role), project labels, and no per-Cluster owner references. Consumer inventory
+comes from the live Cluster API rather than an annotation on the declaration.
+Inspect current consumers with:
+
+```sh
+kubectl get clusters.gcp.managed.openshift.io -n PROJECT_ID
+```
+
+Existing default-SA grants are not automatically converted or removed while
+Clusters remain.
+
+Consumer inventory is local to the controller's configured Gecko API. Independent
+deployments sharing the same repository, principal set, and role manage one
+Google IAM membership. One deployment's cleanup can temporarily revoke access
+needed by another. A healthy KCC with a surviving declaration and IAM permissions
+can restore it on a later reconciliation; recovery time is not guaranteed. This
+is an accepted shared-dev limitation, not cross-deployment ownership coordination.
+
+## Status and development validation
+
+KCC owns reconciliation status. Declaration existence is not proof of success:
+inspect `Ready=True` and ensure `status.observedGeneration` matches
+`metadata.generation`. Status is available through the regional Kubernetes API,
+not Gecko's public Cluster status. An authenticated pull must verify effective access.
+KCC readiness can remain stale after external IAM changes until its next
+reconciliation, and IAM propagation can lag a successful reconciliation.
+
+For an authorized dev rollout, check:
+
+1. Existing/new Clusters are adopted; same-project Clusters share one grant and
+   another project gets a separate grant.
+2. Invalid identity and pending/failed KCC reconciliation do not block provisioning
+   or remove existing grants.
+3. Access remains through deleting Clusters and is revoked only after the last
+   Cluster is fully removed through normal worker teardown.
+4. Project-owned default and non-default accounts can pull from GAR; unrelated IAM
+    bindings/accounts remain untouched. Exercise concurrent arrivals and deletion/recreation.
+
+An earlier dev build (`53fb6ad`) demonstrated declaration reconciliation and
+automatic restoration of a manually removed Reader membership. That result does
+not validate the latest grant-only refactor or authenticated image pulls; their
+live validation remains pending. Fake-client unit tests cover grant identity,
+reconciliation, guarded cleanup, API failures/recovery, and command configuration.
+They do not verify live IAM propagation or authenticated image pulls.
