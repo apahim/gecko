@@ -99,15 +99,7 @@ func (h *ResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	// Update in storage
 	if err := h.store.Update(r.Context(), clientObj); err != nil {
 		h.logger.Error(err, "Update status failed", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
-		if errors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, err.Error())
-		} else if errors.IsBadRequest(err) {
-			writeError(w, http.StatusBadRequest, err.Error())
-		} else if errors.IsConflict(err) {
-			writeError(w, http.StatusConflict, err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update status: %v", err))
-		}
+		writeUpdateError(w, err, "update status")
 		return
 	}
 

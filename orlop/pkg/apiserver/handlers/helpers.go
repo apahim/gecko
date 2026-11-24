@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kjson "k8s.io/apimachinery/pkg/util/json"
@@ -47,6 +49,23 @@ func writeError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(status)
+}
+
+// writeUpdateError maps a storage update error to its HTTP response. Not
+// found, an invalid resourceVersion, and a revision conflict keep their
+// storage semantics; everything else surfaces as a server error naming the
+// failed action.
+func writeUpdateError(w http.ResponseWriter, err error, action string) {
+	switch {
+	case errors.IsNotFound(err):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.IsBadRequest(err):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.IsConflict(err):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to %s: %v", action, err))
+	}
 }
 
 // authorizeRequestObject applies an optional request-scoped object authorizer.
