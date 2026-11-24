@@ -273,6 +273,10 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 				if err := r.transport.Delete(ctx, mcName, groupKey); err != nil {
 					return reconcile.Result{}, fmt.Errorf("nodepool reconciler: delete resources: %w", err)
 				}
+				if err := r.setDeletionProgressing(ctx, np, "DeletingResources",
+					transport.DeleteInitiatedMessage(deleteStatus.ApplyDesiresCount)); err != nil {
+					return reconcile.Result{}, err
+				}
 				log.Infof(ctx, "nodepool reconciler: delete initiated for nodepool %s, requeueing to poll status", np.Name)
 				return reconcile.Result{RequeueAfter: requeuePending}, nil
 			}
@@ -281,6 +285,13 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 
 		if !deleteStatus.AllSuccessful {
 			// Deletion in progress — wait for completion.
+			reason := "DeletionInProgress"
+			if deleteStatus.FailedCount > 0 {
+				reason = "DeletionBlocked"
+			}
+			if err := r.setDeletionProgressing(ctx, np, reason, transport.DeletePendingMessage(deleteStatus)); err != nil {
+				return reconcile.Result{}, err
+			}
 			log.Infof(ctx, "nodepool reconciler: deletion in progress for nodepool %s (%d/%d pending), requeueing",
 				np.Name, deleteStatus.PendingCount, deleteStatus.TotalCount)
 			return reconcile.Result{RequeueAfter: requeuePending}, nil
@@ -303,6 +314,28 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 
 	log.Infof(ctx, "nodepool reconciler: finalizer removed for nodepool %s", np.Name)
 	return reconcile.Result{}, nil
+}
+
+// setDeletionProgressing records the DeletionProgressing condition on a
+// nodepool being deleted. The condition status is always True while deletion
+// is underway; the reason encodes the phase (DeletingResources,
+// DeletionInProgress, DeletionBlocked) and the message summarizes what is
+// holding the deletion up. Writes are change-gated and conflicts are
+// tolerated, mirroring the status-update pattern in Reconcile.
+func (r *Reconciler) setDeletionProgressing(ctx context.Context, np *privatev1.NodePool, reason, message string) error {
+	if !meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
+		Type:               "DeletionProgressing",
+		Status:             metav1.ConditionTrue,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: np.Generation,
+	}) {
+		return nil
+	}
+	if err := r.client.Status().Update(ctx, np); err != nil && !apierrors.IsConflict(err) {
+		return fmt.Errorf("nodepool reconciler: record deletion progress: %w", err)
+	}
+	return nil
 }
 
 // preparationFailure reports a confirmed failure before dispatch. The upgrade
