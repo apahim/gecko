@@ -552,9 +552,54 @@ func TestPostgresStore_UpdateRevisionCAS(t *testing.T) {
 }
 
 func TestPostgresStore_SelectorListAndWatch(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
+	// Watch requires a broadcaster, so build the store on a shared connection
+	// with one attached instead of the bare setupTestStore fixture.
+	connString := os.Getenv("POSTGRES_TEST_URL")
+	if connString == "" {
+		connString = "postgres://localhost/orlop_test?sslmode=disable"
+	}
+	db, cleanup := setupTestDB(t)
+	if db == nil {
+		return
+	}
+	t.Cleanup(cleanup)
+
+	scheme := runtime.NewScheme()
+	gv := schema.GroupVersion{Group: "test.example.com", Version: "v1"}
+	scheme.AddKnownTypeWithName(gv.WithKind("TestObject"), &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(gv.WithKind("TestObjectList"), &unstructured.UnstructuredList{})
+	gvk := schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestObject"}
+
 	ctx := context.Background()
+	broadcaster, err := NewPostgresBroadcaster(ctx, PostgresBroadcasterConfig{
+		DB:          db,
+		ConnString:  connString,
+		ChannelName: "selector_watch_test",
+		TableName:   "event_log",
+		Scheme:      scheme,
+		GVK:         gvk,
+	})
+	if err != nil {
+		t.Fatalf("failed to create broadcaster: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := broadcaster.Close(); err != nil {
+			t.Logf("broadcaster close failed: %v", err)
+		}
+	})
+
+	store, err := NewPostgresStore(ctx, PostgresStoreConfig{
+		DB:           db,
+		ResourceType: "testobjects",
+		Scheme:       scheme,
+		GVK:          gvk,
+		TableName:    "resources_testobjects",
+		Broadcaster:  broadcaster,
+	})
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
 	opts := storage.ListOptions{Namespace: "default", ListOptions: metav1.ListOptions{LabelSelector: "app=selected"}}
 	events, stop, err := store.Watch(ctx, opts, "0")
 	if err != nil {
