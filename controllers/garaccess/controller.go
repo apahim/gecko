@@ -46,6 +46,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if consumerCount == 0 {
 		return r.removeGrants(ctx, project)
 	}
+	if member == "" {
+		return reconcile.Result{}, nil
+	}
 	return r.ensureGrant(ctx, project, member)
 }
 
@@ -64,7 +67,9 @@ func (r *Reconciler) consumers(ctx context.Context, project string) (int, string
 		}
 		clusterMember, err := customerPrincipalSet(cluster)
 		if err != nil {
-			return 0, "", fmt.Errorf("resolve GAR identity for Cluster %s: %w", cluster.Name, err)
+			r.log.Warnf(ctx, "gar-access: skipping invalid identity for Cluster %s/%s; still counted for retention",
+				cluster.Namespace, cluster.Name)
+			continue
 		}
 		if member != "" && member != clusterMember {
 			return 0, "", fmt.Errorf("clusters in customer project %s disagree on the project number", project)

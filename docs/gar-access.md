@@ -24,9 +24,11 @@ principalSet://cloudresourcemanager.googleapis.com/projects/PROJECT_NUMBER/type/
 This covers current/future project-owned service accounts, not accounts owned by
 another project. It assumes WIF and workers share the customer project, as in
 `gcphcpctl cluster create --setup-infra`; it does not verify that association with
-Google. Invalid/conflicting identity data returns an error but does not trigger
-grant cleanup or block NodePool provisioning. No hardcoded mapping or cloud lookup
-is used.
+Google. Malformed identities are logged and excluded from grant identity selection,
+but their Clusters still count for retention. If the initial inventory contains
+Clusters but no eligible identity, Gecko leaves grants unchanged. Conflicting
+eligible identities return an error. These conditions do not trigger grant cleanup
+or block NodePool provisioning. No hardcoded mapping or cloud lookup is used.
 
 ## Configuration and permissions
 
@@ -69,11 +71,15 @@ there are no GAR gate flags, Helm settings, or readiness checks in NodePool.
 - Existing Clusters are discovered on startup; no recreation is needed.
 - Same-project Clusters share a grant; different projects get separate grants.
 - Every extant Cluster retains access, regardless of readiness or deletion state.
-- Remove the declaration only after the last Gecko Cluster is fully gone.
+- Remove the declaration only when its owner namespace is empty and no Cluster
+  in another namespace references the same canonical project number.
   Normal Cluster finalization owns worker teardown; GAR does not watch NodePools.
 - Cleanup marks the declaration draining, rechecks live Cluster inventory, and
   deletes only matching Gecko-managed objects with UID/resource-version guards.
   This is not a cross-API transaction; forced finalizer removal bypasses teardown.
+- Retained cleanup schedules a one-minute retry under the original owner. The
+  declaration may remain `draining` without being deleted; ownership is not
+  transferred to another namespace.
 
 Declarations use `gar-quay-reader-<hash>` names (hashing repository, member, and
 role), project labels, and no per-Cluster owner references. Consumer inventory

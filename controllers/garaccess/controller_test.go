@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -406,26 +407,118 @@ func TestReconcilePreservesKCCStatusAndUnownedMetadata(t *testing.T) {
 	require.NotContains(t, stored.GetAnnotations(), consumersKey)
 }
 
-func TestReconcileRejectsInvalidInventoryWithoutChangingGrants(t *testing.T) {
+func TestReconcileUsesValidIdentityAlongsideMalformedConsumers(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		change func(*privatev1.Cluster)
 	}{
-		{"conflicting-project-number", func(c *privatev1.Cluster) { c.Spec.Platform.GCP.WorkloadIdentity.ProjectNumber = "456" }},
-		{"invalid-project-number", func(c *privatev1.Cluster) { c.Spec.Platform.GCP.WorkloadIdentity.ProjectNumber = "0123" }},
+		{"missing-gcp", func(c *privatev1.Cluster) { c.Spec.Platform.GCP = nil }},
+		{"leading-zero-number", func(c *privatev1.Cluster) { c.Spec.Platform.GCP.WorkloadIdentity.ProjectNumber = "0123" }},
+		{"zero-number", func(c *privatev1.Cluster) { c.Spec.Platform.GCP.WorkloadIdentity.ProjectNumber = "0" }},
 		{"project-namespace-mismatch", func(c *privatev1.Cluster) { c.Spec.Platform.GCP.ProjectID = "other-project" }},
+	} {
+		for _, order := range []string{"valid-first", "malformed-first"} {
+			t.Run(test.name+"/"+order, func(t *testing.T) {
+				ctx := context.Background()
+				config := controllerConfig()
+				validName, malformedName := "cluster-a", "cluster-z"
+				if order == "malformed-first" {
+					validName, malformedName = malformedName, validName
+				}
+				valid := controllerCluster("customer-project", validName, "123")
+				malformed := controllerCluster(valid.Namespace, malformedName, "123")
+				test.change(malformed)
+				reader, kcc := controllerReader(valid, malformed), controllerKCC()
+				var output bytes.Buffer
+				log, err := logger.NewLogger(logger.Config{Level: "info", Format: logger.FormatText, Writer: &output})
+				require.NoError(t, err)
+				rec, err := New(log, reader, kcc, config)
+				require.NoError(t, err)
+				request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: valid.Namespace}}
+				_, err = rec.Reconcile(ctx, request)
+				require.NoError(t, err)
+				policies := controllerPolicies(t, kcc)
+				require.Len(t, policies, 1)
+				expected := controllerGrant(config, valid)
+				require.Equal(t, expected.GetName(), policies[0].GetName())
+				require.Equal(t, expected.Object["spec"], policies[0].Object["spec"])
+				require.Contains(t, output.String(), "skipping invalid identity")
+				require.Contains(t, output.String(), malformed.Name)
+				before := policies[0].DeepCopy()
+				_, err = rec.Reconcile(ctx, request)
+				require.NoError(t, err)
+				policies = controllerPolicies(t, kcc)
+				require.Len(t, policies, 1)
+				require.Equal(t, before.Object, policies[0].Object)
+			})
+		}
+	}
+}
+
+func TestReconcileRetainsMalformedConsumersWithoutSelectingIdentity(t *testing.T) {
+	for _, existingGrant := range []bool{false, true} {
+		name := "no-grant"
+		if existingGrant {
+			name = "existing-grant"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			config := controllerConfig()
+			malformed := controllerCluster("customer-project", "malformed", "0123")
+			reader, kcc := controllerReader(malformed), controllerKCC()
+			if existingGrant {
+				policy := controllerGrant(config, controllerCluster(malformed.Namespace, "previous", "123"))
+				policy.SetAnnotations(map[string]string{
+					stateAnnotation: "draining", consumersKey: "legacy", "operator-note": "keep",
+				})
+				require.NoError(t, kcc.Create(ctx, policy))
+			}
+			before := controllerPolicies(t, kcc)
+			rec := controllerReconciler(t, reader, kcc, config)
+			request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: malformed.Namespace}}
+			result, err := rec.Reconcile(ctx, request)
+			require.NoError(t, err)
+			require.Equal(t, reconcile.Result{}, result)
+			require.Equal(t, before, controllerPolicies(t, kcc), "no eligible identity must not create or mutate grants")
+
+			require.NoError(t, reader.Delete(ctx, malformed))
+			_, err = rec.Reconcile(ctx, request)
+			require.NoError(t, err)
+			require.Equal(t, before, controllerPolicies(t, kcc), "deleting malformed Clusters still retain existing grants")
+			require.NoError(t, reader.Get(ctx, client.ObjectKeyFromObject(malformed), malformed))
+			malformed.Finalizers = nil
+			require.NoError(t, reader.Update(ctx, malformed))
+			_, err = rec.Reconcile(ctx, request)
+			require.NoError(t, err)
+			require.Empty(t, controllerPolicies(t, kcc), "cleanup proceeds only after the malformed Cluster actually disappears")
+		})
+	}
+}
+
+func TestReconcileRejectsConflictingInventoryWithoutChangingGrants(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		first     string
+		second    string
+		malformed bool
+	}{
+		{"conflicting-numbers", "123", "456", false},
+		{"reverse-order", "456", "123", false},
+		{"malformed-does-not-hide-conflict", "123", "456", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			config := controllerConfig()
-			first := controllerCluster("customer-project", "cluster-a", "123")
-			second := controllerCluster("customer-project", "cluster-b", "123")
-			test.change(second)
+			first := controllerCluster("customer-project", "cluster-a", test.first)
+			second := controllerCluster("customer-project", "cluster-z", test.second)
 			policy := controllerGrant(config, first)
 			annotations := policy.GetAnnotations()
 			annotations[consumersKey] = "old-consumer"
 			policy.SetAnnotations(annotations)
 			reader, kcc := controllerReader(first, second), controllerKCC(policy)
+			if test.malformed {
+				require.NoError(t, reader.Create(ctx, controllerCluster(first.Namespace, "cluster-b", "0123")))
+			}
 			before := controllerPolicies(t, kcc)
 			_, err := controllerReconciler(t, reader, kcc, config).Reconcile(ctx,
 				reconcile.Request{NamespacedName: client.ObjectKey{Namespace: first.Namespace}})
@@ -433,6 +526,29 @@ func TestReconcileRejectsInvalidInventoryWithoutChangingGrants(t *testing.T) {
 			require.Equal(t, before, controllerPolicies(t, kcc))
 		})
 	}
+}
+
+func TestReconcileRejectsForeignNamespaceInventory(t *testing.T) {
+	ctx := context.Background()
+	config := controllerConfig()
+	cluster := controllerCluster("customer-project", "cluster", "123")
+	policy := controllerGrant(config, cluster)
+	reader, kcc := controllerReader(cluster), controllerKCC(policy)
+	before := controllerPolicies(t, kcc)
+	guarded := interceptor.NewClient(reader, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			clusters := list.(*privatev1.ClusterList)
+			clusters.Items = append(clusters.Items, *controllerCluster("other-project", "foreign", "123"))
+			return nil
+		},
+	})
+	_, err := controllerReconciler(t, guarded, kcc, config).Reconcile(ctx,
+		reconcile.Request{NamespacedName: client.ObjectKey{Namespace: cluster.Namespace}})
+	require.ErrorContains(t, err, "must belong to customer project")
+	require.Equal(t, before, controllerPolicies(t, kcc))
 }
 
 func TestReconcileLeavesUnrelatedDeclarationsUntouched(t *testing.T) {
@@ -576,7 +692,7 @@ func TestReconcilePreservesGrantWhenConsumerArrivesAfterInitialInventory(t *test
 	result, err := rec.Reconcile(ctx, request)
 	require.NoError(t, err)
 	require.True(t, injected)
-	require.Equal(t, retryPending, result.RequeueAfter)
+	require.Equal(t, time.Minute, result.RequeueAfter)
 	stored := NewPolicyMember()
 	require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
 	require.True(t, stored.GetDeletionTimestamp().IsZero())
@@ -591,16 +707,30 @@ func TestReconcilePreservesGrantWhenConsumerArrivesAfterInitialInventory(t *test
 }
 
 func TestReconcilePreservesGrantWhenConsumerArrivesDuringCleanup(t *testing.T) {
-	for _, unavailable := range []bool{false, true} {
-		name := "consumer-arrives"
-		if unavailable {
-			name = "inventory-unavailable"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		unavailable bool
+		malformed   bool
+		foreign     bool
+	}{
+		{"consumer-arrives", false, false, false},
+		{"malformed-consumer-arrives", false, true, false},
+		{"foreign-consumer-arrives", false, false, true},
+		{"inventory-unavailable", true, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			config := controllerConfig()
+			owner := controllerCluster("customer-project", "previous", "123")
+			policy := controllerGrant(config, owner)
 			cluster := controllerCluster("customer-project", "late-cluster", "123")
-			policy := controllerGrant(config, cluster)
+			if test.foreign {
+				cluster.Namespace = "foreign-project"
+				cluster.Spec.Platform.GCP.ProjectID = cluster.Namespace
+			}
+			if test.malformed {
+				cluster.Spec.Platform.GCP.WorkloadIdentity.ProjectNumber = "0123"
+			}
 			reader, kcc := controllerReader(), controllerKCC(policy)
 			inventoryErr := errors.New("inventory unavailable")
 			injected := false
@@ -610,7 +740,7 @@ func TestReconcilePreservesGrantWhenConsumerArrivesDuringCleanup(t *testing.T) {
 					require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
 					if stored.GetAnnotations()[stateAnnotation] == "draining" {
 						injected = true
-						if unavailable {
+						if test.unavailable {
 							return inventoryErr
 						}
 						require.NoError(t, c.Create(ctx, cluster))
@@ -618,23 +748,27 @@ func TestReconcilePreservesGrantWhenConsumerArrivesDuringCleanup(t *testing.T) {
 					return c.List(ctx, list, opts...)
 				},
 			})
-			request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: cluster.Namespace}}
+			request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: owner.Namespace}}
 			result, err := controllerReconciler(t, guarded, kcc, config).Reconcile(ctx, request)
-			if unavailable {
+			if test.unavailable {
 				require.ErrorIs(t, err, inventoryErr)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, retryPending, result.RequeueAfter)
+				require.Equal(t, time.Minute, result.RequeueAfter)
 			}
 			require.True(t, injected, "exercise the live check after marking the grant draining")
 			stored := NewPolicyMember()
 			require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
 			require.True(t, stored.GetDeletionTimestamp().IsZero())
+			before := stored.DeepCopy()
 
 			_, err = controllerReconciler(t, reader, kcc, config).Reconcile(ctx, request)
 			require.NoError(t, err)
-			if unavailable {
+			if test.unavailable {
 				require.True(t, apierrors.IsNotFound(kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored)))
+			} else if test.malformed || test.foreign {
+				require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
+				require.Equal(t, before.Object, stored.Object, "retained cleanup must not rewrite the grant")
 			} else {
 				require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
 				require.Equal(t, "active", stored.GetAnnotations()[stateAnnotation])

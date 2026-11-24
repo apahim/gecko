@@ -3,6 +3,9 @@ package garaccess
 import (
 	"context"
 	"fmt"
+	"time"
+
+	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -53,14 +56,29 @@ func (r *Reconciler) ensureGrant(ctx context.Context, project, member string) (r
 	return reconcile.Result{}, nil
 }
 
-// Cluster finalization owns worker cleanup. GAR retains access for every extant
-// Cluster, including deleting Clusters, without duplicating NodePool inventory.
-func (r *Reconciler) clustersRemain(ctx context.Context, project string) (bool, error) {
-	consumerCount, _, err := r.consumers(ctx, project)
-	if err != nil {
-		return false, err
+// Cleanup retains every owner-namespace Cluster and exact canonical principal
+// references in other namespaces. Cluster finalization still owns worker cleanup.
+func (r *Reconciler) clustersRemain(ctx context.Context, project, member string) (bool, error) {
+	var clusters privatev1.ClusterList
+	if err := r.reader.List(ctx, &clusters); err != nil {
+		return false, fmt.Errorf("list Clusters before GAR grant cleanup for %s: %w", project, err)
 	}
-	return consumerCount != 0, nil
+	for i := range clusters.Items {
+		cluster := &clusters.Items[i]
+		if cluster.Namespace == project {
+			return true, nil
+		}
+		gcp := cluster.Spec.Platform.GCP
+		if gcp == nil {
+			continue
+		}
+		number := gcp.WorkloadIdentity.ProjectNumber
+		if projectNumberPattern.MatchString(number) &&
+			fmt.Sprintf("principalSet://cloudresourcemanager.googleapis.com/projects/%s/type/ServiceAccount", number) == member {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // removeGrants runs after Reconcile has observed no Cluster consumers.
@@ -73,6 +91,7 @@ func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcil
 		client.MatchingLabels{managedLabel: managedBy, projectLabel: project}); err != nil {
 		return reconcile.Result{}, fmt.Errorf("list GAR Reader grants for %s: %w", project, err)
 	}
+	retained := false
 	for i := range policies.Items {
 		policy := &policies.Items[i]
 		if len(r.PolicyMemberToProject(ctx, policy)) == 0 {
@@ -93,8 +112,8 @@ func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcil
 			return reconcile.Result{}, fmt.Errorf("refuse to delete unexpected IAMPolicyMember %s", policy.GetName())
 		}
 		if !policy.GetDeletionTimestamp().IsZero() {
-			// KCC updates and deletion events resume cleanup.
-			return reconcile.Result{}, nil
+			// KCC events resume this candidate; still inspect the other grants.
+			continue
 		}
 		// Mark revocation before the final live Cluster-inventory check.
 		annotations := policy.GetAnnotations()
@@ -110,12 +129,13 @@ func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcil
 				return reconcile.Result{}, fmt.Errorf("mark GAR Reader grant draining for %s: %w", project, err)
 			}
 		}
-		remaining, err := r.clustersRemain(ctx, project)
+		remaining, err := r.clustersRemain(ctx, project, member)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 		if remaining {
-			return reconcile.Result{RequeueAfter: retryPending}, nil
+			retained = true
+			continue
 		}
 		uid, version := policy.GetUID(), policy.GetResourceVersion()
 		if err := r.kcc.Delete(ctx, policy, client.Preconditions{UID: &uid, ResourceVersion: &version}); client.IgnoreNotFound(err) != nil {
@@ -123,6 +143,9 @@ func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcil
 		}
 		r.log.Infof(ctx, "gar-access: deleting %s/%s for %s", policy.GetNamespace(), policy.GetName(), project)
 		return reconcile.Result{RequeueAfter: retryPending}, nil
+	}
+	if retained {
+		return reconcile.Result{RequeueAfter: time.Minute}, nil
 	}
 	return reconcile.Result{}, nil
 }
