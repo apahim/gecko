@@ -127,9 +127,28 @@ func TestSpannerStore_SelectorWatch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	event := drainUntil(t, events, ns, "included", eventTimeout)
-	if event.Object.GetLabels()["app"] != "selected" {
-		t.Fatalf("watch returned non-matching event: %#v", event)
+	// Read every delivered event: a filtered watch must never surface the
+	// excluded object, so any event outside the namespace or selector fails.
+	deadline := time.After(eventTimeout)
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				t.Fatal("event channel closed unexpectedly")
+			}
+			if event.Object.GetNamespace() != ns {
+				t.Fatalf("selector watch delivered event outside %s: %s/%s", ns, event.Object.GetNamespace(), event.Object.GetName())
+			}
+			if event.Object.GetLabels()["app"] != "selected" {
+				t.Fatalf("selector watch delivered non-matching event: %s (labels %v)", event.Object.GetName(), event.Object.GetLabels())
+			}
+			if event.Object.GetName() != "included" {
+				t.Fatalf("selector watch delivered unexpected matching event: %s", event.Object.GetName())
+			}
+			return
+		case <-deadline:
+			t.Fatal("selector watch did not deliver the matching event")
+		}
 	}
 }
 

@@ -507,29 +507,39 @@ func TestPostgresStore_UpdateRevisionCAS(t *testing.T) {
 	// Both calls carry the same revision. The database must admit exactly one
 	// write, including when the transactions race, and must not broadcast the
 	// rejected write or change the rejected object's resourceVersion.
+	type updateOutcome struct {
+		obj client.Object
+		err error
+	}
 	start := make(chan struct{})
-	results := make(chan error, 2)
+	results := make(chan updateOutcome, 2)
 	var wg sync.WaitGroup
 	for _, candidate := range []client.Object{left, right} {
 		wg.Add(1)
 		go func(candidate client.Object) {
 			defer wg.Done()
 			<-start
-			results <- store.Update(ctx, candidate)
+			results <- updateOutcome{obj: candidate, err: store.Update(ctx, candidate)}
 		}(candidate)
 	}
 	close(start)
 	wg.Wait()
 	close(results)
 	var success, conflicts int
-	for err := range results {
+	for outcome := range results {
 		switch {
-		case err == nil:
+		case outcome.err == nil:
 			success++
-		case apierrors.IsConflict(err):
+			if outcome.obj.GetResourceVersion() == originalRV {
+				t.Fatal("successful update did not advance the object revision")
+			}
+		case apierrors.IsConflict(outcome.err):
 			conflicts++
+			if outcome.obj.GetResourceVersion() != originalRV {
+				t.Fatal("conflicting update changed the in-memory revision")
+			}
 		default:
-			t.Fatalf("unexpected update result: %v", err)
+			t.Fatalf("unexpected update result: %v", outcome.err)
 		}
 	}
 	if success != 1 || conflicts != 1 {
@@ -538,9 +548,6 @@ func TestPostgresStore_UpdateRevisionCAS(t *testing.T) {
 	stored, err := store.Get(ctx, "default", "revision-cas")
 	if err != nil || stored.GetResourceVersion() == originalRV {
 		t.Fatalf("successful update must advance revision: %v, %#v", err, stored)
-	}
-	if left.GetResourceVersion() != originalRV && right.GetResourceVersion() != originalRV {
-		t.Fatal("conflicting update unexpectedly changed the in-memory revision")
 	}
 }
 
