@@ -455,7 +455,7 @@ func (s *PostgresStore) Update(ctx context.Context, obj client.Object) error {
 			UPDATE %s
 			SET resource_version = $1, labels = $2, data = $3, updated_at = NOW()
 			WHERE namespace = $4 AND name = $5 AND context_filter = $6
-			  AND ($7 = 0 OR resource_version = $7)
+			  AND ($7::bigint = 0 OR resource_version = $7::bigint)
 		`, s.tableName)
 		result, err = tx.ExecContext(ctx, query, rv, labelsJSON, data, namespace, name, filterValue, expectedRV)
 	} else {
@@ -463,7 +463,7 @@ func (s *PostgresStore) Update(ctx context.Context, obj client.Object) error {
 			UPDATE %s
 			SET resource_version = $1, labels = $2, data = $3, updated_at = NOW()
 			WHERE namespace = $4 AND name = $5
-			  AND ($6 = 0 OR resource_version = $6)
+			  AND ($6::bigint = 0 OR resource_version = $6::bigint)
 		`, s.tableName)
 		result, err = tx.ExecContext(ctx, query, rv, labelsJSON, data, namespace, name, expectedRV)
 	}

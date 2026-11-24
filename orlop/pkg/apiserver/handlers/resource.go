@@ -551,6 +551,8 @@ func (h *ResourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error(err, "Update failed", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 		if errors.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, err.Error())
+		} else if errors.IsBadRequest(err) {
+			writeError(w, http.StatusBadRequest, err.Error())
 		} else if errors.IsConflict(err) {
 			writeError(w, http.StatusConflict, err.Error())
 		} else {
