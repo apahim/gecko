@@ -18,10 +18,13 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -124,7 +127,7 @@ func TestReconcileCreatesSharedGrantForExistingClusters(t *testing.T) {
 	require.Empty(t, policy.GetOwnerReferences())
 	require.Equal(t, managedBy, policy.GetLabels()[managedLabel])
 	require.Equal(t, first.Namespace, policy.GetLabels()[projectLabel])
-	require.Equal(t, "cluster-a\ncluster-z", policy.GetAnnotations()[consumersKey])
+	require.NotContains(t, policy.GetAnnotations(), consumersKey)
 	require.Equal(t, "active", policy.GetAnnotations()[stateAnnotation])
 	require.Equal(t, map[string]interface{}{
 		"member": "principalSet://cloudresourcemanager.googleapis.com/projects/123456789/type/ServiceAccount",
@@ -171,6 +174,84 @@ func TestReconcileSeparatesCustomerProjectsAndRepositories(t *testing.T) {
 	}
 }
 
+func TestReconcileDoesNotRewriteGrantWhenConsumersChange(t *testing.T) {
+	ctx := context.Background()
+	config := controllerConfig()
+	first := controllerCluster("customer-project", "cluster-a", "123")
+	first.Finalizers = nil
+	second := controllerCluster("customer-project", "cluster-b", "123")
+	reader, kcc := controllerReader(first), controllerKCC()
+	rec := controllerReconciler(t, reader, kcc, config)
+	request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: first.Namespace}}
+	_, err := rec.Reconcile(ctx, request)
+	require.NoError(t, err)
+	policies := controllerPolicies(t, kcc)
+	require.Len(t, policies, 1)
+	before := policies[0].DeepCopy()
+	assertUnchanged := func() {
+		t.Helper()
+		_, err := rec.Reconcile(ctx, request)
+		require.NoError(t, err)
+		stored := NewPolicyMember()
+		require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(before), stored))
+		require.Equal(t, before.Object, stored.Object, "consumer changes must not rewrite the grant")
+	}
+	require.NoError(t, reader.Create(ctx, second))
+	assertUnchanged()
+	require.NoError(t, reader.Delete(ctx, first))
+	assertUnchanged()
+}
+
+func TestReconcileRemovesLegacyConsumerAnnotation(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		state      string
+		annotation string
+		consumer   bool
+	}{
+		{"active", "active", "old-consumer", true},
+		{"empty-annotation", "active", "", true},
+		{"reactivating", "draining", "old-consumer", true},
+		{"already-draining", "draining", "old-consumer", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			config := controllerConfig()
+			cluster := controllerCluster("customer-project", "cluster", "123")
+			policy := controllerGrant(config, cluster)
+			policy.SetFinalizers([]string{"cnrm.cloud.google.com/finalizer"})
+			policy.SetAnnotations(map[string]string{
+				stateAnnotation: test.state, consumersKey: test.annotation, "operator-note": "keep",
+			})
+			reader, kcc := controllerReader(), controllerKCC(policy)
+			if test.consumer {
+				require.NoError(t, reader.Create(ctx, cluster))
+			}
+			rec := controllerReconciler(t, reader, kcc, config)
+			request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: cluster.Namespace}}
+			_, err := rec.Reconcile(ctx, request)
+			require.NoError(t, err)
+			stored := NewPolicyMember()
+			require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
+			require.NotContains(t, stored.GetAnnotations(), consumersKey)
+			require.Equal(t, "keep", stored.GetAnnotations()["operator-note"])
+			require.Equal(t, policy.Object["spec"], stored.Object["spec"])
+			if test.consumer {
+				require.Equal(t, "active", stored.GetAnnotations()[stateAnnotation])
+				require.True(t, stored.GetDeletionTimestamp().IsZero())
+			} else {
+				require.Equal(t, "draining", stored.GetAnnotations()[stateAnnotation])
+				require.False(t, stored.GetDeletionTimestamp().IsZero())
+			}
+			before := stored.DeepCopy()
+			_, err = rec.Reconcile(ctx, request)
+			require.NoError(t, err)
+			require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
+			require.Equal(t, before.Object, stored.Object, "legacy cleanup must not cause repeated writes")
+		})
+	}
+}
+
 func TestReconcileRetainsGrantUntilLastClusterIsGone(t *testing.T) {
 	ctx := context.Background()
 	config := controllerConfig()
@@ -193,20 +274,21 @@ func TestReconcileRetainsGrantUntilLastClusterIsGone(t *testing.T) {
 		require.NoError(t, reader.Get(ctx, client.ObjectKeyFromObject(cluster), cluster))
 		cluster.Finalizers = nil
 		require.NoError(t, reader.Update(ctx, cluster))
-		_, err = rec.Reconcile(ctx, request)
+		result, err := rec.Reconcile(ctx, request)
 		require.NoError(t, err)
 		require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
 		if cluster == first {
 			require.True(t, stored.GetDeletionTimestamp().IsZero())
-			require.Equal(t, second.Name, stored.GetAnnotations()[consumersKey])
+			require.NotContains(t, stored.GetAnnotations(), consumersKey)
 			continue
 		}
 		require.False(t, stored.GetDeletionTimestamp().IsZero(), "last teardown requests KCC cleanup")
 		require.Equal(t, "draining", stored.GetAnnotations()[stateAnnotation])
-		require.Empty(t, stored.GetAnnotations()[consumersKey])
-		result, err := rec.Reconcile(ctx, request)
+		require.NotContains(t, stored.GetAnnotations(), consumersKey)
+		require.Equal(t, retryPending, result.RequeueAfter, "keep the follow-up after requesting deletion")
+		result, err = rec.Reconcile(ctx, request)
 		require.NoError(t, err)
-		require.Equal(t, retryPending, result.RequeueAfter, "wait for KCC finalization")
+		require.Equal(t, reconcile.Result{}, result, "wait for KCC events instead of polling finalization")
 		stored.SetFinalizers(nil) // Simulate KCC completing its own finalization.
 		require.NoError(t, kcc.Update(ctx, stored))
 	}
@@ -214,6 +296,68 @@ func TestReconcileRetainsGrantUntilLastClusterIsGone(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, reconcile.Result{}, result)
 	require.Empty(t, controllerPolicies(t, kcc))
+}
+
+func TestReconcileWaitsForKCCDeletionEventWithoutPolling(t *testing.T) {
+	for _, consumer := range []bool{false, true} {
+		name := "cleanup-completes"
+		if consumer {
+			name = "grant-recreated"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			config := controllerConfig()
+			cluster := controllerCluster("customer-project", "cluster", "123")
+			policy := controllerGrant(config, cluster)
+			policy.SetFinalizers([]string{"cnrm.cloud.google.com/finalizer"})
+			policy.SetAnnotations(map[string]string{
+				stateAnnotation: "draining", consumersKey: "old-consumer", "operator-note": "keep",
+			})
+			reader, kcc := controllerReader(), controllerKCC(policy)
+			if consumer {
+				require.NoError(t, reader.Create(ctx, cluster))
+			}
+			require.NoError(t, kcc.Delete(ctx, policy))
+			stored := NewPolicyMember()
+			require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
+			require.False(t, stored.GetDeletionTimestamp().IsZero())
+			before := stored.DeepCopy()
+			rec := controllerReconciler(t, reader, kcc, config)
+			request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: cluster.Namespace}}
+			result, err := rec.Reconcile(ctx, request)
+			require.NoError(t, err)
+			require.Equal(t, reconcile.Result{}, result, "KCC owns finalization and its events resume reconciliation")
+			require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
+			require.Equal(t, before.Object, stored.Object, "do not mutate a terminating grant")
+
+			stored.SetFinalizers(nil) // Simulate KCC completing finalization.
+			deleted := stored.DeepCopy()
+			require.NoError(t, kcc.Update(ctx, stored))
+			require.True(t, apierrors.IsNotFound(kcc.Get(ctx, client.ObjectKeyFromObject(policy), NewPolicyMember())))
+			queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]())
+			t.Cleanup(queue.ShutDown)
+			handler.EnqueueRequestsFromMapFunc(rec.PolicyMemberToProject).Delete(ctx, event.DeleteEvent{Object: deleted}, queue)
+			require.Equal(t, 1, queue.Len(), "the KCC deletion event must queue the customer project")
+			queued, shutdown := queue.Get()
+			require.False(t, shutdown)
+			defer queue.Done(queued)
+			require.Equal(t, request, queued)
+			result, err = rec.Reconcile(ctx, queued)
+			require.NoError(t, err)
+			policies := controllerPolicies(t, kcc)
+			if consumer {
+				require.Equal(t, retryPending, result.RequeueAfter, "keep the follow-up after creating a replacement")
+				require.Len(t, policies, 1)
+				require.Equal(t, policy.GetName(), policies[0].GetName())
+				require.True(t, policies[0].GetDeletionTimestamp().IsZero())
+				require.Equal(t, "active", policies[0].GetAnnotations()[stateAnnotation])
+				require.Equal(t, policy.Object["spec"], policies[0].Object["spec"])
+			} else {
+				require.Equal(t, reconcile.Result{}, result)
+				require.Empty(t, policies)
+			}
+		})
+	}
 }
 
 func TestReconcileRetainsUnreadyClusterConsumers(t *testing.T) {
@@ -229,7 +373,7 @@ func TestReconcileRetainsUnreadyClusterConsumers(t *testing.T) {
 			stored := NewPolicyMember()
 			require.NoError(t, kcc.Get(context.Background(), client.ObjectKeyFromObject(policy), stored))
 			require.True(t, stored.GetDeletionTimestamp().IsZero())
-			require.Equal(t, cluster.Name, stored.GetAnnotations()[consumersKey])
+			require.NotContains(t, stored.GetAnnotations(), consumersKey)
 		})
 	}
 }
@@ -259,7 +403,7 @@ func TestReconcilePreservesKCCStatusAndUnownedMetadata(t *testing.T) {
 	require.Equal(t, "regional-one", stored.GetLabels()["infra-id"])
 	require.Equal(t, "keep", stored.GetAnnotations()["operator-note"])
 	require.Equal(t, "active", stored.GetAnnotations()[stateAnnotation])
-	require.Equal(t, cluster.Name, stored.GetAnnotations()[consumersKey])
+	require.NotContains(t, stored.GetAnnotations(), consumersKey)
 }
 
 func TestReconcileRejectsInvalidInventoryWithoutChangingGrants(t *testing.T) {
@@ -278,6 +422,9 @@ func TestReconcileRejectsInvalidInventoryWithoutChangingGrants(t *testing.T) {
 			second := controllerCluster("customer-project", "cluster-b", "123")
 			test.change(second)
 			policy := controllerGrant(config, first)
+			annotations := policy.GetAnnotations()
+			annotations[consumersKey] = "old-consumer"
+			policy.SetAnnotations(annotations)
 			reader, kcc := controllerReader(first, second), controllerKCC(policy)
 			before := controllerPolicies(t, kcc)
 			_, err := controllerReconciler(t, reader, kcc, config).Reconcile(ctx,
@@ -388,6 +535,61 @@ func TestReconcileRejectsMalformedMemberWithoutChangingGrant(t *testing.T) {
 	}
 }
 
+func TestReconcileWithoutGrantsDoesNotRepeatInventoryRead(t *testing.T) {
+	listCalls := 0
+	reader := interceptor.NewClient(controllerReader(), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			listCalls++
+			return c.List(ctx, list, opts...)
+		},
+	})
+	rec := controllerReconciler(t, reader, controllerKCC(), controllerConfig())
+	result, err := rec.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKey{Namespace: "customer-project"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+	require.Equal(t, 1, listCalls, "no grants means there is no deletion requiring another inventory read")
+}
+
+func TestReconcilePreservesGrantWhenConsumerArrivesAfterInitialInventory(t *testing.T) {
+	ctx := context.Background()
+	config := controllerConfig()
+	cluster := controllerCluster("customer-project", "late-cluster", "123")
+	policy := controllerGrant(config, cluster)
+	reader, kcc := controllerReader(), controllerKCC(policy)
+	injected := false
+	guarded := interceptor.NewClient(reader, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if !injected {
+				injected = true
+				require.NoError(t, c.Create(ctx, cluster))
+			}
+			return nil
+		},
+	})
+	rec := controllerReconciler(t, guarded, kcc, config)
+	request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: cluster.Namespace}}
+	result, err := rec.Reconcile(ctx, request)
+	require.NoError(t, err)
+	require.True(t, injected)
+	require.Equal(t, retryPending, result.RequeueAfter)
+	stored := NewPolicyMember()
+	require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
+	require.True(t, stored.GetDeletionTimestamp().IsZero())
+	require.Equal(t, policy.Object["spec"], stored.Object["spec"])
+
+	_, err = rec.Reconcile(ctx, request)
+	require.NoError(t, err)
+	require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
+	require.Equal(t, policy.GetUID(), stored.GetUID())
+	require.True(t, stored.GetDeletionTimestamp().IsZero())
+	require.Equal(t, "active", stored.GetAnnotations()[stateAnnotation])
+}
+
 func TestReconcilePreservesGrantWhenConsumerArrivesDuringCleanup(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		name := "consumer-arrives"
@@ -436,7 +638,7 @@ func TestReconcilePreservesGrantWhenConsumerArrivesDuringCleanup(t *testing.T) {
 			} else {
 				require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))
 				require.Equal(t, "active", stored.GetAnnotations()[stateAnnotation])
-				require.Equal(t, cluster.Name, stored.GetAnnotations()[consumersKey])
+				require.NotContains(t, stored.GetAnnotations(), consumersKey)
 			}
 		})
 	}
@@ -500,9 +702,15 @@ func TestReconcileRetriesAPIFailures(t *testing.T) {
 				require.NoError(t, reader.Create(ctx, cluster))
 			}
 			policy := controllerGrant(config, cluster)
+			if test.operation == "grant-update" || test.operation == "cluster-list" {
+				annotations := policy.GetAnnotations()
+				annotations[consumersKey] = "old-consumer"
+				policy.SetAnnotations(annotations)
+			}
 			if test.grant {
 				require.NoError(t, kcc.Create(ctx, policy))
 			}
+			before := controllerPolicies(t, kcc)
 			apiErr := errors.New("API temporarily unavailable")
 			guardedReader := interceptor.NewClient(reader, interceptor.Funcs{
 				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -547,6 +755,9 @@ func TestReconcileRetriesAPIFailures(t *testing.T) {
 			request := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: cluster.Namespace}}
 			_, err := controllerReconciler(t, guardedReader, guardedKCC, config).Reconcile(ctx, request)
 			require.ErrorIs(t, err, apiErr)
+			if test.operation == "cluster-list" {
+				require.Equal(t, before, controllerPolicies(t, kcc), "inventory errors must prevent legacy metadata cleanup")
+			}
 			if test.grant {
 				stored := NewPolicyMember()
 				require.NoError(t, kcc.Get(ctx, client.ObjectKeyFromObject(policy), stored))

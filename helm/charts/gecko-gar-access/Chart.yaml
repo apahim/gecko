@@ -1,6 +1,6 @@
 apiVersion: v2
 name: gecko-gar-access
-description: Gecko GAR Access Controller - reconciles Artifact Registry reader access for NodePools
+description: Gecko GAR Access Controller - reconciles Cluster-driven Artifact Registry reader grants
 type: application
 version: 0.1.0
 appVersion: "0.0.1-dev"

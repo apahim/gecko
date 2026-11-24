@@ -11,9 +11,11 @@ import (
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
@@ -61,7 +63,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			}
 			if err := ctrl.NewControllerManagedBy(mgr).
 				Named("gar-access").
-				Watches(&privatev1.Cluster{}, handler.EnqueueRequestsFromMapFunc(clusterToProject)).
+				Watches(&privatev1.Cluster{}, handler.EnqueueRequestsFromMapFunc(clusterToProject),
+					builder.WithPredicates(clusterEventPredicate())).
 				WatchesRawSource(source.Kind(kccCache, client.Object(garaccess.NewPolicyMember()), handler.EnqueueRequestsFromMapFunc(rec.PolicyMemberToProject))).
 				WithOptions(rf.ControllerOpts()).
 				Complete(rec); err != nil {
@@ -77,4 +80,9 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 
 func clusterToProject(_ context.Context, obj client.Object) []reconcile.Request {
 	return []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: obj.GetNamespace()}}}
+}
+
+func clusterEventPredicate() predicate.Predicate {
+	// Deleting Clusters retain access until the final Delete event.
+	return predicate.GenerationChangedPredicate{}
 }

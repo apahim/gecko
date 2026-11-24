@@ -12,11 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func (r *Reconciler) ensureGrant(ctx context.Context, project, member, consumers string) (reconcile.Result, error) {
+func (r *Reconciler) ensureGrant(ctx context.Context, project, member string) (reconcile.Result, error) {
 	desired := desiredGrant(r.config, project, member)
-	annotations := desired.GetAnnotations()
-	annotations[consumersKey] = consumers
-	desired.SetAnnotations(annotations)
 	existing := NewPolicyMember()
 	err := r.kcc.Get(ctx, client.ObjectKeyFromObject(desired), existing)
 	if apierrors.IsNotFound(err) {
@@ -37,18 +34,20 @@ func (r *Reconciler) ensureGrant(ctx context.Context, project, member, consumers
 		return reconcile.Result{}, fmt.Errorf("IAMPolicyMember %s does not match the Gecko-owned grant for %s", existing.GetName(), project)
 	}
 	if !existing.GetDeletionTimestamp().IsZero() {
-		return reconcile.Result{RequeueAfter: retryPending}, nil
+		// KCC's final deletion event queues grant recreation if consumers remain.
+		return reconcile.Result{}, nil
 	}
-	annotations = existing.GetAnnotations()
-	if annotations[stateAnnotation] != "active" || annotations[consumersKey] != consumers {
+	annotations := existing.GetAnnotations()
+	_, hasLegacyConsumers := annotations[consumersKey]
+	if annotations[stateAnnotation] != "active" || hasLegacyConsumers {
 		if annotations == nil {
 			annotations = map[string]string{}
 		}
 		annotations[stateAnnotation] = "active"
-		annotations[consumersKey] = consumers
+		delete(annotations, consumersKey)
 		existing.SetAnnotations(annotations)
 		if err := r.kcc.Update(ctx, existing); err != nil {
-			return reconcile.Result{}, fmt.Errorf("update GAR grant consumers for %s: %w", project, err)
+			return reconcile.Result{}, fmt.Errorf("update GAR grant metadata for %s: %w", project, err)
 		}
 	}
 	return reconcile.Result{}, nil
@@ -57,21 +56,15 @@ func (r *Reconciler) ensureGrant(ctx context.Context, project, member, consumers
 // Cluster finalization owns worker cleanup. GAR retains access for every extant
 // Cluster, including deleting Clusters, without duplicating NodePool inventory.
 func (r *Reconciler) clustersRemain(ctx context.Context, project string) (bool, error) {
-	consumers, _, err := r.consumers(ctx, project)
+	consumerCount, _, err := r.consumers(ctx, project)
 	if err != nil {
 		return false, err
 	}
-	return len(consumers) != 0, nil
+	return consumerCount != 0, nil
 }
 
+// removeGrants runs after Reconcile has observed no Cluster consumers.
 func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcile.Result, error) {
-	remaining, err := r.clustersRemain(ctx, project)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if remaining {
-		return reconcile.Result{RequeueAfter: retryPending}, nil
-	}
 	policies := &unstructured.UnstructuredList{}
 	policies.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: "iam.cnrm.cloud.google.com", Version: "v1beta1", Kind: "IAMPolicyMemberList",
@@ -100,16 +93,18 @@ func (r *Reconciler) removeGrants(ctx context.Context, project string) (reconcil
 			return reconcile.Result{}, fmt.Errorf("refuse to delete unexpected IAMPolicyMember %s", policy.GetName())
 		}
 		if !policy.GetDeletionTimestamp().IsZero() {
-			return reconcile.Result{RequeueAfter: retryPending}, nil
+			// KCC updates and deletion events resume cleanup.
+			return reconcile.Result{}, nil
 		}
 		// Mark revocation before the final live Cluster-inventory check.
-		if policy.GetAnnotations()[stateAnnotation] != "draining" {
-			annotations := policy.GetAnnotations()
+		annotations := policy.GetAnnotations()
+		_, hasLegacyConsumers := annotations[consumersKey]
+		if annotations[stateAnnotation] != "draining" || hasLegacyConsumers {
 			if annotations == nil {
 				annotations = map[string]string{}
 			}
 			annotations[stateAnnotation] = "draining"
-			annotations[consumersKey] = ""
+			delete(annotations, consumersKey)
 			policy.SetAnnotations(annotations)
 			if err := r.kcc.Update(ctx, policy); err != nil {
 				return reconcile.Result{}, fmt.Errorf("mark GAR Reader grant draining for %s: %w", project, err)

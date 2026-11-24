@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -20,6 +21,50 @@ func TestClusterEventsQueueTheCustomerProject(t *testing.T) {
 		cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: "customer-project", Name: name}}
 		require.Equal(t, []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: "customer-project"}}},
 			clusterToProject(context.Background(), cluster))
+	}
+}
+
+func TestClusterEventPredicate(t *testing.T) {
+	filter := clusterEventPredicate()
+	cluster := &privatev1.Cluster{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "customer-project", Name: "cluster", Generation: 1, ResourceVersion: "1",
+	}}
+	for _, initialList := range []bool{false, true} {
+		require.True(t, filter.Create(event.CreateEvent{Object: cluster, IsInInitialList: initialList}))
+	}
+	require.True(t, filter.Generic(event.GenericEvent{Object: cluster}))
+
+	for _, test := range []struct {
+		name   string
+		change func(*privatev1.Cluster)
+		want   bool
+	}{
+		{"generation-changed", func(c *privatev1.Cluster) { c.Generation++ }, true},
+		{"status-only", func(c *privatev1.Cluster) {
+			c.Status.Conditions = []metav1.Condition{{Type: "HostedClusterAvailable", Status: metav1.ConditionTrue}}
+		}, false},
+		{"annotation-only", func(c *privatev1.Cluster) {
+			c.Annotations = map[string]string{"operator-note": "updated"}
+		}, false},
+		{"deletion-started", func(c *privatev1.Cluster) {
+			now := metav1.Now()
+			c.DeletionTimestamp = &now
+		}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			updated := cluster.DeepCopy()
+			updated.ResourceVersion = "2"
+			test.change(updated)
+			require.Equal(t, test.want, filter.Update(event.UpdateEvent{ObjectOld: cluster, ObjectNew: updated}))
+		})
+	}
+
+	deleted := cluster.DeepCopy()
+	now := metav1.Now()
+	deleted.DeletionTimestamp = &now
+	for _, stateUnknown := range []bool{false, true} {
+		require.True(t, filter.Delete(event.DeleteEvent{Object: deleted, DeleteStateUnknown: stateUnknown}),
+			"final deletion must queue grant cleanup, including deletes recovered after a missed event")
 	}
 }
 

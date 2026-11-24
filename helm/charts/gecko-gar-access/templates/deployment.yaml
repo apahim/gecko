@@ -39,10 +39,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - gar-access
+            {{- if .Values.orlopURL }}
+            - --orlop-url={{ .Values.orlopURL }}
+            {{- end }}
             - --gar-repository={{ .Values.garAccess.repository }}
             - --iam-namespace={{ .Values.garAccess.iamNamespace }}
             - --log-level={{ .Values.logLevel }}
             - --log-format={{ .Values.logFormat }}
+            - --workers={{ .Values.workers }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

@@ -7,8 +7,11 @@ image:
 nameOverride: ""
 fullnameOverride: ""
 
+# Optional direct Gecko API URL; KCC still uses the regional Kubernetes API.
+orlopURL: ""
 logLevel: info
 logFormat: json
+workers: 10
 
 garAccess:
   # Required full repository name, supplied by the regional deployment.

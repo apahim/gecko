@@ -11,6 +11,8 @@ import (
 // DefaultIAMNamespace outlives individual HostedClusters and NodePools.
 const DefaultIAMNamespace = "gecko-system"
 
+var repositoryPattern = regexp.MustCompile(`^projects/[a-z0-9-]+/locations/[a-z0-9-]+/repositories/[a-z0-9._-]+$`)
+
 // Config configures the background GAR grant controller.
 type Config struct {
 	Repository   string
@@ -22,7 +24,7 @@ func (c Config) Validate() error {
 	if c.Repository == "" {
 		return fmt.Errorf("gar-repository must be set")
 	}
-	if !regexp.MustCompile(`^projects/[a-z0-9-]+/locations/[a-z0-9-]+/repositories/[a-z0-9._-]+$`).MatchString(c.Repository) {
+	if !repositoryPattern.MatchString(c.Repository) {
 		return fmt.Errorf("gar-repository must be projects/PROJECT/locations/LOCATION/repositories/REPOSITORY")
 	}
 	if c.IAMNamespace == "" || len(validation.IsDNS1123Label(c.IAMNamespace)) != 0 {

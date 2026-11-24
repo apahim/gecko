@@ -3,8 +3,6 @@ package garaccess
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/openshift-online/gecko/controllers/util/logger"
@@ -40,43 +38,40 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if project == "" {
 		return reconcile.Result{}, fmt.Errorf("customer project namespace is empty")
 	}
-	consumers, member, err := r.consumers(ctx, project)
+	consumerCount, member, err := r.consumers(ctx, project)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	r.log.Infof(ctx, "gar-access: customer project %s has %d Clusters", project, len(consumers))
-	if len(consumers) == 0 {
+	r.log.Infof(ctx, "gar-access: customer project %s has %d Clusters", project, consumerCount)
+	if consumerCount == 0 {
 		return r.removeGrants(ctx, project)
 	}
-	return r.ensureGrant(ctx, project, member, strings.Join(consumers, "\n"))
+	return r.ensureGrant(ctx, project, member)
 }
 
-func (r *Reconciler) consumers(ctx context.Context, project string) ([]string, string, error) {
+func (r *Reconciler) consumers(ctx context.Context, project string) (int, string, error) {
 	var clusters privatev1.ClusterList
 	if err := r.reader.List(ctx, &clusters, client.InNamespace(project)); err != nil {
-		return nil, "", fmt.Errorf("list Clusters for customer project %s: %w", project, err)
+		return 0, "", fmt.Errorf("list Clusters for customer project %s: %w", project, err)
 	}
-	consumers := make([]string, 0, len(clusters.Items))
 	member := ""
 	// Every extant Cluster counts, including deleting Clusters and those
 	// without NodePools. The Cluster finalizer protects normal worker cleanup.
 	for i := range clusters.Items {
 		cluster := &clusters.Items[i]
 		if cluster.Namespace != project {
-			return nil, "", fmt.Errorf("cluster %s must belong to customer project %s", cluster.Name, project)
+			return 0, "", fmt.Errorf("cluster %s must belong to customer project %s", cluster.Name, project)
 		}
 		clusterMember, err := customerPrincipalSet(cluster)
 		if err != nil {
-			return nil, "", fmt.Errorf("resolve GAR identity for Cluster %s: %w", cluster.Name, err)
+			return 0, "", fmt.Errorf("resolve GAR identity for Cluster %s: %w", cluster.Name, err)
 		}
 		if member != "" && member != clusterMember {
-			return nil, "", fmt.Errorf("clusters in customer project %s disagree on the project number", project)
+			return 0, "", fmt.Errorf("clusters in customer project %s disagree on the project number", project)
 		}
 		member = clusterMember
-		consumers = append(consumers, cluster.Name)
 	}
-	sort.Strings(consumers)
-	return consumers, member, nil
+	return len(clusters.Items), member, nil
 }
 
 // PolicyMemberToProject recovers reconciliation on KCC updates and restarts.

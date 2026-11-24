@@ -15,7 +15,8 @@ const (
 	managedBy       = "gecko-gar-access"
 	projectLabel    = "gcp.managed.openshift.io/gar-customer-project"
 	stateAnnotation = "gcp.managed.openshift.io/gar-access-state"
-	consumersKey    = "gcp.managed.openshift.io/gar-consumers"
+	// consumersKey is retained only to remove the legacy debugging annotation.
+	consumersKey = "gcp.managed.openshift.io/gar-consumers"
 )
 
 // NewPolicyMember supplies the GVK for the regional Kubernetes client/cache.

@@ -76,10 +76,16 @@ there are no GAR gate flags, Helm settings, or readiness checks in NodePool.
   This is not a cross-API transaction; forced finalizer removal bypasses teardown.
 
 Declarations use `gar-quay-reader-<hash>` names (hashing repository, member, and
-role), project labels, a
-`gcp.managed.openshift.io/gar-consumers` annotation listing Cluster names, and no
-per-Cluster owner references. Existing default-SA grants are not automatically
-converted or removed while Clusters remain.
+role), project labels, and no per-Cluster owner references. Consumer inventory
+comes from the live Cluster API rather than an annotation on the declaration.
+Inspect current consumers with:
+
+```sh
+kubectl get clusters.gcp.managed.openshift.io -n PROJECT_ID
+```
+
+Existing default-SA grants are not automatically converted or removed while
+Clusters remain.
 
 Consumer inventory is local to the controller's configured Gecko API. Independent
 deployments sharing the same repository, principal set, and role manage one
