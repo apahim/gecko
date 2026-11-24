@@ -307,6 +307,54 @@ properties:
                 - PublicAndPrivate
                 - Private
                 type: string
+              iam:
+                description: iam binds customer-asserted IAM application history to
+                  the installation.
+                properties:
+                  templateApplications:
+                    description: |-
+                      templateApplications records exact contracts asserted applied by the customer.
+                      Records are immutable and append-only; this is not independent cloud attestation.
+                    items:
+                      description: WIFConfigTemplateReference pins both resource identity
+                        and executable content.
+                      properties:
+                        digest:
+                          description: digest is the SHA-256 of the canonical schemaVersion
+                            and IAM contract.
+                          maxLength: 71
+                          pattern: ^sha256:[0-9a-f]{64}$
+                          type: string
+                        name:
+                          description: name is the canonical release boundary of the
+                            template.
+                          maxLength: 32
+                          type: string
+                        uid:
+                          description: uid identifies the exact retained template
+                            resource.
+                          maxLength: 128
+                          type: string
+                      required:
+                      - digest
+                      - name
+                      - uid
+                      type: object
+                    maxItems: 128
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  workerServiceAccount:
+                    description: workerServiceAccount is the exact default Compute
+                      service-account email.
+                    maxLength: 254
+                    type: string
+                required:
+                - templateApplications
+                - workerServiceAccount
+                type: object
               network:
                 description: network is the VPC network name.
                 maxLength: 63
@@ -867,6 +915,270 @@ properties:
             x-kubernetes-list-type: map
           version:
             type: string
+        type: object
+      iamDispatch:
+        description: iamDispatch retains private target-bound dispatch authority across
+          retries.
+        properties:
+          dispatched:
+            description: dispatched is the last target observed after a non-stale
+              delivery.
+            properties:
+              channelGroup:
+                description: channelGroup identifies release membership, not the advancing
+                  CVO channel.
+                maxLength: 128
+                type: string
+              clusterUID:
+                description: clusterUID binds a NodePool receipt to the exact parent
+                  installation.
+                maxLength: 128
+                type: string
+              objectUID:
+                description: objectUID identifies the Cluster or NodePool owning this
+                  receipt.
+                maxLength: 128
+                type: string
+              releaseImage:
+                description: releaseImage is the exact payload passed into manifest
+                  construction.
+                maxLength: 3072
+                type: string
+              releaseVersion:
+                description: releaseVersion identifies the complete release, including
+                  prerelease suffix.
+                maxLength: 128
+                type: string
+              templateRef:
+                description: templateRef binds the exact retained IAM contract authorizing
+                  this intent.
+                properties:
+                  digest:
+                    description: digest is the SHA-256 of the canonical schemaVersion
+                      and IAM contract.
+                    maxLength: 71
+                    pattern: ^sha256:[0-9a-f]{64}$
+                    type: string
+                  name:
+                    description: name is the canonical release boundary of the template.
+                    maxLength: 32
+                    type: string
+                  uid:
+                    description: uid identifies the exact retained template resource.
+                    maxLength: 128
+                    type: string
+                required:
+                - digest
+                - name
+                - uid
+                type: object
+            required:
+            - channelGroup
+            - clusterUID
+            - objectUID
+            - releaseImage
+            - releaseVersion
+            - templateRef
+            type: object
+          pending:
+            description: pending is a durably committed, possibly partially delivered
+              intent.
+            properties:
+              channelGroup:
+                description: channelGroup identifies release membership, not the advancing
+                  CVO channel.
+                maxLength: 128
+                type: string
+              clusterUID:
+                description: clusterUID binds a NodePool receipt to the exact parent
+                  installation.
+                maxLength: 128
+                type: string
+              objectUID:
+                description: objectUID identifies the Cluster or NodePool owning this
+                  receipt.
+                maxLength: 128
+                type: string
+              releaseImage:
+                description: releaseImage is the exact payload passed into manifest
+                  construction.
+                maxLength: 3072
+                type: string
+              releaseVersion:
+                description: releaseVersion identifies the complete release, including
+                  prerelease suffix.
+                maxLength: 128
+                type: string
+              templateRef:
+                description: templateRef binds the exact retained IAM contract authorizing
+                  this intent.
+                properties:
+                  digest:
+                    description: digest is the SHA-256 of the canonical schemaVersion
+                      and IAM contract.
+                    maxLength: 71
+                    pattern: ^sha256:[0-9a-f]{64}$
+                    type: string
+                  name:
+                    description: name is the canonical release boundary of the template.
+                    maxLength: 32
+                    type: string
+                  uid:
+                    description: uid identifies the exact retained template resource.
+                    maxLength: 128
+                    type: string
+                required:
+                - digest
+                - name
+                - uid
+                type: object
+            required:
+            - channelGroup
+            - clusterUID
+            - objectUID
+            - releaseImage
+            - releaseVersion
+            - templateRef
+            type: object
+        type: object
+      iamRequirements:
+        description: |-
+          iamRequirements describes known control-plane IAM contracts. Incomplete
+          means the list must not be used to narrow permissions. It is an observation,
+          not authorization to dispatch a release or proof of cloud IAM state.
+        properties:
+          clusterUID:
+            description: |-
+              clusterUID identifies the exact parent Cluster installation. For a
+              Cluster, it equals objectUID.
+            maxLength: 128
+            type: string
+          dispatched:
+            description: |-
+              dispatched is the last release confirmed by non-stale observation.
+              An unavailable or unverified template may still be needed by running work.
+            properties:
+              channelGroup:
+                description: channelGroup is the release's channel group.
+                maxLength: 128
+                type: string
+              releaseImage:
+                description: releaseImage is the exact payload associated with this
+                  requirement.
+                maxLength: 3072
+                type: string
+              releaseVersion:
+                description: releaseVersion is the full release name, including any
+                  prerelease suffix.
+                maxLength: 128
+                type: string
+              templateRef:
+                description: templateRef pins the exact immutable IAM contract.
+                properties:
+                  digest:
+                    description: digest is the SHA-256 of the canonical schemaVersion
+                      and IAM contract.
+                    maxLength: 71
+                    pattern: ^sha256:[0-9a-f]{64}$
+                    type: string
+                  name:
+                    description: name is the canonical release boundary of the template.
+                    maxLength: 32
+                    type: string
+                  uid:
+                    description: uid identifies the exact retained template resource.
+                    maxLength: 128
+                    type: string
+                required:
+                - digest
+                - name
+                - uid
+                type: object
+            required:
+            - channelGroup
+            - releaseImage
+            - releaseVersion
+            - templateRef
+            type: object
+          lastRefreshTime:
+            description: |-
+              lastRefreshTime is when the controller last reconciled this view. It is
+              not cloud verification; clients must reject stale or future timestamps.
+            format: date-time
+            type: string
+          objectUID:
+            description: objectUID binds these requirements to this exact resource
+              instance.
+            maxLength: 128
+            type: string
+          observedGeneration:
+            description: |-
+              observedGeneration is the object generation used to build this view.
+              Clients must compare it with metadata.generation.
+            format: int64
+            minimum: 0
+            type: integer
+          pending:
+            description: |-
+              pending is a release committed for delivery that may already be partly
+              running. Never infer it is absent because observed feedback has not arrived.
+            properties:
+              channelGroup:
+                description: channelGroup is the release's channel group.
+                maxLength: 128
+                type: string
+              releaseImage:
+                description: releaseImage is the exact payload associated with this
+                  requirement.
+                maxLength: 3072
+                type: string
+              releaseVersion:
+                description: releaseVersion is the full release name, including any
+                  prerelease suffix.
+                maxLength: 128
+                type: string
+              templateRef:
+                description: templateRef pins the exact immutable IAM contract.
+                properties:
+                  digest:
+                    description: digest is the SHA-256 of the canonical schemaVersion
+                      and IAM contract.
+                    maxLength: 71
+                    pattern: ^sha256:[0-9a-f]{64}$
+                    type: string
+                  name:
+                    description: name is the canonical release boundary of the template.
+                    maxLength: 32
+                    type: string
+                  uid:
+                    description: uid identifies the exact retained template resource.
+                    maxLength: 128
+                    type: string
+                required:
+                - digest
+                - name
+                - uid
+                type: object
+            required:
+            - channelGroup
+            - releaseImage
+            - releaseVersion
+            - templateRef
+            type: object
+          state:
+            description: |-
+              state is Incomplete when known work cannot be fully identified. Missing
+              status is also incomplete; it never means that no permissions are needed.
+            enum:
+            - Complete
+            - Incomplete
+            maxLength: 10
+            type: string
+        required:
+        - clusterUID
+        - objectUID
+        - observedGeneration
+        - state
         type: object
       placementResult:
         description: |-

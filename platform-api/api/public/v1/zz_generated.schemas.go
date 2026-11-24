@@ -37,6 +37,10 @@ var (
 	//go:embed .schemas/version_schema.yaml
 	VersionSchemaYAML string
 
+	// WIFConfigTemplateSchemaYAML contains the OpenAPI v3 schema for WIFConfigTemplate.
+	//go:embed .schemas/wifconfigtemplate_schema.yaml
+	WIFConfigTemplateSchemaYAML string
+
 )
 
 // ChannelResourceInfo describes the Channel resource type.
@@ -148,6 +152,17 @@ var VersionResourceInfo = types.ResourceInfo{
 	AuthorizationExemptVerbs: []string{"get", "list"},
 }
 
+// WIFConfigTemplateResourceInfo describes the WIFConfigTemplate resource type.
+var WIFConfigTemplateResourceInfo = types.ResourceInfo{
+	GVK:        GroupVersion.WithKind("WIFConfigTemplate"),
+	Plural:     "wifconfigtemplates",
+	Singular:   "wifconfigtemplate",
+	Namespaced: false,
+	SchemaYAML: WIFConfigTemplateSchemaYAML,
+	// Generated from // +orlop:public-verbs annotation.
+	Verbs: []string{"get", "list"},
+}
+
 // GetResourceInfos returns ResourceInfo definitions for all types in this package.
 // This can be used to configure an API server with these resources.
 func GetResourceInfos() []types.ResourceInfo {
@@ -159,5 +174,6 @@ func GetResourceInfos() []types.ResourceInfo {
 		RoleBindingResourceInfo,
 		RoleResourceInfo,
 		VersionResourceInfo,
+		WIFConfigTemplateResourceInfo,
 	}
 }

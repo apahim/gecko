@@ -192,6 +192,11 @@ type GCPClusterPlatform struct {
 	// +required
 	WorkloadIdentity WorkloadIdentitySpec `json:"workloadIdentity"`
 
+	// iam binds customer-asserted IAM application history to the installation.
+
+	// +optional
+	IAM *ClusterIAMSpec `json:"iam,omitempty"`
+
 	// resourceLabels are applied to all GCP resources created for the cluster.
 	// Labels are key-value pairs used for organizing and managing GCP resources.
 	// Changes to this field will be propagated in-place to GCP resources where supported.
@@ -548,6 +553,13 @@ type ClusterStatus struct {
 	// +patchStrategy=merge
 	// +patchMergeKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// iamRequirements describes known control-plane IAM contracts. Incomplete
+	// means the list must not be used to narrow permissions. It is an observation,
+	// not authorization to dispatch a release or proof of cloud IAM state.
+
+	// +optional
+	IAMRequirements *IAMRequirementsStatus `json:"iamRequirements,omitempty"`
 
 	// HostedClusterResult is written by the hc-adapter.
 

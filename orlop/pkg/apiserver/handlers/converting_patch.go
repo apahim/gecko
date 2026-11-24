@@ -17,10 +17,18 @@ import (
 	kjson "k8s.io/apimachinery/pkg/util/json"
 )
 
+const (
+	maxPublicPatchBodyBytes  = 4 << 20
+	maxPublicPatchOperations = 128
+)
+
 // applyPublicPatch operates only on the public projection, never on private
 // stored fields. Historical object/merge-patch callers retain their semantics;
 // strategic-merge media type remains a legacy merge-patch alias, not SSA.
 func applyPublicPatch(contentType string, original, patch []byte) ([]byte, bool, int, error) {
+	if len(patch) > maxPublicPatchBodyBytes {
+		return nil, false, http.StatusBadRequest, fmt.Errorf("patch body exceeds size limit")
+	}
 	mediaType := ""
 	if contentType != "" {
 		var err error
@@ -40,6 +48,9 @@ func applyPublicPatch(contentType string, original, patch []byte) ([]byte, bool,
 		operations, err := jsonpatch.DecodePatch(patch)
 		if err != nil {
 			return nil, true, http.StatusBadRequest, fmt.Errorf("invalid JSON patch")
+		}
+		if len(operations) > maxPublicPatchOperations {
+			return nil, true, http.StatusBadRequest, fmt.Errorf("too many JSON patch operations")
 		}
 		options := jsonpatch.NewApplyOptions()
 		options.SupportNegativeIndices = false // RFC 6902 does not allow -1.

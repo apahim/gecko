@@ -853,9 +853,12 @@ func (h *ConvertingResourceHandler) preparePatch(r *http.Request, namespace, nam
 		return patchInput{}, http.StatusForbidden, fmt.Errorf("forbidden")
 	}
 
-	patchBytes, err := io.ReadAll(r.Body)
+	patchBytes, err := io.ReadAll(io.LimitReader(r.Body, maxPublicPatchBodyBytes+1))
 	if err != nil {
-		return patchInput{}, http.StatusBadRequest, fmt.Errorf("failed to read patch: %w", err)
+		return patchInput{}, http.StatusBadRequest, fmt.Errorf("failed to read patch")
+	}
+	if len(patchBytes) > maxPublicPatchBodyBytes {
+		return patchInput{}, http.StatusBadRequest, fmt.Errorf("patch body exceeds size limit")
 	}
 
 	existingJSON, err := json.Marshal(existingPublic)
@@ -943,8 +946,8 @@ func (h *ConvertingResourceHandler) patchPublicObject(namespace, name string, in
 	accessor.SetName(name)
 	if input.jsonPatch {
 		// Bind the storage precondition to the evaluated snapshot, even if
-		// schema processing strips metadata. Memory and Spanner enforce it;
-		// Postgres currently lacks Update CAS (see ARCHITECTURE.md).
+		// schema processing strips metadata. All supported stores enforce it;
+		// see ARCHITECTURE.md for backend acceptance requirements.
 		accessor.SetResourceVersion(input.existingPrivate.GetResourceVersion())
 		accessor.SetUID(input.existingPrivate.GetUID())
 		accessor.SetCreationTimestamp(input.existingPrivate.GetCreationTimestamp())
@@ -1061,7 +1064,12 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if v, ok := existing.(types.CustomValidator); ok {
+	typed, err := conversion.TypedOldObject(h.privateScheme, h.gvk, existing)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to decode object for delete validation")
+		return
+	}
+	if v, ok := typed.(types.CustomValidator); ok {
 		if err := v.ValidateDelete(r.Context()); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))
 			return
