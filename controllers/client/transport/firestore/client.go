@@ -17,6 +17,7 @@ import (
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	"github.com/openshift-online/kube-applier-gcp/pkg/api/kubeapplier"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -35,6 +36,14 @@ const (
 	// Delete ReadDesire, Delete ApplyDesire) and Firestore limits transactions
 	// to 500 writes.
 	maxDeleteBatchSize = 166
+
+	// maxReportedFailures caps the failure details returned in DeleteStatus;
+	// FailedCount always carries the full count.
+	maxReportedFailures = 5
+
+	// maxReportedPendingResources caps the pending resource references
+	// returned in DeleteStatus; PendingCount always carries the full count.
+	maxReportedPendingResources = 10
 )
 
 // mcClients caches the Firestore client pair for one management cluster.
@@ -386,6 +395,7 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 			PendingCount:      0,
 			TotalCount:        0,
 			ApplyDesiresCount: len(applySnaps),
+			FailedCount:       0,
 		}, nil
 	}
 
@@ -397,30 +407,57 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 	}
 
 	specUpdateTimes := make(map[string]time.Time, len(specsSnaps))
+	specRefs := make(map[string]string, len(specsSnaps))
 	for _, snap := range specsSnaps {
 		specUpdateTimes[snap.Ref.ID] = snap.UpdateTime
+		var dd kubeapplier.DeleteDesire
+		if err := snap.DataTo(&dd); err != nil {
+			return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s decode spec: %w", targetCluster, groupKey, err)
+		}
+		specRefs[snap.Ref.ID] = transport.ResourceKey(
+			dd.Spec.TargetItem.Group, dd.Spec.TargetItem.Version, dd.Spec.TargetItem.Resource,
+			dd.Spec.TargetItem.Namespace, dd.Spec.TargetItem.Name)
 	}
 
 	successful := make(map[string]bool, len(statusSnaps))
+	failures := make(map[string]transport.DeleteFailure, len(statusSnaps))
 	for _, snap := range statusSnaps {
 		var dd kubeapplier.DeleteDesire
 		if err := snap.DataTo(&dd); err != nil {
 			return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s decode: %w", targetCluster, groupKey, err)
 		}
-		for _, cond := range dd.Status.Conditions {
-			if cond.Type == kubeapplier.ConditionTypeSuccessful && cond.Status == "True" {
-				if dd.Status.ObservedDesireUpdateTime.Equal(specUpdateTimes[snap.Ref.ID]) {
-					successful[snap.Ref.ID] = true
-				}
-				break
-			}
+		// Only trust status documents that observe the current spec revision;
+		// stale status is neither successful nor classifiable as failed.
+		if !dd.Status.ObservedDesireUpdateTime.Equal(specUpdateTimes[snap.Ref.ID]) {
+			continue
+		}
+		ok, failure := classifyDeleteDesire(dd.Status.Conditions)
+		if ok {
+			successful[snap.Ref.ID] = true
+		} else if failure != nil {
+			failures[snap.Ref.ID] = *failure
 		}
 	}
 
 	pending := 0
+	failed := 0
+	var pendingResources []string
+	var failureDetails []transport.DeleteFailure
 	for _, snap := range specsSnaps {
-		if !successful[snap.Ref.ID] {
-			pending++
+		if successful[snap.Ref.ID] {
+			continue
+		}
+		pending++
+		ref := specRefs[snap.Ref.ID]
+		if len(pendingResources) < maxReportedPendingResources {
+			pendingResources = append(pendingResources, ref)
+		}
+		if f, ok := failures[snap.Ref.ID]; ok {
+			failed++
+			if len(failureDetails) < maxReportedFailures {
+				f.Resource = ref
+				failureDetails = append(failureDetails, f)
+			}
 		}
 	}
 
@@ -429,7 +466,39 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, groupKey st
 		PendingCount:      pending,
 		TotalCount:        len(specsSnaps),
 		ApplyDesiresCount: len(applySnaps),
+		FailedCount:       failed,
+		Failures:          failureDetails,
+		PendingResources:  pendingResources,
 	}, nil
+}
+
+// classifyDeleteDesire reports whether a DeleteDesire status records a
+// successful delete, and the failure details when kube-applier-gcp reported
+// an explicit error. A delete that is neither successful nor failed is still
+// waiting for the object to disappear from the target cluster.
+func classifyDeleteDesire(conditions []metav1.Condition) (successful bool, failure *transport.DeleteFailure) {
+	var degraded *metav1.Condition
+	for i := range conditions {
+		cond := &conditions[i]
+		switch cond.Type {
+		case kubeapplier.ConditionTypeSuccessful:
+			if cond.Status == metav1.ConditionTrue {
+				return true, nil
+			}
+			if cond.Status == metav1.ConditionFalse &&
+				(cond.Reason == kubeapplier.ConditionReasonKubeAPIError || cond.Reason == kubeapplier.ConditionReasonPreCheckFailed) {
+				failure = &transport.DeleteFailure{Reason: cond.Reason, Message: cond.Message}
+			}
+		case kubeapplier.ConditionTypeDegraded:
+			if cond.Status == metav1.ConditionTrue && cond.Reason == kubeapplier.ConditionReasonFailed {
+				degraded = cond
+			}
+		}
+	}
+	if failure == nil && degraded != nil {
+		failure = &transport.DeleteFailure{Reason: degraded.Reason, Message: degraded.Message}
+	}
+	return false, failure
 }
 
 // CleanupDeleteDesires removes all DeleteDesire spec documents for the given

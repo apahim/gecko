@@ -273,6 +273,10 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 				if err := r.transport.Delete(ctx, mcName, groupKey); err != nil {
 					return reconcile.Result{}, fmt.Errorf("nodepool reconciler: delete resources: %w", err)
 				}
+				if err := r.setDeletionProgressing(ctx, np, "DeletingResources",
+					transport.DeleteInitiatedMessage(deleteStatus.ApplyDesiresCount)); err != nil {
+					return reconcile.Result{}, err
+				}
 				log.Infof(ctx, "nodepool reconciler: delete initiated for nodepool %s, requeueing to poll status", np.Name)
 				return reconcile.Result{RequeueAfter: requeuePending}, nil
 			}
@@ -281,6 +285,13 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 
 		if !deleteStatus.AllSuccessful {
 			// Deletion in progress — wait for completion.
+			reason := "DeletionInProgress"
+			if deleteStatus.FailedCount > 0 {
+				reason = "DeletionBlocked"
+			}
+			if err := r.setDeletionProgressing(ctx, np, reason, transport.DeletePendingMessage(deleteStatus)); err != nil {
+				return reconcile.Result{}, err
+			}
 			log.Infof(ctx, "nodepool reconciler: deletion in progress for nodepool %s (%d/%d pending), requeueing",
 				np.Name, deleteStatus.PendingCount, deleteStatus.TotalCount)
 			return reconcile.Result{RequeueAfter: requeuePending}, nil
@@ -303,6 +314,28 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 
 	log.Infof(ctx, "nodepool reconciler: finalizer removed for nodepool %s", np.Name)
 	return reconcile.Result{}, nil
+}
+
+// setDeletionProgressing records the DeletionProgressing condition on a
+// nodepool being deleted. The condition status is always True while deletion
+// is underway; the reason encodes the phase (DeletingResources,
+// DeletionInProgress, DeletionBlocked) and the message summarizes what is
+// holding the deletion up. Writes are change-gated and conflicts are
+// tolerated, mirroring the status-update pattern in Reconcile.
+func (r *Reconciler) setDeletionProgressing(ctx context.Context, np *privatev1.NodePool, reason, message string) error {
+	if !meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
+		Type:               "DeletionProgressing",
+		Status:             metav1.ConditionTrue,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: np.Generation,
+	}) {
+		return nil
+	}
+	if err := r.client.Status().Update(ctx, np); err != nil && !apierrors.IsConflict(err) {
+		return fmt.Errorf("nodepool reconciler: record deletion progress: %w", err)
+	}
+	return nil
 }
 
 // preparationFailure reports a confirmed failure before dispatch. The upgrade
@@ -409,18 +442,21 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 			Type:               "NodePoolResourcesApplied",
 			Status:             metav1.ConditionFalse,
 			Reason:             "ResourcesNotFound",
+			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
 		b := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolAvailable",
 			Status:             metav1.ConditionFalse,
 			Reason:             "ResourcesNotFound",
+			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
 		c := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolProgressing",
 			Status:             metav1.ConditionFalse,
 			Reason:             "AsExpected",
+			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
 		return a || b || c
@@ -429,10 +465,12 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 	// Extract conditions from top-level applied conditions.
 	appliedStatus := metav1.ConditionStatus("False")
 	appliedReason := "Unknown"
+	appliedMessage := ""
 	for _, c := range mwStatus.Conditions {
 		if c.Type == "Applied" {
 			appliedStatus = c.Status
 			appliedReason = c.Reason
+			appliedMessage = c.Message
 			break
 		}
 	}
@@ -471,55 +509,74 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, clusterID str
 		}
 	}
 
+	// HyperShift condition messages are surfaced verbatim on the matching Gecko
+	// conditions when they are not healthy. Reads are nil-safe: a nil rs or an absent
+	// key (feedback extracted before messages were propagated) both yield "".
+	availableMessage := rs["readyConditionMessage"]
+	healthMessage := rs["allNodesHealthyConditionMessage"]
+	machinesMessage := rs["allMachinesReadyConditionMessage"]
+	updatingConfigMessage := rs["updatingConfigConditionMessage"]
+	updatingVersionMessage := rs["updatingVersionConditionMessage"]
+
 	healthStatus := metav1.ConditionFalse
 	healthReason := "NodePoolNotHealthy"
 	if allNodesHealthy == "True" {
 		healthStatus = metav1.ConditionTrue
 		healthReason = "NodePoolHealthy"
+		healthMessage = "" // messages only on problems, mirroring the HC controller
 	}
 
 	availableReason := "NodePoolNotAvailable"
 	if availableStatus == "True" {
 		availableReason = "NodePoolAvailable"
+		availableMessage = ""
 	}
 
 	a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolResourcesApplied",
 		Status:             appliedStatus,
 		Reason:             appliedReason,
+		Message:            appliedMessage,
 		ObservedGeneration: gen,
 	})
 	b := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolAvailable",
 		Status:             metav1.ConditionStatus(availableStatus),
 		Reason:             availableReason,
+		Message:            availableMessage,
 		ObservedGeneration: gen,
 	})
 	c := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolHealthy",
 		Status:             healthStatus,
 		Reason:             healthReason,
+		Message:            healthMessage,
 		ObservedGeneration: gen,
 	})
 
 	progressingStatus := metav1.ConditionFalse
 	progressingReason := "AsExpected"
+	progressingMessage := ""
 	switch {
 	case allMachinesReady != "True":
 		progressingStatus = metav1.ConditionTrue
 		progressingReason = "MachinesNotReady"
+		progressingMessage = machinesMessage
 	case updatingConfig == "True":
 		progressingStatus = metav1.ConditionTrue
 		progressingReason = "UpdatingConfig"
+		progressingMessage = updatingConfigMessage
 	case updatingVersion == "True":
 		progressingStatus = metav1.ConditionTrue
 		progressingReason = "UpdatingVersion"
+		progressingMessage = updatingVersionMessage
 	}
 
 	d := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolProgressing",
 		Status:             progressingStatus,
 		Reason:             progressingReason,
+		Message:            progressingMessage,
 		ObservedGeneration: gen,
 	})
 	return a || b || c || d || versionChanged

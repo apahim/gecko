@@ -37,6 +37,30 @@ type DeleteStatus struct {
 	// ApplyDesiresCount is the number of ApplyDesires still present.
 	// When > 0 and TotalCount == 0, Delete() must be called to enqueue deletion.
 	ApplyDesiresCount int
+	// FailedCount is the number of DeleteDesires whose status reports an
+	// explicit deletion failure (kube API error, pre-check failure, or a
+	// degraded sync), as opposed to still waiting for the object to disappear.
+	FailedCount int
+	// Failures holds the details of the first few failed deletions. It is
+	// capped by the transport implementation; FailedCount carries the total.
+	Failures []DeleteFailure
+	// PendingResources identifies the resources whose DeleteDesires have not
+	// yet reported Successful=True, in the same format as ResourceStatuses
+	// keys ("{group}/{version}/{resource}/{namespace}/{name}"). It is capped
+	// by the transport implementation; PendingCount carries the total.
+	PendingResources []string
+}
+
+// DeleteFailure describes one resource whose deletion failed on the target
+// cluster, as reported by kube-applier-gcp.
+type DeleteFailure struct {
+	// Resource identifies the failed resource, in the same format as
+	// ResourceStatuses keys ("{group}/{version}/{resource}/{namespace}/{name}").
+	Resource string
+	// Reason is the kube-applier-gcp failure reason (e.g. KubeAPIError).
+	Reason string
+	// Message is the kube-applier-gcp failure message.
+	Message string
 }
 
 // Client abstracts the transport layer for delivering resources to management clusters.

@@ -645,6 +645,54 @@ func TestConverter_FilterNonPublicConditions(t *testing.T) {
 			},
 		},
 		{
+			name: "keeps DeletionProgressing for Cluster",
+			kind: "Cluster",
+			obj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "DeletionProgressing", "status": "True"},
+						map[string]interface{}{"type": "ResourcesApplied", "status": "True"},
+					},
+				}),
+			),
+			validate: func(t *testing.T, obj *unstructured.Unstructured) {
+				status := obj.Object["status"].(map[string]interface{})
+				conditions := status["conditions"].([]interface{})
+				if len(conditions) != 1 {
+					t.Fatalf("Expected 1 public condition, got %d", len(conditions))
+				}
+				if got := conditions[0].(map[string]interface{})["type"]; got != "DeletionProgressing" {
+					t.Errorf("Expected DeletionProgressing, got %v", got)
+				}
+			},
+		},
+		{
+			name: "keeps DeletionProgressing for NodePool",
+			kind: "NodePool",
+			obj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "NodePoolProgressing", "status": "False"},
+						map[string]interface{}{"type": "DeletionProgressing", "status": "True"},
+						map[string]interface{}{"type": "NodePoolResourcesApplied", "status": "True"},
+					},
+				}),
+			),
+			validate: func(t *testing.T, obj *unstructured.Unstructured) {
+				status := obj.Object["status"].(map[string]interface{})
+				conditions := status["conditions"].([]interface{})
+				if len(conditions) != 2 {
+					t.Fatalf("Expected 2 public conditions, got %d", len(conditions))
+				}
+				for _, condition := range conditions {
+					conditionType := condition.(map[string]interface{})["type"].(string)
+					if conditionType == "NodePoolResourcesApplied" {
+						t.Error("NodePoolResourcesApplied should remain private")
+					}
+				}
+			},
+		},
+		{
 			name: "unknown Kind strips all conditions",
 			kind: "SomeNewKind",
 			obj: newTestObject(

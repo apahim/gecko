@@ -293,6 +293,14 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 		return reconcile.Result{}, err
 	}
 
+	// nodePoolWait appends the child nodepool wait to a deletion message.
+	nodePoolWait := func(msg string) string {
+		if nodePoolsRemain {
+			msg += fmt.Sprintf("; waiting for %d nodepools to be deleted", len(nodePools.Items))
+		}
+		return msg
+	}
+
 	// Only call transport.Delete if resources were applied to an MC.
 	if meta.FindStatusCondition(cluster.Status.Conditions, "ResourcesApplied") != nil &&
 		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
@@ -317,6 +325,10 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 				if err := r.transport.Delete(ctx, mcName, groupKey); err != nil {
 					return reconcile.Result{}, fmt.Errorf("%s: delete resources: %w", adapterName, err)
 				}
+				if err := r.setDeletionProgressing(ctx, cluster, "DeletingResources",
+					nodePoolWait(transport.DeleteInitiatedMessage(deleteStatus.ApplyDesiresCount))); err != nil {
+					return reconcile.Result{}, err
+				}
 				log.Infof(ctx, "%s: delete initiated for cluster %s, requeueing to poll status", adapterName, cluster.Name)
 				return reconcile.Result{RequeueAfter: requeuePending}, nil
 			}
@@ -325,6 +337,14 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 
 		if !deleteStatus.AllSuccessful {
 			// Deletion in progress — wait for completion.
+			reason := "DeletionInProgress"
+			if deleteStatus.FailedCount > 0 {
+				reason = "DeletionBlocked"
+			}
+			if err := r.setDeletionProgressing(ctx, cluster, reason,
+				nodePoolWait(transport.DeletePendingMessage(deleteStatus))); err != nil {
+				return reconcile.Result{}, err
+			}
 			log.Infof(ctx, "%s: deletion in progress for cluster %s (%d/%d pending), requeueing",
 				adapterName, cluster.Name, deleteStatus.PendingCount, deleteStatus.TotalCount)
 			return reconcile.Result{RequeueAfter: requeuePending}, nil
@@ -339,6 +359,10 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 	}
 
 	if nodePoolsRemain {
+		if err := r.setDeletionProgressing(ctx, cluster, "DeletionInProgress",
+			fmt.Sprintf("Waiting for %d nodepools to be deleted", len(nodePools.Items))); err != nil {
+			return reconcile.Result{}, err
+		}
 		log.Infof(ctx, "%s: waiting for nodepools to be deleted for cluster %s, requeueing", adapterName, cluster.Name)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
@@ -350,6 +374,28 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 
 	log.Infof(ctx, "%s: finalizer removed for cluster %s", adapterName, cluster.Name)
 	return reconcile.Result{}, nil
+}
+
+// setDeletionProgressing records the DeletionProgressing condition on a
+// cluster being deleted. The condition status is always True while deletion
+// is underway; the reason encodes the phase (DeletingResources,
+// DeletionInProgress, DeletionBlocked) and the message summarizes what is
+// holding the deletion up. Writes are change-gated and conflicts are
+// tolerated, mirroring the status-update pattern in Reconcile.
+func (r *Reconciler) setDeletionProgressing(ctx context.Context, cluster *privatev1.Cluster, reason, message string) error {
+	if !meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		Type:               "DeletionProgressing",
+		Status:             metav1.ConditionTrue,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: cluster.Generation,
+	}) {
+		return nil
+	}
+	if err := r.client.Status().Update(ctx, cluster); err != nil && !apierrors.IsConflict(err) {
+		return fmt.Errorf("%s: record deletion progress: %w", adapterName, err)
+	}
+	return nil
 }
 
 // setWaitingConditions records preparation readiness without overwriting the

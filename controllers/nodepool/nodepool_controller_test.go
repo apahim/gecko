@@ -46,12 +46,14 @@ func newTestLogger(t *testing.T) logger.Logger {
 // mockStatusWriter captures Status().Update calls and can return a configured error.
 type mockStatusWriter struct {
 	called    bool
+	updates   int
 	updateErr error
 	captured  client.Object
 }
 
 func (m *mockStatusWriter) Update(_ context.Context, obj client.Object, _ ...client.SubResourceUpdateOption) error {
 	m.called = true
+	m.updates++
 	m.captured = obj
 	return m.updateErr
 }
@@ -643,14 +645,21 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	require.True(t, storeClient.statusWriter.called)
 
 	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	applied := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolResourcesApplied")
+	require.NotNil(t, applied)
+	require.Equal(t, metav1.ConditionFalse, applied.Status)
+	require.Equal(t, "ResourcesNotFound", applied.Reason)
+	require.Equal(t, "Resources have not been applied yet", applied.Message)
 	available := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolAvailable")
 	require.NotNil(t, available)
 	require.Equal(t, metav1.ConditionFalse, available.Status)
 	require.Equal(t, "ResourcesNotFound", available.Reason)
+	require.Equal(t, "Resources have not been applied yet", available.Message)
 	progressing := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolProgressing")
 	require.NotNil(t, progressing)
 	require.Equal(t, metav1.ConditionFalse, progressing.Status)
 	require.Equal(t, "AsExpected", progressing.Reason)
+	require.Equal(t, "Resources have not been applied yet", progressing.Message)
 }
 
 func TestApplyStatusConditions_ObservedVersionChangeIsPersisted(t *testing.T) {
@@ -1049,6 +1058,151 @@ func TestReconcile_Deletion_Pending(t *testing.T) {
 	require.False(t, storeClient.updateCalled)
 }
 
+// TestReconcile_Deletion_RecordsProgressOnDeleteInitiation verifies that the
+// reconcile which initiates transport deletion records a DeletionProgressing
+// condition with the DeletingResources reason.
+func TestReconcile_Deletion_RecordsProgressOnDeleteInitiation(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	groupKey := mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")
+	tr.DeleteStatusOverrides["mc-us-c1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful:     false,
+		TotalCount:        0,
+		PendingCount:      0,
+		ApplyDesiresCount: 7,
+	}
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+	require.Len(t, tr.DeleteCalls, 1)
+
+	require.True(t, storeClient.statusWriter.called, "deletion progress condition should be recorded")
+	cond := meta.FindStatusCondition(
+		storeClient.statusWriter.captured.(*privatev1.NodePool).Status.Conditions, "DeletionProgressing")
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "DeletingResources", cond.Reason)
+	require.Equal(t, "Deletion of 7 resources initiated", cond.Message)
+}
+
+// TestReconcile_Deletion_RecordsPendingProgress verifies that the deletion
+// wait records pending resource references in the condition message.
+func TestReconcile_Deletion_RecordsPendingProgress(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	groupKey := mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")
+	tr.DeleteStatusOverrides["mc-us-c1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful: false,
+		TotalCount:    3,
+		PendingCount:  2,
+		PendingResources: []string{
+			"hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/hc-1",
+			"hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/hc-2",
+		},
+	}
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+
+	cond := meta.FindStatusCondition(
+		storeClient.statusWriter.captured.(*privatev1.NodePool).Status.Conditions, "DeletionProgressing")
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "DeletionInProgress", cond.Reason)
+	require.Equal(t, "2 of 3 resources still being deleted: "+
+		"hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/hc-1, "+
+		"hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/hc-2", cond.Message)
+}
+
+// TestReconcile_Deletion_RecordsBlockedProgress verifies that explicit
+// kube-applier-gcp failures switch the condition to DeletionBlocked and carry
+// the failure details.
+func TestReconcile_Deletion_RecordsBlockedProgress(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	groupKey := mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")
+	tr.DeleteStatusOverrides["mc-us-c1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful:    false,
+		TotalCount:       2,
+		PendingCount:     1,
+		PendingResources: []string{"g/v1/rs/ns/stuck"},
+		FailedCount:      1,
+		Failures:         []transport.DeleteFailure{{Resource: "g/v1/rs/ns/stuck", Reason: "KubeAPIError", Message: "boom"}},
+	}
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+
+	cond := meta.FindStatusCondition(
+		storeClient.statusWriter.captured.(*privatev1.NodePool).Status.Conditions, "DeletionProgressing")
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "DeletionBlocked", cond.Reason)
+	require.Equal(t, "1 of 2 resources still being deleted: g/v1/rs/ns/stuck; "+
+		"deletion failed for 1 resources: g/v1/rs/ns/stuck (KubeAPIError: boom)", cond.Message)
+}
+
+// TestReconcile_Deletion_ProgressIsIdempotent verifies that a reconcile which
+// observes unchanged deletion progress does not write the status again.
+func TestReconcile_Deletion_ProgressIsIdempotent(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	groupKey := mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")
+	tr.DeleteStatusOverrides["mc-us-c1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful:    false,
+		TotalCount:       3,
+		PendingCount:     2,
+		PendingResources: []string{"g/v1/rs/ns/a", "g/v1/rs/ns/b"},
+	}
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Equal(t, 1, storeClient.statusWriter.updates)
+
+	// Simulate the status write having been persisted.
+	np.Status.Conditions = storeClient.statusWriter.captured.(*privatev1.NodePool).Status.Conditions
+	storeClient.statusWriter.updates = 0
+
+	_, err = r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, storeClient.statusWriter.updates, "unchanged deletion progress must not rewrite the status")
+}
+
 func TestReconcile_Deletion_GetStatusError(t *testing.T) {
 	np := testNodePool("4.16.0")
 	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
@@ -1102,6 +1256,7 @@ func TestReconcile_Deletion_ClusterNotFound(t *testing.T) {
 
 	require.Empty(t, tr.DeleteCalls, "should not call Delete when cluster not found")
 	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
+	require.False(t, storeClient.statusWriter.called, "no DeletionProgressing condition when the cluster is gone")
 	updated := storeClient.updated.(*privatev1.NodePool)
 	require.NotContains(t, updated.Finalizers, constants.FinalizerNodePool)
 }
@@ -1432,6 +1587,322 @@ func TestReconcile_Progressing_Priority_MachinesNotReadyWins(t *testing.T) {
 	require.NotNil(t, progressing)
 	require.Equal(t, metav1.ConditionTrue, progressing.Status)
 	require.Equal(t, "MachinesNotReady", progressing.Reason)
+}
+
+// ---------------------------------------------------------------------------
+// Test cases – HyperShift condition message propagation (GCP-1516 issues 4 & 5)
+// ---------------------------------------------------------------------------
+
+// TestReconcile_ConditionMessages_UnhealthyReady verifies the HyperShift Ready
+// condition message is surfaced verbatim on NodePoolAvailable when not available.
+func TestReconcile_ConditionMessages_UnhealthyReady(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":            "False",
+				"readyConditionMessage":     "GCP actuator is failing: permission denied on service account",
+				"allNodesHealthyCondition":  "True",
+				"allMachinesReadyCondition": "True",
+			},
+		},
+	}
+
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	available := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolAvailable")
+	require.NotNil(t, available)
+	require.Equal(t, metav1.ConditionFalse, available.Status)
+	require.Equal(t, "NodePoolNotAvailable", available.Reason)
+	require.Equal(t, "GCP actuator is failing: permission denied on service account", available.Message)
+}
+
+// TestReconcile_ConditionMessages_UnhealthyNodes verifies the AllNodesHealthy
+// condition message is surfaced verbatim on NodePoolHealthy when unhealthy.
+func TestReconcile_ConditionMessages_UnhealthyNodes(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":                  "True",
+				"allNodesHealthyCondition":        "False",
+				"allNodesHealthyConditionMessage": "Node pool is reporting 1 unhealthy nodes",
+				"allMachinesReadyCondition":       "True",
+			},
+		},
+	}
+
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	healthy := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolHealthy")
+	require.NotNil(t, healthy)
+	require.Equal(t, metav1.ConditionFalse, healthy.Status)
+	require.Equal(t, "NodePoolNotHealthy", healthy.Reason)
+	require.Equal(t, "Node pool is reporting 1 unhealthy nodes", healthy.Message)
+}
+
+// TestReconcile_ConditionMessages_MachinesNotReady verifies the AllMachinesReady
+// condition message is surfaced verbatim on NodePoolProgressing. This is the
+// customer-project IAM failure shape from issue 5: the specific error only
+// exists in the HyperShift condition message.
+func TestReconcile_ConditionMessages_MachinesNotReady(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":                   "True",
+				"allNodesHealthyCondition":         "True",
+				"allMachinesReadyCondition":        "False",
+				"allMachinesReadyConditionMessage": "Failed to create machine: googleapi: Error 403: missing iam.serviceAccount.actAs permission",
+			},
+		},
+	}
+
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	progressing := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolProgressing")
+	require.NotNil(t, progressing)
+	require.Equal(t, metav1.ConditionTrue, progressing.Status)
+	require.Equal(t, "MachinesNotReady", progressing.Reason)
+	require.Equal(t, "Failed to create machine: googleapi: Error 403: missing iam.serviceAccount.actAs permission", progressing.Message)
+}
+
+// TestReconcile_ConditionMessages_UpdatingConfig verifies the UpdatingConfig
+// condition message is surfaced verbatim on NodePoolProgressing.
+func TestReconcile_ConditionMessages_UpdatingConfig(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":                 "True",
+				"allNodesHealthyCondition":       "True",
+				"allMachinesReadyCondition":      "True",
+				"updatingConfigCondition":        "True",
+				"updatingConfigConditionMessage": "Configuration update in progress",
+			},
+		},
+	}
+
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	progressing := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolProgressing")
+	require.NotNil(t, progressing)
+	require.Equal(t, metav1.ConditionTrue, progressing.Status)
+	require.Equal(t, "UpdatingConfig", progressing.Reason)
+	require.Equal(t, "Configuration update in progress", progressing.Message)
+}
+
+// TestReconcile_ConditionMessages_Priority_MachinesNotReadyWins verifies the
+// progressing message follows the same precedence as the reason: machines not
+// ready wins over updating config.
+func TestReconcile_ConditionMessages_Priority_MachinesNotReadyWins(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":                   "True",
+				"allNodesHealthyCondition":         "True",
+				"allMachinesReadyCondition":        "False",
+				"allMachinesReadyConditionMessage": "machines not ready message",
+				"updatingConfigCondition":          "True",
+				"updatingConfigConditionMessage":   "updating config message",
+			},
+		},
+	}
+
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	progressing := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolProgressing")
+	require.NotNil(t, progressing)
+	require.Equal(t, "MachinesNotReady", progressing.Reason)
+	require.Equal(t, "machines not ready message", progressing.Message)
+}
+
+// TestReconcile_ConditionMessages_AppliedMessage verifies the ManifestWork
+// Applied condition message is carried on NodePoolResourcesApplied.
+func TestReconcile_ConditionMessages_AppliedMessage(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", Message: "Resource is applied"},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":            "True",
+				"allNodesHealthyCondition":  "True",
+				"allMachinesReadyCondition": "True",
+			},
+		},
+	}
+
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	applied := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolResourcesApplied")
+	require.NotNil(t, applied)
+	require.Equal(t, metav1.ConditionTrue, applied.Status)
+	require.Equal(t, "AppliedSuccessfully", applied.Reason)
+	require.Equal(t, "Resource is applied", applied.Message)
+}
+
+// TestReconcile_ConditionMessages_HealthyStaysMessageless verifies messages
+// are dropped from healthy conditions, mirroring the HC controller.
+func TestReconcile_ConditionMessages_HealthyStaysMessageless(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":                   "True",
+				"readyConditionMessage":            "stale informational message",
+				"allNodesHealthyCondition":         "True",
+				"allNodesHealthyConditionMessage":  "stale informational message",
+				"allMachinesReadyCondition":        "True",
+				"allMachinesReadyConditionMessage": "stale informational message",
+			},
+		},
+	}
+
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	for _, condType := range []string{"NodePoolAvailable", "NodePoolHealthy", "NodePoolProgressing"} {
+		cond := meta.FindStatusCondition(captured.Status.Conditions, condType)
+		require.NotNil(t, cond, condType)
+		require.Empty(t, cond.Message, "%s must stay message-less when healthy", condType)
+	}
+}
+
+// TestReconcile_ConditionMessages_AbsentMessageKeys verifies feedback extracted
+// before message propagation (no *Message keys) leaves conditions message-less.
+func TestReconcile_ConditionMessages_AbsentMessageKeys(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mustNodePoolGroupKey("cluster-test", "cluster-test", "np-test")] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":            "False",
+				"allNodesHealthyCondition":  "False",
+				"allMachinesReadyCondition": "False",
+			},
+		},
+	}
+
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	for _, condType := range []string{"NodePoolResourcesApplied", "NodePoolAvailable", "NodePoolHealthy", "NodePoolProgressing"} {
+		cond := meta.FindStatusCondition(captured.Status.Conditions, condType)
+		require.NotNil(t, cond, condType)
+		require.Empty(t, cond.Message, "%s must stay message-less without message feedback", condType)
+	}
+}
+
+// TestApplyStatusConditions_MessagesIdempotent verifies re-applying identical
+// feedback (messages included) does not report a change.
+func TestApplyStatusConditions_MessagesIdempotent(t *testing.T) {
+	np := testNodePool("4.16.0")
+	cluster := testCluster(true, true)
+	npKey := nodePoolResourceKey(cluster, np)
+	status := &transport.Status{
+		Conditions: []metav1.Condition{{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"}},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
+				"readyCondition":                   "False",
+				"readyConditionMessage":            "not available message",
+				"allNodesHealthyCondition":         "False",
+				"allNodesHealthyConditionMessage":  "unhealthy message",
+				"allMachinesReadyCondition":        "False",
+				"allMachinesReadyConditionMessage": "machines message",
+				"version":                          "4.16.0",
+			},
+		},
+	}
+	r := &Reconciler{}
+	require.True(t, r.applyStatusConditions(np, string(cluster.UID), status))
+	require.False(t, r.applyStatusConditions(np, string(cluster.UID), status))
+
+	available := meta.FindStatusCondition(np.Status.Conditions, "NodePoolAvailable")
+	require.NotNil(t, available)
+	require.Equal(t, "not available message", available.Message)
+	healthy := meta.FindStatusCondition(np.Status.Conditions, "NodePoolHealthy")
+	require.NotNil(t, healthy)
+	require.Equal(t, "unhealthy message", healthy.Message)
+	progressing := meta.FindStatusCondition(np.Status.Conditions, "NodePoolProgressing")
+	require.NotNil(t, progressing)
+	require.Equal(t, "machines message", progressing.Message)
 }
 
 func TestReconcile_PendingReleaseUsesObservedImageAndAllowsScaling(t *testing.T) {

@@ -46,12 +46,14 @@ func testLogger(t *testing.T) logger.Logger {
 // mockStatusWriter captures Status().Update calls and can return a configured error.
 type mockStatusWriter struct {
 	called    bool
+	updates   int
 	updateErr error
 	captured  client.Object
 }
 
 func (m *mockStatusWriter) Update(_ context.Context, obj client.Object, _ ...client.SubResourceUpdateOption) error {
 	m.called = true
+	m.updates++
 	m.captured = obj
 	return m.updateErr
 }
@@ -1211,6 +1213,219 @@ func TestReconcile_Deletion_Pending(t *testing.T) {
 	require.Empty(t, tr.DeleteCalls)
 	require.Empty(t, tr.CleanupDeleteDesiresCalls)
 	require.False(t, storeClient.updateCalled)
+}
+
+// TestReconcile_Deletion_RecordsProgressOnDeleteInitiation verifies that the
+// reconcile which initiates transport deletion records a DeletionProgressing
+// condition with the DeletingResources reason.
+func TestReconcile_Deletion_RecordsProgressOnDeleteInitiation(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
+	tr.DeleteStatusOverrides["mc-cluster-1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful:     false,
+		TotalCount:        0,
+		PendingCount:      0,
+		ApplyDesiresCount: 12,
+	}
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+	require.Len(t, tr.DeleteCalls, 1)
+
+	require.True(t, storeClient.statusWriter.called, "deletion progress condition should be recorded")
+	cond := meta.FindStatusCondition(
+		storeClient.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, "DeletionProgressing")
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "DeletingResources", cond.Reason)
+	require.Equal(t, "Deletion of 12 resources initiated", cond.Message)
+}
+
+// TestReconcile_Deletion_RecordsPendingProgress verifies that the deletion
+// wait records pending resource references in the condition message.
+func TestReconcile_Deletion_RecordsPendingProgress(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
+	tr.DeleteStatusOverrides["mc-cluster-1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful:    false,
+		TotalCount:       5,
+		PendingCount:     2,
+		PendingResources: []string{"g/v1/rs/ns/a", "g/v1/rs/ns/b"},
+	}
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+
+	cond := meta.FindStatusCondition(
+		storeClient.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, "DeletionProgressing")
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "DeletionInProgress", cond.Reason)
+	require.Equal(t, "2 of 5 resources still being deleted: g/v1/rs/ns/a, g/v1/rs/ns/b", cond.Message)
+}
+
+// TestReconcile_Deletion_RecordsBlockedProgress verifies that explicit
+// kube-applier-gcp failures switch the condition to DeletionBlocked.
+func TestReconcile_Deletion_RecordsBlockedProgress(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
+	tr.DeleteStatusOverrides["mc-cluster-1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful:    false,
+		TotalCount:       2,
+		PendingCount:     1,
+		PendingResources: []string{"g/v1/rs/ns/stuck"},
+		FailedCount:      1,
+		Failures:         []transport.DeleteFailure{{Resource: "g/v1/rs/ns/stuck", Reason: "KubeAPIError", Message: "boom"}},
+	}
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+
+	cond := meta.FindStatusCondition(
+		storeClient.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, "DeletionProgressing")
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "DeletionBlocked", cond.Reason)
+	require.Equal(t, "1 of 2 resources still being deleted: g/v1/rs/ns/stuck; "+
+		"deletion failed for 1 resources: g/v1/rs/ns/stuck (KubeAPIError: boom)", cond.Message)
+}
+
+// TestReconcile_Deletion_RecordsPendingWithNodePoolWait verifies that the
+// resource deletion wait composes the remaining child nodepools into the
+// condition message.
+func TestReconcile_Deletion_RecordsPendingWithNodePoolWait(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
+	tr.DeleteStatusOverrides["mc-cluster-1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful:    false,
+		TotalCount:       5,
+		PendingCount:     2,
+		PendingResources: []string{"g/v1/rs/ns/a", "g/v1/rs/ns/b"},
+	}
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil, func(m *mockStoreClient) {
+		m.nodePools = []privatev1.NodePool{
+			{ObjectMeta: metav1.ObjectMeta{Name: "workers", Namespace: cluster.Namespace}, Spec: privatev1.NodePoolSpec{ClusterID: cluster.Name}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "infra", Namespace: cluster.Namespace, DeletionTimestamp: &now}, Spec: privatev1.NodePoolSpec{ClusterID: cluster.Name}},
+		}
+	})
+
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+
+	cond := meta.FindStatusCondition(
+		storeClient.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, "DeletionProgressing")
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "DeletionInProgress", cond.Reason)
+	require.Equal(t, "2 of 5 resources still being deleted: g/v1/rs/ns/a, g/v1/rs/ns/b; "+
+		"waiting for 2 nodepools to be deleted", cond.Message)
+}
+
+// TestReconcile_Deletion_RecordsNodePoolWait verifies that the wait for child
+// nodepools (after cluster resources are gone) records its own message.
+func TestReconcile_Deletion_RecordsNodePoolWait(t *testing.T) {
+	cluster := buildReadyCluster("cluster-abc", "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	groupKey := mustClusterGroupKey(cluster.Namespace, cluster.Name)
+	tr.DeleteStatusOverrides["mc-cluster-1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful: true,
+		TotalCount:    5,
+	}
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil, func(m *mockStoreClient) {
+		m.nodePools = []privatev1.NodePool{
+			{ObjectMeta: metav1.ObjectMeta{Name: "workers", Namespace: cluster.Namespace, DeletionTimestamp: &now}, Spec: privatev1.NodePoolSpec{ClusterID: cluster.Name}},
+		}
+	})
+
+	result, err := r.Reconcile(context.Background(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+
+	cond := meta.FindStatusCondition(
+		storeClient.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, "DeletionProgressing")
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, "DeletionInProgress", cond.Reason)
+	require.Equal(t, "Waiting for 1 nodepools to be deleted", cond.Message)
+}
+
+// TestReconcile_Deletion_ProgressIsIdempotent verifies that a reconcile which
+// observes unchanged deletion progress does not write the status again.
+func TestReconcile_Deletion_ProgressIsIdempotent(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	groupKey := mustClusterGroupKey("hyperfleet", clusterID)
+	tr.DeleteStatusOverrides["mc-cluster-1/"+groupKey] = &transport.DeleteStatus{
+		AllSuccessful:    false,
+		TotalCount:       5,
+		PendingCount:     2,
+		PendingResources: []string{"g/v1/rs/ns/a", "g/v1/rs/ns/b"},
+	}
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Equal(t, 1, storeClient.statusWriter.updates)
+
+	// Simulate the status write having been persisted.
+	cluster.Status.Conditions = storeClient.statusWriter.captured.(*privatev1.Cluster).Status.Conditions
+	storeClient.statusWriter.updates = 0
+
+	_, err = r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Zero(t, storeClient.statusWriter.updates, "unchanged deletion progress must not rewrite the status")
 }
 
 func TestReconcile_Deletion_NodePoolsBlockFinalizerRemoval(t *testing.T) {

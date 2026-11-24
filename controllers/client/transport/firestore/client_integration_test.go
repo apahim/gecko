@@ -662,6 +662,147 @@ func TestIntegration_GetDeleteStatus_RequiresExactStatusRevision(t *testing.T) {
 	assert.Equal(t, 1, result.TotalCount)
 }
 
+// writeDeleteDesire writes a DeleteDesire spec and its status document for
+// testGroupKey. The status observes the spec revision shifted by statusLag
+// (zero for fresh).
+func writeDeleteDesire(ctx context.Context, t *testing.T, specsClient, statusClient *firestore.Client, docID, name string, conditions []metav1.Condition, statusLag time.Duration) {
+	t.Helper()
+	spec := kubeapplier.DeleteDesire{Spec: kubeapplier.DeleteDesireSpec{
+		ManagementCluster: testMCName,
+		GroupKey:          testGroupKey,
+		TargetItem: kubeapplier.ResourceReference{
+			Group:     "hypershift.openshift.io",
+			Version:   "v1beta1",
+			Resource:  "hostedclusters",
+			Namespace: "clusters-abc",
+			Name:      name,
+		},
+	}}
+	writeResult, err := specsClient.Collection("deletedesires").Doc(docID).Set(ctx, spec)
+	require.NoError(t, err)
+	spec.Status = kubeapplier.DeleteDesireStatus{
+		Conditions:               conditions,
+		ObservedDesireUpdateTime: writeResult.UpdateTime.Add(statusLag),
+	}
+	_, err = statusClient.Collection("deletedesires").Doc(docID).Set(ctx, spec)
+	require.NoError(t, err)
+}
+
+func TestIntegration_GetDeleteStatus_ReportsPendingAndFailedResources(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := newTestClient(t)
+	defer c.Close()
+	opts := emulatorOpts(t)
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, specsClient.Close()) })
+	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, statusClient.Close()) })
+
+	clearCollection(ctx, t, specsClient, "applydesires")
+	clearCollection(ctx, t, specsClient, "deletedesires")
+	clearCollection(ctx, t, statusClient, "deletedesires")
+	defer clearCollection(ctx, t, specsClient, "applydesires")
+	defer clearCollection(ctx, t, specsClient, "deletedesires")
+	defer clearCollection(ctx, t, statusClient, "deletedesires")
+
+	ref := func(name string) string {
+		return "hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/" + name
+	}
+
+	writeDeleteDesire(ctx, t, specsClient, statusClient, "delete-success", "hc-success", []metav1.Condition{
+		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionTrue, Reason: kubeapplier.ConditionReasonNoErrors},
+	}, 0)
+	writeDeleteDesire(ctx, t, specsClient, statusClient, "delete-waiting", "hc-waiting", []metav1.Condition{
+		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionFalse, Reason: kubeapplier.ConditionReasonWaitingForDeletion},
+	}, 0)
+	writeDeleteDesire(ctx, t, specsClient, statusClient, "delete-failed", "hc-failed", []metav1.Condition{
+		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionFalse, Reason: kubeapplier.ConditionReasonKubeAPIError, Message: "kube api boom"},
+	}, 0)
+	writeDeleteDesire(ctx, t, specsClient, statusClient, "delete-degraded", "hc-degraded", []metav1.Condition{
+		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionFalse, Reason: kubeapplier.ConditionReasonWaitingForDeletion},
+		{Type: kubeapplier.ConditionTypeDegraded, Status: metav1.ConditionTrue, Reason: kubeapplier.ConditionReasonFailed, Message: "Had an error while syncing"},
+	}, 0)
+	// Stale status must not classify the desire as failed, only as pending.
+	writeDeleteDesire(ctx, t, specsClient, statusClient, "delete-stale", "hc-stale", []metav1.Condition{
+		{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionFalse, Reason: kubeapplier.ConditionReasonKubeAPIError, Message: "stale boom"},
+	}, -time.Second)
+
+	status, err := c.GetDeleteStatus(ctx, testMCName, testGroupKey)
+	require.NoError(t, err)
+	assert.False(t, status.AllSuccessful)
+	assert.Equal(t, 4, status.PendingCount)
+	assert.Equal(t, 5, status.TotalCount)
+	assert.Equal(t, 2, status.FailedCount, "stale failures must not count")
+	require.Len(t, status.PendingResources, 4)
+	assert.Contains(t, status.PendingResources, ref("hc-waiting"))
+	assert.Contains(t, status.PendingResources, ref("hc-failed"))
+	assert.Contains(t, status.PendingResources, ref("hc-degraded"))
+	assert.Contains(t, status.PendingResources, ref("hc-stale"))
+	assert.ElementsMatch(t, []transport.DeleteFailure{
+		{
+			Resource: ref("hc-failed"),
+			Reason:   kubeapplier.ConditionReasonKubeAPIError,
+			Message:  "kube api boom",
+		},
+		{
+			Resource: ref("hc-degraded"),
+			Reason:   kubeapplier.ConditionReasonFailed,
+			Message:  "Had an error while syncing",
+		},
+	}, status.Failures)
+}
+
+func TestIntegration_GetDeleteStatus_CapsReportedDetails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	c := newTestClient(t)
+	defer c.Close()
+	opts := emulatorOpts(t)
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, specsClient.Close()) })
+	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, statusClient.Close()) })
+
+	clearCollection(ctx, t, specsClient, "applydesires")
+	clearCollection(ctx, t, specsClient, "deletedesires")
+	clearCollection(ctx, t, statusClient, "deletedesires")
+	defer clearCollection(ctx, t, specsClient, "applydesires")
+	defer clearCollection(ctx, t, specsClient, "deletedesires")
+	defer clearCollection(ctx, t, statusClient, "deletedesires")
+
+	// 12 waiting desires + 7 failed desires.
+	for i := range 12 {
+		writeDeleteDesire(ctx, t, specsClient, statusClient,
+			fmt.Sprintf("waiting-%d", i), fmt.Sprintf("hc-waiting-%d", i),
+			[]metav1.Condition{
+				{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionFalse, Reason: kubeapplier.ConditionReasonWaitingForDeletion},
+			}, 0)
+	}
+	for i := range 7 {
+		writeDeleteDesire(ctx, t, specsClient, statusClient,
+			fmt.Sprintf("failed-%d", i), fmt.Sprintf("hc-failed-%d", i),
+			[]metav1.Condition{
+				{Type: kubeapplier.ConditionTypeSuccessful, Status: metav1.ConditionFalse, Reason: kubeapplier.ConditionReasonPreCheckFailed, Message: "nope"},
+			}, 0)
+	}
+
+	status, err := c.GetDeleteStatus(ctx, testMCName, testGroupKey)
+	require.NoError(t, err)
+	assert.False(t, status.AllSuccessful)
+	assert.Equal(t, 19, status.PendingCount)
+	assert.Equal(t, 19, status.TotalCount)
+	assert.Equal(t, 7, status.FailedCount)
+	assert.Len(t, status.PendingResources, 10, "pending resource references are capped")
+	assert.Len(t, status.Failures, 5, "failure details are capped")
+}
+
 // TestIntegration_Delete_ChunksLargeBatches verifies that Delete correctly
 // processes more resources than the Firestore 500-write-per-transaction limit
 // by chunking them into multiple transactions.
