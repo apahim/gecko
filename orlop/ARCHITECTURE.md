@@ -44,7 +44,9 @@
 `ConvertingResourceHandler` accepts `application/json-patch+json` operation
 arrays (RFC 6902) and `application/merge-patch+json` objects. Media-type
 parameters are accepted. Negative array indices are rejected, and cumulative
-JSONPatch copy amplification is limited to 3 MiB. For compatibility, all other
+JSONPatch copy amplification is limited to 3 MiB. Public PATCH request bodies
+are limited to 4 MiB and JSONPatch arrays to 128 operations, with bounded reads
+and sanitized failures. For compatibility, all other
 content types (including absent, unknown and malformed headers) retain ordinary
 merge-patch behavior. This includes `application/json` and the historical
 `application/strategic-merge-patch+json` alias; it does **not** implement
@@ -60,13 +62,14 @@ and private custom validation still apply.
 JSONPatch cannot change server-managed identity or metadata, including removing
 or replacing `metadata.resourceVersion`. An empty/zero stored revision fails
 closed. Its storage update uses the revision of the fetched snapshot without
-server-side replay. Memory and Spanner enforce the revision precondition, so a
-concurrent write conflicts. **The existing Postgres Update implementation does
-not enforce revision CAS:** snapshot tests alone do not prevent a concurrent
-overwrite on that backend. Do not rely on this patch path for concurrency-safe
-IAM assertion writes on Postgres until its storage contract is separately fixed
-and tested. No Postgres change is included here; deployed backend identity must
-be freshly verified before live guard/rollout acceptance.
+server-side replay. Memory and Spanner enforce the revision precondition;
+Postgres uses a conditional SQL UPDATE against the supplied revision, returning
+a conflict when a concurrent writer wins. Assertion writers must pass a fetched
+revision: a direct storage Update without one retains legacy unguarded semantics.
+The Postgres concurrent-write regression needs a running PostgreSQL instance
+(`POSTGRES_TEST_URL`), and the Spanner selector LIST/watch regressions need a
+Spanner emulator (`SPANNER_EMULATOR_HOST`); default unit-test success alone
+cannot establish production backend readiness.
 
 A failed `test` returns HTTP 409 with the fixed message
 `JSON patch test failed`; malformed operations and invalid results return HTTP

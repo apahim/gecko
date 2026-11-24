@@ -295,6 +295,24 @@ func TestConvertingJSONPatchCopyAmplificationLimit(t *testing.T) {
 	}
 }
 
+func TestConvertingPatchRequestLimits(t *testing.T) {
+	h, store, _ := publicPatchFixture(t)
+	for _, tc := range []struct {
+		name, contentType, body, message string
+	}{
+		{"JSONPatch body", constants.ContentTypeJSONPatch, strings.Repeat("x", maxPublicPatchBodyBytes+1), "patch body exceeds size limit"},
+		{"merge patch body", "application/merge-patch+json", strings.Repeat("x", maxPublicPatchBodyBytes+1), "patch body exceeds size limit"},
+		{"operation count", constants.ContentTypeJSONPatch, "[" + strings.TrimSuffix(strings.Repeat(`{"op":"test","path":"/metadata/uid","value":"original-uid"},`, maxPublicPatchOperations+1), ",") + "]", "too many JSON patch operations"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := publicPatchRequest(t, h, t.Context(), tc.contentType, tc.body)
+			if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), tc.message) || store.updates != 0 {
+				t.Fatalf("limit failed: status=%d body=%s updates=%d", rr.Code, rr.Body.String(), store.updates)
+			}
+		})
+	}
+}
+
 func TestConvertingPatchPreservesCompletePrivateStatus(t *testing.T) {
 	h, _, _ := publicPatchFixture(t)
 	scheme := runtime.NewScheme()
