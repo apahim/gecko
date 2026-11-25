@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -484,6 +486,148 @@ func TestPostgresStore_Update(t *testing.T) {
 			t.Error("Expected error for missing object, got nil")
 		}
 	})
+}
+
+func TestPostgresStore_UpdateRevisionCAS(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	obj := newTestObject(withName("revision-cas"), withNamespace("default"))
+	if err := store.Create(ctx, obj); err != nil {
+		t.Fatal(err)
+	}
+	left, err := store.Get(ctx, "default", "revision-cas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	right := left.DeepCopyObject().(client.Object)
+	originalRV := left.GetResourceVersion()
+
+	// Both calls carry the same revision. The database must admit exactly one
+	// write, including when the transactions race, and must not broadcast the
+	// rejected write or change the rejected object's resourceVersion.
+	type updateOutcome struct {
+		obj client.Object
+		err error
+	}
+	start := make(chan struct{})
+	results := make(chan updateOutcome, 2)
+	var wg sync.WaitGroup
+	for _, candidate := range []client.Object{left, right} {
+		wg.Add(1)
+		go func(candidate client.Object) {
+			defer wg.Done()
+			<-start
+			results <- updateOutcome{obj: candidate, err: store.Update(ctx, candidate)}
+		}(candidate)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var success, conflicts int
+	for outcome := range results {
+		switch {
+		case outcome.err == nil:
+			success++
+			if outcome.obj.GetResourceVersion() == originalRV {
+				t.Fatal("successful update did not advance the object revision")
+			}
+		case apierrors.IsConflict(outcome.err):
+			conflicts++
+			if outcome.obj.GetResourceVersion() != originalRV {
+				t.Fatal("conflicting update changed the in-memory revision")
+			}
+		default:
+			t.Fatalf("unexpected update result: %v", outcome.err)
+		}
+	}
+	if success != 1 || conflicts != 1 {
+		t.Fatalf("expected one success and one conflict, got %d and %d", success, conflicts)
+	}
+	stored, err := store.Get(ctx, "default", "revision-cas")
+	if err != nil || stored.GetResourceVersion() == originalRV {
+		t.Fatalf("successful update must advance revision: %v, %#v", err, stored)
+	}
+}
+
+func TestPostgresStore_SelectorListAndWatch(t *testing.T) {
+	// Watch requires a broadcaster, so build the store on a shared connection
+	// with one attached instead of the bare setupTestStore fixture.
+	connString := os.Getenv("POSTGRES_TEST_URL")
+	if connString == "" {
+		connString = "postgres://localhost/orlop_test?sslmode=disable"
+	}
+	db, cleanup := setupTestDB(t)
+	if db == nil {
+		return
+	}
+	t.Cleanup(cleanup)
+
+	scheme := runtime.NewScheme()
+	gv := schema.GroupVersion{Group: "test.example.com", Version: "v1"}
+	scheme.AddKnownTypeWithName(gv.WithKind("TestObject"), &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(gv.WithKind("TestObjectList"), &unstructured.UnstructuredList{})
+	gvk := schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestObject"}
+
+	ctx := context.Background()
+	broadcaster, err := NewPostgresBroadcaster(ctx, PostgresBroadcasterConfig{
+		DB:          db,
+		ConnString:  connString,
+		ChannelName: "selector_watch_test",
+		TableName:   "event_log",
+		Scheme:      scheme,
+		GVK:         gvk,
+	})
+	if err != nil {
+		t.Fatalf("failed to create broadcaster: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := broadcaster.Close(); err != nil {
+			t.Logf("broadcaster close failed: %v", err)
+		}
+	})
+
+	store, err := NewPostgresStore(ctx, PostgresStoreConfig{
+		DB:           db,
+		ResourceType: "testobjects",
+		Scheme:       scheme,
+		GVK:          gvk,
+		TableName:    "resources_testobjects",
+		Broadcaster:  broadcaster,
+	})
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	opts := storage.ListOptions{Namespace: "default", ListOptions: metav1.ListOptions{LabelSelector: "app=selected"}}
+	events, stop, err := store.Watch(ctx, opts, "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	if err := store.Create(ctx, newTestObject(withName("excluded"), withLabels(map[string]string{"app": "other"}))); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(ctx, newTestObject(withName("included"), withLabels(map[string]string{"app": "selected"}))); err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.List(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := list.(*unstructured.UnstructuredList).Items
+	if len(items) != 1 || items[0].GetName() != "included" {
+		t.Fatalf("selector LIST returned %#v", items)
+	}
+	select {
+	case event := <-events:
+		if event.Object.GetName() != "included" {
+			t.Fatalf("selector watch returned %s", event.Object.GetName())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("selector watch did not deliver matching event")
+	}
 }
 
 func TestPostgresStore_Delete(t *testing.T) {

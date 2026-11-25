@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	kjson "k8s.io/apimachinery/pkg/util/json"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -63,7 +64,6 @@ func stripStatus(m map[string]interface{}) {
 	for k := range m {
 		if strings.EqualFold(k, "status") {
 			delete(m, k)
-			return // Only one status key expected
 		}
 	}
 }
@@ -108,7 +108,7 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 
 	// Parse request body as map for schema processing
 	var objMap map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&objMap); err != nil {
+	if err := decodeObjectMap(r.Body, &objMap); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
@@ -594,7 +594,7 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 
 	// Parse request body
 	var objMap map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&objMap); err != nil {
+	if err := decodeObjectMap(r.Body, &objMap); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
@@ -614,7 +614,7 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var oldObjMap map[string]interface{}
-	if err := json.Unmarshal(existingJSONForCEL, &oldObjMap); err != nil {
+	if err := kjson.Unmarshal(existingJSONForCEL, &oldObjMap); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("unmarshaling old object: %v", err))
 		return
 	}
@@ -729,13 +729,7 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 	// Update object in storage (cast to client.Object)
 	if err := h.store.Update(r.Context(), privateObj.(client.Object)); err != nil {
 		h.logger.Error(err, "Update failed (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
-		if errors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, err.Error())
-		} else if errors.IsConflict(err) {
-			writeError(w, http.StatusConflict, err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
-		}
+		writeUpdateError(w, err, "update object")
 		return
 	}
 
@@ -759,6 +753,7 @@ type patchInput struct {
 	oldObjMap       map[string]interface{}
 	existingPrivate client.Object
 	existingPublic  client.Object
+	jsonPatch       bool
 }
 
 // Patch handles PATCH requests to partially update a resource.
@@ -766,17 +761,13 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 	namespace := chi.URLParam(r, constants.URLParamNamespace)
 	name := chi.URLParam(r, constants.URLParamName)
 	contentType := r.Header.Get(constants.HeaderContentType)
-	h.logger.V(1).Info("[PATCH-CONVERTING] %s namespace=%s name=%s content-type=%s", h.gvk.Kind, namespace, name, contentType)
+	h.logger.V(1).Info("Patch (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name, "contentType", contentType)
 
 	input, httpStatus, err := h.preparePatch(r, namespace, name)
 	if err != nil {
 		writeError(w, httpStatus, err.Error())
 		return
 	}
-	if !authorizeRequestObject(w, r, input.existingPublic) {
-		return
-	}
-
 	if h.processor == nil {
 		writeError(w, http.StatusInternalServerError, "schema processor not configured")
 		return
@@ -806,18 +797,12 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.store.Update(r.Context(), privateClientObj); err != nil {
-		h.logger.V(1).Info("[PATCH-CONVERTING] %s namespace=%s name=%s error=%v", h.gvk.Kind, namespace, name, err)
-		if errors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, err.Error())
-		} else if errors.IsConflict(err) {
-			writeError(w, http.StatusConflict, err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
-		}
+		h.logger.Error(err, "Patch failed (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
+		writeUpdateError(w, err, "update object")
 		return
 	}
 
-	h.logger.V(1).Info("[PATCH-CONVERTING] %s namespace=%s name=%s status=patched", h.gvk.Kind, namespace, name)
+	h.logger.V(1).Info("Patched (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 
 	responsePublic, err := h.convertToPublicObject(privateObj)
 	if err != nil {
@@ -850,41 +835,56 @@ func (h *ConvertingResourceHandler) preparePatch(r *http.Request, namespace, nam
 	if err != nil {
 		return patchInput{}, http.StatusInternalServerError, fmt.Errorf("failed to convert to public: %w", err)
 	}
+	// Authorize before evaluating JSONPatch tests against the stored object.
+	// Otherwise even a rejected mutation could reveal protected field values.
+	if allowed, err := authorizeObject(r.Context(), existingPublic); err != nil || !allowed {
+		return patchInput{}, http.StatusForbidden, fmt.Errorf("forbidden")
+	}
 
-	patchBytes, err := io.ReadAll(r.Body)
+	patchBytes, err := io.ReadAll(io.LimitReader(r.Body, maxPublicPatchBodyBytes+1))
 	if err != nil {
-		return patchInput{}, http.StatusBadRequest, fmt.Errorf("failed to read patch: %w", err)
+		return patchInput{}, http.StatusBadRequest, fmt.Errorf("failed to read patch")
 	}
-
-	// Status is controller-managed; strip from patch before applying so that
-	// existing controller-set status is preserved from existingPublic.
-	var patchMap map[string]interface{}
-	if err := json.Unmarshal(patchBytes, &patchMap); err != nil {
-		return patchInput{}, http.StatusBadRequest, fmt.Errorf("invalid patch JSON: %w", err)
+	if len(patchBytes) > maxPublicPatchBodyBytes {
+		return patchInput{}, http.StatusBadRequest, fmt.Errorf("patch body exceeds size limit")
 	}
-	stripStatus(patchMap)
-	patchBytes, _ = json.Marshal(patchMap)
 
 	existingJSON, err := json.Marshal(existingPublic)
 	if err != nil {
 		return patchInput{}, http.StatusInternalServerError, fmt.Errorf("failed to marshal existing object: %w", err)
 	}
 
-	patchedJSON, err := jsonMergePatch(existingJSON, patchBytes)
+	patchedJSON, isJSONPatch, httpStatus, err := applyPublicPatch(r.Header.Get(constants.HeaderContentType), existingJSON, patchBytes)
 	if err != nil {
-		return patchInput{}, http.StatusBadRequest, fmt.Errorf("patch failed: %w", err)
+		return patchInput{}, httpStatus, err
 	}
 
 	var objMap map[string]interface{}
-	if err := json.Unmarshal(patchedJSON, &objMap); err != nil {
-		return patchInput{}, http.StatusInternalServerError, fmt.Errorf("failed to unmarshal patched object: %w", err)
+	if err := kjson.Unmarshal(patchedJSON, &objMap); err != nil || objMap == nil {
+		return patchInput{}, http.StatusBadRequest, fmt.Errorf("patched resource must be an object")
 	}
 
 	// Build an old-object map from the pre-patch state so that CEL rules
 	// referencing oldSelf work correctly on update.
 	var oldObjMap map[string]interface{}
-	if err := json.Unmarshal(existingJSON, &oldObjMap); err != nil {
+	if err := kjson.Unmarshal(existingJSON, &oldObjMap); err != nil {
 		return patchInput{}, http.StatusInternalServerError, fmt.Errorf("failed to unmarshal old object: %w", err)
+	}
+	if isJSONPatch {
+		if existingPrivate.GetResourceVersion() == "" || existingPrivate.GetResourceVersion() == "0" {
+			return patchInput{}, http.StatusInternalServerError, fmt.Errorf("stored resource revision unavailable")
+		}
+		if err := validatePublicPatchIdentity(objMap, oldObjMap); err != nil {
+			return patchInput{}, http.StatusBadRequest, err
+		}
+	}
+	// JSONPatch can reach status through root replacement, move or copy, not
+	// just an operation whose path begins with /status. Restore from the old
+	// public projection only after the entire patch has been evaluated. Keep
+	// oldObjMap independent for CEL oldSelf validation.
+	stripStatus(objMap)
+	if status, ok := oldObjMap["status"]; ok {
+		objMap["status"] = runtime.DeepCopyJSONValue(status)
 	}
 
 	return patchInput{
@@ -892,6 +892,7 @@ func (h *ConvertingResourceHandler) preparePatch(r *http.Request, namespace, nam
 		oldObjMap:       oldObjMap,
 		existingPrivate: existingPrivate,
 		existingPublic:  existingPublic,
+		jsonPatch:       isJSONPatch,
 	}, http.StatusOK, nil
 }
 
@@ -931,6 +932,14 @@ func (h *ConvertingResourceHandler) patchPublicObject(namespace, name string, in
 	}
 	accessor.SetNamespace(namespace)
 	accessor.SetName(name)
+	if input.jsonPatch {
+		// Bind the storage precondition to the evaluated snapshot, even if
+		// schema processing strips metadata. All supported stores enforce it;
+		// see ARCHITECTURE.md for backend acceptance requirements.
+		accessor.SetResourceVersion(input.existingPrivate.GetResourceVersion())
+		accessor.SetUID(input.existingPrivate.GetUID())
+		accessor.SetCreationTimestamp(input.existingPrivate.GetCreationTimestamp())
+	}
 
 	if err := validateMetadata(accessor); err != nil {
 		return nil, http.StatusBadRequest, fmt.Errorf("invalid metadata: %w", err)
@@ -951,6 +960,12 @@ func (h *ConvertingResourceHandler) convertPatchToPrivate(r *http.Request, input
 	privateObj, err := h.convertPublicInputToPrivate(publicObj, input.existingPrivate, input.objMap, input.oldObjMap)
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("failed to convert to private: %w", err)
+	}
+	// Preserve the complete private status, including fields inside arrays that
+	// cannot survive a public/private overlay. No public patch owns status.
+	privateObj, err = h.preservePublicPatchStatus(privateObj, input.existingPrivate)
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("failed to preserve controller status")
 	}
 
 	if d, ok := privateObj.(types.CustomDefaulter); ok {
@@ -1066,11 +1081,7 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 
 			if err := h.store.Update(r.Context(), toStore); err != nil {
 				h.logger.Error(err, "Delete failed - update with deletionTimestamp", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
-				if errors.IsConflict(err) {
-					writeError(w, http.StatusConflict, err.Error())
-				} else {
-					writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
-				}
+				writeUpdateError(w, err, "update object")
 				return
 			}
 

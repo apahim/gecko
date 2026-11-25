@@ -475,7 +475,16 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 		return fmt.Errorf("failed to marshal labels: %w", err)
 	}
 
-	expectedRV, _ := strconv.ParseInt(obj.GetResourceVersion(), 10, 64)
+	// A supplied revision must be a positive integer, matching the Postgres
+	// contract; anything else is a client error rather than a disabled guard.
+	var expectedRV int64
+	if rv := obj.GetResourceVersion(); rv != "" {
+		var err error
+		expectedRV, err = strconv.ParseInt(rv, 10, 64)
+		if err != nil || expectedRV <= 0 {
+			return apierrors.NewBadRequest("invalid resourceVersion")
+		}
+	}
 
 	var rv int64
 	_, err = s.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {

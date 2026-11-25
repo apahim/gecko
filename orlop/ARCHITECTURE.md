@@ -39,6 +39,53 @@
 
 ## API Flow Examples
 
+### Public converting-handler PATCH contract
+
+`ConvertingResourceHandler` accepts `application/json-patch+json` operation
+arrays (RFC 6902) and `application/merge-patch+json` objects. Media-type
+parameters are accepted. Negative array indices are rejected, and cumulative
+JSONPatch copy amplification is limited to 3 MiB. Public PATCH request bodies
+are limited to 4 MiB and JSONPatch arrays to 128 operations, with bounded reads
+and sanitized failures. For compatibility, all other
+content types (including absent, unknown and malformed headers) retain ordinary
+merge-patch behavior. This includes `application/json` and the historical
+`application/strategic-merge-patch+json` alias; it does **not** implement
+strategic merge or server-side apply. Patch errors use sanitized messages.
+
+The stored public object is authorized before patch evaluation, and the
+resulting object is authorized before conversion/storage. Operations run only
+on the public projection. The complete controller-owned private status is
+preserved, even for root replacement, `move`, `copy`, or status case variants.
+Public schema pruning/defaulting, CEL transition rules, private-field filtering,
+and private custom validation still apply.
+
+JSONPatch cannot change server-managed identity or metadata, including removing
+or replacing `metadata.resourceVersion`. An empty/zero stored revision fails
+closed. Its storage update uses the revision of the fetched snapshot without
+server-side replay. Memory and Spanner enforce the revision precondition;
+Postgres uses a conditional SQL UPDATE against the supplied revision, returning
+a conflict when a concurrent writer wins. A non-empty revision that is not a
+positive integer is rejected with HTTP 400 (`invalid resourceVersion`) on every
+backend. Assertion writers must pass a fetched revision: a direct storage
+Update without one retains legacy unguarded semantics. Merge patch diverges
+from these guards: it silently overwrites `name`, `namespace`, `generation`,
+`finalizers`, and `deletionTimestamp`, and strips private-prefixed labels and
+annotations, rather than rejecting the request; aligning it with the JSONPatch
+guards is a tracked follow-up.
+The Postgres concurrent-write regression needs a running PostgreSQL instance
+(`POSTGRES_TEST_URL`), and the Spanner selector LIST/watch regressions need a
+Spanner emulator (`SPANNER_EMULATOR_HOST`); default unit-test success alone
+cannot establish production backend readiness.
+
+A failed `test` returns HTTP 409 with the fixed message
+`JSON patch test failed`; malformed operations and invalid results return HTTP
+400. `test` compares compacted raw JSON tokens, not parsed numeric values, so
+`2` does not match a stored `2.0`. Patch-library errors and compared values are
+not returned or logged.
+Clients requiring UID/RV preconditions should issue both `test` operations
+before their intended mutation. A successful parse or an arbitrary 4xx is not
+evidence that either test was evaluated.
+
 ### Creating an Object via Private API
 
 ```

@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	kjson "k8s.io/apimachinery/pkg/util/json"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -85,7 +86,7 @@ func (h *ResourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Parse request body as map for schema processing
 	var objMap map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&objMap); err != nil {
+	if err := decodeObjectMap(r.Body, &objMap); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
@@ -396,7 +397,7 @@ func (h *ResourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// Parse request body as map for schema processing
 	var objMap map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&objMap); err != nil {
+	if err := decodeObjectMap(r.Body, &objMap); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
@@ -548,13 +549,7 @@ func (h *ResourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// Update object
 	if err := h.store.Update(r.Context(), storeObj); err != nil {
 		h.logger.Error(err, "Update failed", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
-		if errors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, err.Error())
-		} else if errors.IsConflict(err) {
-			writeError(w, http.StatusConflict, err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
-		}
+		writeUpdateError(w, err, "update object")
 		return
 	}
 
@@ -672,7 +667,7 @@ func (h *ResourceHandler) ApplyPatch(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// This is an update via apply
 		if err := h.store.Update(r.Context(), storeObj); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
+			writeUpdateError(w, err, "update object")
 			return
 		}
 
@@ -799,11 +794,7 @@ func (h *ResourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 			if err := h.store.Update(r.Context(), toStore); err != nil {
 				h.logger.Error(err, "Delete failed - update with deletionTimestamp", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
-				if errors.IsConflict(err) {
-					writeError(w, http.StatusConflict, err.Error())
-				} else {
-					writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
-				}
+				writeUpdateError(w, err, "update object")
 				return
 			}
 
@@ -865,7 +856,7 @@ func toObjMap(obj interface{}) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("marshaling object: %w", err)
 	}
 	var m map[string]interface{}
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := kjson.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("unmarshaling object: %w", err)
 	}
 	return m, nil

@@ -8,6 +8,7 @@ import (
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -105,6 +106,49 @@ func TestBroadcaster_SubscribeReceivesLiveEvents(t *testing.T) {
 	event := drainUntil(t, eventCh, ns, "obj", eventTimeout)
 	if event.Type != storage.EventAdded {
 		t.Errorf("expected event type %s, got %s", storage.EventAdded, event.Type)
+	}
+}
+
+func TestSpannerStore_SelectorWatch(t *testing.T) {
+	_, store := setupBroadcasterWithStore(t)
+	ns := uniqueNS("bc-labels")
+	events, stop, err := store.Watch(context.Background(), storage.ListOptions{
+		Namespace: ns, ListOptions: metav1.ListOptions{LabelSelector: "app=selected"},
+	}, "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for _, obj := range []*unstructured.Unstructured{
+		newTestObject(withName("excluded"), withNamespace(ns), withLabels(map[string]string{"app": "other"})),
+		newTestObject(withName("included"), withNamespace(ns), withLabels(map[string]string{"app": "selected"})),
+	} {
+		if err := store.Create(context.Background(), obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Read every delivered event: a filtered watch must never surface the
+	// excluded object, so any event outside the namespace or selector fails.
+	deadline := time.After(eventTimeout)
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				t.Fatal("event channel closed unexpectedly")
+			}
+			if event.Object.GetNamespace() != ns {
+				t.Fatalf("selector watch delivered event outside %s: %s/%s", ns, event.Object.GetNamespace(), event.Object.GetName())
+			}
+			if event.Object.GetLabels()["app"] != "selected" {
+				t.Fatalf("selector watch delivered non-matching event: %s (labels %v)", event.Object.GetName(), event.Object.GetLabels())
+			}
+			if event.Object.GetName() != "included" {
+				t.Fatalf("selector watch delivered unexpected matching event: %s", event.Object.GetName())
+			}
+			return
+		case <-deadline:
+			t.Fatal("selector watch did not deliver the matching event")
+		}
 	}
 }
 

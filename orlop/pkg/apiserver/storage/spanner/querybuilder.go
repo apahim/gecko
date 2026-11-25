@@ -84,7 +84,10 @@ func (qb *queryBuilder) addLabelRequirement(req labels.Requirement) {
 		return
 	}
 
-	jsonPath := fmt.Sprintf(`JSON_VALUE(labels, '$["%s"]')`, key)
+	// Spanner's SQL JSONPath uses the standard quoted-member syntax ($."key"),
+	// not the bracket syntax ($["key"]). Label keys can contain dots and slashes,
+	// so they must be quoted as one member rather than appended as a path.
+	jsonPath := fmt.Sprintf(`JSON_VALUE(labels, '$."%s"')`, key)
 	values := req.Values()
 
 	switch req.Operator() {
