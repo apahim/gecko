@@ -260,6 +260,7 @@ func (s *ResourceStorage) Delete(ctx context.Context, name string, deleteValidat
 	}
 	typed, err := conversion.TypedOldObject(s.scheme, s.gvk, existing)
 	if err != nil {
+		s.logger.Error(err, "decode object for delete validation", "kind", s.gvk.Kind, "namespace", namespace, "name", name)
 		return nil, false, errors.NewInternalError(fmt.Errorf("decode object for delete validation"))
 	}
 	if v, ok := typed.(types.CustomValidator); ok {

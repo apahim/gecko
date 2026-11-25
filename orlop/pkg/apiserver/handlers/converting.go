@@ -1054,6 +1054,7 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 
 	typed, err := conversion.TypedOldObject(h.privateScheme, h.gvk, existing)
 	if err != nil {
+		h.logger.Error(err, "Delete failed - decode object for delete validation", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 		writeError(w, http.StatusInternalServerError, "failed to decode object for delete validation")
 		return
 	}
