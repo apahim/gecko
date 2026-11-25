@@ -268,9 +268,9 @@ func seedClusterBinding(t *testing.T, stores Stores, namespace string, permissio
 	}
 	binding := &privatev1.RoleBinding{
 		Spec: privatev1.RoleBindingSpec{
-			Subject:   "alice@example.com",
-			RoleRef:   privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
-			Condition: condition,
+			Subject:    "alice@example.com",
+			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+			Conditions: testRegionRequirements(condition),
 		},
 	}
 	binding.Name = "alice-viewer"
@@ -290,7 +290,7 @@ func authorizationTestObject(name, region string) *unstructured.Unstructured {
 			"name":      name,
 		},
 		"spec": map[string]interface{}{
-			"region": region,
+			"platform": map[string]interface{}{"gcp": map[string]interface{}{"region": region}},
 		},
 	}}
 }
@@ -330,4 +330,15 @@ func TestUnknownClusterChildRequestIsDenied(t *testing.T) {
 	if _, err := actionForRequest(http.MethodGet, parsed.plural, parsed.named); err == nil {
 		t.Fatal("expected authorization to reject an unknown child resource")
 	}
+}
+
+func testRegionRequirements(condition *string) []privatev1.RoleBindingRequirement {
+	if condition == nil {
+		return nil
+	}
+	values := []string{"us-east1"}
+	if *condition == "false" {
+		values = []string{}
+	}
+	return []privatev1.RoleBindingRequirement{{Key: "region", Operator: "In", Values: values}}
 }

@@ -232,6 +232,9 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 	privateObj.GetObjectKind().SetGroupVersionKind(h.gvk)
 
 	// Store private object (cast to client.Object)
+	if !h.authorizeFinalCandidate(w, r, privateObj.(client.Object)) {
+		return
+	}
 	if err := h.store.Create(r.Context(), privateObj.(client.Object)); err != nil {
 		h.logger.Error(err, "Create failed (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", accessor.GetName())
 		if errors.IsAlreadyExists(err) {
@@ -726,14 +729,9 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 	// (they are stripped by stripPrivateFieldsFromPublicInput), so finalizer removal
 	// only happens via the private API, which handles hard-delete in resource.go.
 
-	// Update object in storage (cast to client.Object)
-	if err := h.store.Update(r.Context(), privateObj.(client.Object)); err != nil {
-		h.logger.Error(err, "Update failed (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
-		writeUpdateError(w, err, "update object")
+	if !h.updateFinalCandidate(w, r, privateObj.(client.Object)) {
 		return
 	}
-
-	h.logger.Info("Updated (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 
 	// Convert back to public for response
 	responsePublic, err := h.convertToPublicObject(privateObj)
@@ -796,6 +794,9 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if !h.authorizeFinalCandidate(w, r, privateClientObj) {
+		return
+	}
 	if err := h.store.Update(r.Context(), privateClientObj); err != nil {
 		h.logger.Error(err, "Patch failed (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 		writeUpdateError(w, err, "update object")
@@ -1147,4 +1148,33 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(status)
+}
+
+// authorizeFinalCandidate checks the complete converted/defaulted object before
+// persistence, so request-body omissions cannot bypass attribute conditions.
+func (h *ConvertingResourceHandler) authorizeFinalCandidate(w http.ResponseWriter, r *http.Request, object client.Object) bool {
+	public, err := h.convertToPublicClientObject(object)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "unable to prepare candidate for authorization")
+		return false
+	}
+	return authorizeRequestObject(w, r, public)
+}
+
+// updateFinalCandidate persists only a fully authorized converted object.
+func (h *ConvertingResourceHandler) updateFinalCandidate(w http.ResponseWriter, r *http.Request, object client.Object) bool {
+	namespace, name := object.GetNamespace(), object.GetName()
+	// Update object in storage (cast to client.Object)
+	if !h.authorizeFinalCandidate(w, r, object) {
+		return false
+	}
+	if err := h.store.Update(r.Context(), object); err != nil {
+		h.logger.Error(err, "Update failed (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
+		writeUpdateError(w, err, "update object")
+		return false
+	}
+
+	h.logger.Info("Updated (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
+
+	return true
 }

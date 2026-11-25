@@ -96,6 +96,10 @@ func specClearObjectMap(obj runtime.Object) (map[string]interface{}, error) {
 // wherever the stored object also contains private state.
 func applyPublicFieldClears(object, clears, private, public map[string]interface{}) {
 	for key, value := range clears {
+		if array, ok := value.([]interface{}); ok {
+			object[key] = array
+			continue
+		}
 		if value == nil {
 			if retained := privateObjectFields(private[key], public[key]); len(retained) > 0 {
 				object[key] = retained
@@ -142,11 +146,16 @@ func privateObjectFields(private, public interface{}) map[string]interface{} {
 // publicFieldClears collects explicit nulls and keys removed from public object
 // maps. previous is the stored public spec for both PUT and PATCH; a key
 // present in previous but absent from current is treated as a deletion.
-// Array values pass through the existing conversion path; this helper does not
-// collect deletions inside array elements.
+// Explicit empty arrays replace stored slices because omitempty can erase them
+// during typed conversion. This helper does not collect deletions inside array
+// elements.
 func publicFieldClears(current, previous map[string]interface{}) map[string]interface{} {
 	clears := make(map[string]interface{})
 	for key, value := range current {
+		if array, ok := value.([]interface{}); ok && len(array) == 0 {
+			clears[key] = array
+			continue
+		}
 		if value == nil {
 			clears[key] = nil
 			continue

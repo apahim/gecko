@@ -96,7 +96,14 @@ func generatePolicySet(ctx context.Context, stores Stores, logger logr.Logger) (
 	return policies, nil
 }
 
+// Only structured requirements affect authorization. At this pre-preview cutover,
+// legacy raw condition fields are intentionally ignored: absent requirements
+// mean an unconditional grant, still scoped by subject, namespace and role.
 func policyForBinding(binding privatev1.RoleBinding, permissions []string) (*cedar.Policy, error) {
+	compiled, err := privatev1.CompileRoleBindingConditions(binding.Spec.Conditions)
+	if err != nil {
+		return nil, errInvalidAuthorizationBindingPolicy
+	}
 	actions := make([]string, 0, len(permissions))
 	for _, permission := range permissions {
 		action, ok := actionForPermission(permission)
@@ -112,8 +119,8 @@ func policyForBinding(binding privatev1.RoleBinding, permissions []string) (*ced
 		fmt.Sprintf("principal in NamespaceRole::%s", strconv.Quote(roleID)),
 		fmt.Sprintf("resource in Namespace::%s", strconv.Quote(binding.Namespace)),
 	}
-	if binding.Spec.Condition != nil && strings.TrimSpace(*binding.Spec.Condition) != "" {
-		conditions = append(conditions, "("+*binding.Spec.Condition+")")
+	if compiled != nil {
+		conditions = append(conditions, "("+*compiled+")")
 	}
 	policyText := fmt.Sprintf(`permit (
     principal,

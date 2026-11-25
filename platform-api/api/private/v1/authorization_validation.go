@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cedar-policy/cedar-go"
-	cedarast "github.com/cedar-policy/cedar-go/x/exp/ast"
 	"golang.org/x/text/unicode/norm"
 
 	orloptypes "github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
@@ -165,20 +163,27 @@ func (r *RoleBinding) ValidateCreate(ctx context.Context) error {
 	if err := validateRoleReference(ctx, r.Namespace, r.Spec.RoleRef); err != nil {
 		return err
 	}
-	return validateRoleBindingCondition(r.Spec.Condition)
+	_, err := CompileRoleBindingConditions(r.Spec.Conditions)
+	return err
 }
 
 func (r *RoleBinding) ValidateUpdate(ctx context.Context, oldObj runtime.Object) error {
-	if _, ok := oldObj.(*RoleBinding); !ok {
+	old, ok := oldObj.(*RoleBinding)
+	if !ok {
 		return fmt.Errorf("expected old object to be *RoleBinding, got %T", oldObj)
 	}
+	if r.Name != old.Name || r.Namespace != old.Namespace {
+		return fmt.Errorf("metadata name and namespace are immutable")
+	}
+
 	if err := r.validateSubject(); err != nil {
 		return err
 	}
 	if err := validateRoleReference(ctx, r.Namespace, r.Spec.RoleRef); err != nil {
 		return err
 	}
-	return validateRoleBindingCondition(r.Spec.Condition)
+	_, err := CompileRoleBindingConditions(r.Spec.Conditions)
+	return err
 }
 
 func (r *RoleBinding) ValidateDelete(_ context.Context) error { return nil }
@@ -230,56 +235,6 @@ func validateRoleReference(ctx context.Context, namespace string, ref RoleRef) e
 		return fmt.Errorf("spec.roleRef.kind must be PlatformRole or Role")
 	}
 	return nil
-}
-
-func validateRoleBindingCondition(condition *string) error {
-	if condition == nil || strings.TrimSpace(*condition) == "" {
-		return nil
-	}
-
-	// Parse the entire source as a list: Policy.UnmarshalCedar parses one
-	// statement but does not reject trailing policy text.
-	var policies cedar.PolicyList
-	if err := policies.UnmarshalCedar([]byte(conditionValidationPolicy(*condition))); err != nil {
-		return fmt.Errorf("spec.condition is not a valid Cedar expression: %w", err)
-	}
-	if len(policies) == 0 {
-		return fmt.Errorf("spec.condition did not produce a Cedar policy")
-	}
-	if len(policies) > 1 {
-		return fmt.Errorf("spec.condition must be a single Cedar condition expression; trailing Cedar policy statements are not allowed")
-	}
-	if policyReferencesNamespaceEntity(policies[0]) {
-		return fmt.Errorf("spec.condition must not reference Namespace:: entities")
-	}
-	return nil
-}
-
-func conditionValidationPolicy(condition string) string {
-	return fmt.Sprintf(`permit (principal, action, resource) when { %s };`, condition)
-}
-
-func policyReferencesNamespaceEntity(policy *cedar.Policy) bool {
-	parsed := (*cedarast.Policy)(policy.AST())
-	for _, condition := range parsed.Conditions {
-		found := false
-		cedarast.Inspect(cedarast.NewNode(condition.Body), func(node cedarast.IsNode) bool {
-			value, ok := node.(cedarast.NodeValue)
-			if !ok {
-				return true
-			}
-			entity, ok := value.Value.(cedar.EntityUID)
-			if ok && entity.Type == cedar.EntityType("Namespace") {
-				found = true
-				return false
-			}
-			return true
-		})
-		if found {
-			return true
-		}
-	}
-	return false
 }
 
 var _ orloptypes.CustomValidator = (*Role)(nil)

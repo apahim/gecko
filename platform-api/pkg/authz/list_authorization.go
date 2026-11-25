@@ -16,6 +16,7 @@ import (
 // HasNamespacePermission reports whether email has a binding in namespace
 // whose referenced role grants action. RoleBinding conditions are deliberately
 // not evaluated here: list conditions are applied to each returned object.
+// Invalid structured requirements are excluded even from coarse admission.
 func (a *Authorizer) HasNamespacePermission(ctx context.Context, email string, action Action, namespace string) (bool, error) {
 	if email == "" {
 		return false, fmt.Errorf("principal is empty")
@@ -33,6 +34,9 @@ func (a *Authorizer) HasNamespacePermission(ctx context.Context, email string, a
 	platformRoles := make(map[string]privatev1.PlatformRole)
 	for _, binding := range bindings {
 		if binding.Namespace != namespace {
+			continue
+		}
+		if _, err := privatev1.CompileRoleBindingConditions(binding.Spec.Conditions); err != nil {
 			continue
 		}
 		permissions, valid, err := permissionsForBindingFromStores(ctx, a.stores, binding, roles, platformRoles)

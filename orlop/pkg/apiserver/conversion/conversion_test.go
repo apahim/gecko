@@ -1220,3 +1220,34 @@ func TestTypedOldObject_ErrorsOnUnregisteredKind(t *testing.T) {
 		t.Fatal("expected an error for a kind missing from the scheme, got nil")
 	}
 }
+
+func TestTypedOldObject_ProjectsUnstructuredList(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := testv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	gvk := testv1.GroupVersion.WithKind("ObjectList")
+	input := &unstructured.UnstructuredList{Object: map[string]interface{}{
+		"apiVersion": gvk.GroupVersion().String(), "kind": gvk.Kind,
+		"metadata": map[string]interface{}{"resourceVersion": "12", "continue": "next", "remainingItemCount": int64(2)},
+	}, Items: []unstructured.Unstructured{{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "kept"}, "spec": map[string]interface{}{"publicField": "value", "obsolete": "hidden"}}}}}
+	output, err := TypedOldObject(scheme, gvk, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := output.(*testv1.ObjectList)
+	if list.ResourceVersion != "12" || list.Continue != "next" || list.RemainingItemCount == nil || *list.RemainingItemCount != 2 {
+		t.Fatal("list metadata lost")
+	}
+	if len(list.Items) != 1 || list.Items[0].Name != "kept" || list.Items[0].Spec.PublicField != "value" {
+		t.Fatal("known list item fields lost")
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(input.Items[0].Object, "spec", "obsolete"); !found {
+		t.Fatal("source list mutated")
+	}
+	malformed := input.DeepCopy()
+	malformed.Items[0].Object["spec"] = "invalid"
+	if _, err := TypedOldObject(scheme, gvk, malformed); err == nil {
+		t.Fatal("invalid list accepted")
+	}
+}
