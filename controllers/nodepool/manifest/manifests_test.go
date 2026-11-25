@@ -1,10 +1,13 @@
 package manifest
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 func TestBuild_HappyPath(t *testing.T) {
@@ -28,8 +31,7 @@ func TestBuild_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, manifests)
 
-	// Exactly 1 manifest
-	require.Len(t, manifests, 1)
+	require.Len(t, manifests, 2)
 
 	// Unmarshal manifest and check fields
 	var nodePool map[string]any
@@ -121,7 +123,7 @@ func TestBuild_DiskDefaults(t *testing.T) {
 	require.Equal(t, "pd-ssd", bootDisk["diskType"])
 }
 
-func TestBuild_ManifestCount(t *testing.T) {
+func TestBuild_CredentialHelperOnly(t *testing.T) {
 	input := Input{
 		NodePoolID:         "np-count",
 		NodePoolName:       "np-count",
@@ -134,5 +136,31 @@ func TestBuild_ManifestCount(t *testing.T) {
 
 	manifests, err := Build(input)
 	require.NoError(t, err)
-	require.Len(t, manifests, 1, "expected exactly 1 manifest (the NodePool CR)")
+	require.Len(t, manifests, 2)
+
+	var nodePool map[string]any
+	require.NoError(t, json.Unmarshal(manifests[0], &nodePool))
+	var configMap corev1.ConfigMap
+	require.NoError(t, json.Unmarshal(manifests[1], &configMap))
+	require.Equal(t, "v1", configMap.APIVersion)
+	require.Equal(t, "ConfigMap", configMap.Kind)
+	require.Equal(t, "clusters-cid", configMap.Namespace)
+	require.NotEmpty(t, configMap.Name)
+	require.Equal(t, []any{map[string]any{"name": configMap.Name}}, nodePool["spec"].(map[string]any)["config"])
+	require.Len(t, configMap.Data, 1)
+
+	var machineConfig map[string]any
+	require.NoError(t, json.Unmarshal([]byte(configMap.Data["config"]), &machineConfig))
+	require.Equal(t, "MachineConfig", machineConfig["kind"])
+	require.Equal(t, map[string]any{
+		"ignition": map[string]any{"version": "3.2.0"},
+		"storage": map[string]any{"files": []any{map[string]any{
+			"path":      "/usr/local/bin/docker-credential-gcp",
+			"mode":      float64(0o755),
+			"overwrite": true,
+			"user":      map[string]any{"name": "root"},
+			"group":     map[string]any{"name": "root"},
+			"contents":  map[string]any{"source": "data:;base64," + base64.StdEncoding.EncodeToString(credentialHelper)},
+		}}},
+	}, machineConfig["spec"].(map[string]any)["config"])
 }
