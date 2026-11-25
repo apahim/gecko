@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -393,6 +394,15 @@ func (s *MemoryStore) Update(ctx context.Context, obj client.Object) error {
 	newRV, err := s.getResourceVersion(obj)
 	if err != nil {
 		return err
+	}
+
+	// A supplied revision must be a positive integer, matching the Postgres
+	// and Spanner contracts; anything else is a client error, not a conflict.
+	if newRV != "" {
+		parsedRV, err := strconv.ParseInt(newRV, 10, 64)
+		if err != nil || parsedRV <= 0 {
+			return errors.NewBadRequest("invalid resourceVersion")
+		}
 	}
 
 	if newRV != existingRV {

@@ -287,7 +287,7 @@ func (h *ResourceHandler) processPatchedObject(w http.ResponseWriter, r *http.Re
 
 	// Update object
 	if err := h.store.Update(r.Context(), storeObj); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
+		writeUpdateError(w, err, "update object")
 		return
 	}
 

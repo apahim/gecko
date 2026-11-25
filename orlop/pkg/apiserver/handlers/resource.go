@@ -667,7 +667,7 @@ func (h *ResourceHandler) ApplyPatch(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// This is an update via apply
 		if err := h.store.Update(r.Context(), storeObj); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
+			writeUpdateError(w, err, "update object")
 			return
 		}
 
@@ -799,11 +799,7 @@ func (h *ResourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 			if err := h.store.Update(r.Context(), toStore); err != nil {
 				h.logger.Error(err, "Delete failed - update with deletionTimestamp", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
-				if errors.IsConflict(err) {
-					writeError(w, http.StatusConflict, err.Error())
-				} else {
-					writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
-				}
+				writeUpdateError(w, err, "update object")
 				return
 			}
 

@@ -19,6 +19,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -270,9 +271,181 @@ func TestConvertingMergePatchCompatibility(t *testing.T) {
 	}
 }
 
+// privateObject is the stored private counterpart of object: the same public
+// members plus spec fields that exist only in the private schema.
+type privateObject struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              privateSpec  `json:"spec,omitempty"`
+	Status            objectStatus `json:"status,omitempty"`
+}
+
+type privateSpec struct {
+	Field    string `json:"field,omitempty"`
+	Value    int    `json:"value,omitempty"`
+	SafeName string `json:"safeName,omitempty"`
+}
+
+func (m *privateObject) DeepCopyObject() runtime.Object {
+	if m == nil {
+		return nil
+	}
+	out := &privateObject{}
+	*out = *m
+	out.TypeMeta = m.TypeMeta
+	m.DeepCopyInto(&out.ObjectMeta)
+	out.Spec = m.Spec
+	out.Status = m.Status
+	return out
+}
+
+// privateSpecPatchFixture builds a converting handler over distinct public and
+// private schemes so private-only spec members are actually exercised.
+func privateSpecPatchFixture(t *testing.T) (*ConvertingResourceHandler, *publicPatchStore, *privateObject) {
+	t.Helper()
+	publicScheme := newObjectScheme()
+	privateScheme := runtime.NewScheme()
+	privateScheme.AddKnownTypeWithName(objectGVK, &privateObject{})
+	metav1.AddToGroupVersion(privateScheme, objectGVK.GroupVersion())
+
+	memoryStore := memory.NewMemoryStore("objects", privateScheme, objectGVK)
+	existing := &privateObject{
+		TypeMeta:   metav1.TypeMeta{APIVersion: objectGVK.GroupVersion().String(), Kind: objectGVK.Kind},
+		ObjectMeta: metav1.ObjectMeta{Name: "patch", Namespace: "default", UID: "original-uid", Generation: 4, Finalizers: []string{"private.test/finalizer"}},
+		Spec:       privateSpec{Field: "original", Value: 7, SafeName: "controller-set"},
+		Status:     objectStatus{PlacementResult: &statusPlacementResult{ManagementClusterName: "controller"}},
+	}
+	if err := memoryStore.Create(t.Context(), existing); err != nil {
+		t.Fatal(err)
+	}
+	store := &publicPatchStore{ResourceStore: memoryStore}
+	h := NewConvertingResourceHandler(
+		store,
+		newPermissiveProcessor(t),
+		conversion.NewConverter(publicScheme, privateScheme, "private.test/"),
+		objectGVK,
+		"objects",
+		publicScheme,
+		privateScheme,
+		nil,
+		logr.FromSlogHandler(testLogHandler{t: t}),
+	)
+	return h, store, existing
+}
+
+func TestConvertingJSONPatchPreservesPrivateOnlySpecMembers(t *testing.T) {
+	for _, patch := range []string{
+		`[{"op":"replace","path":"/spec/field","value":"patched"}]`,
+		`[{"op":"replace","path":"/spec","value":{"field":"patched"}}]`,
+	} {
+		t.Run(patch, func(t *testing.T) {
+			h, store, before := privateSpecPatchFixture(t)
+			rr := publicPatchRequest(t, h, t.Context(), constants.ContentTypeJSONPatch, patch)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("PATCH: %d %s", rr.Code, rr.Body)
+			}
+			after, err := store.Get(t.Context(), "default", "patch")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored := after.(*privateObject)
+			if stored.Spec.SafeName != before.Spec.SafeName {
+				t.Fatalf("private-only spec member changed: %q", stored.Spec.SafeName)
+			}
+			if stored.Spec.Field != "patched" {
+				t.Fatalf("public spec member not patched: %#v", stored.Spec)
+			}
+		})
+	}
+
+	// Root replacement must also seed the private spec from the stored object.
+	// json-patch v5 only replaces the document through `replace` at ""; `move`
+	// or `copy` to "" stashes the value under a "" key that pruning removes,
+	// so those destinations are silent no-ops rather than replacements.
+	t.Run("root replacement", func(t *testing.T) {
+		h, store, before := privateSpecPatchFixture(t)
+		router := chi.NewRouter()
+		router.Get("/namespaces/{namespace}/objects/{name}", h.Get)
+		router.Patch("/namespaces/{namespace}/objects/{name}", h.Patch)
+
+		getRR := httptest.NewRecorder()
+		router.ServeHTTP(getRR, httptest.NewRequest(http.MethodGet, "/namespaces/default/objects/patch", nil))
+		if getRR.Code != http.StatusOK {
+			t.Fatalf("GET: %d %s", getRR.Code, getRR.Body)
+		}
+		var current map[string]interface{}
+		if err := json.Unmarshal(getRR.Body.Bytes(), &current); err != nil {
+			t.Fatal(err)
+		}
+		spec, _ := current["spec"].(map[string]interface{})
+		spec["field"] = "patched"
+		replacement, err := json.Marshal(current)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req := httptest.NewRequest(http.MethodPatch, "/namespaces/default/objects/patch", strings.NewReader(`[{"op":"replace","path":"","value":`+string(replacement)+`}]`))
+		req.Header.Set(constants.HeaderContentType, constants.ContentTypeJSONPatch)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("PATCH: %d %s", rr.Code, rr.Body)
+		}
+		after, err := store.Get(t.Context(), "default", "patch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored := after.(*privateObject)
+		if stored.Spec.SafeName != before.Spec.SafeName {
+			t.Fatalf("private-only spec member changed: %q", stored.Spec.SafeName)
+		}
+		if stored.Spec.Field != "patched" {
+			t.Fatalf("public spec member not patched: %#v, response: %s", stored.Spec, rr.Body.String())
+		}
+	})
+}
+
+func TestConvertingMutationRejectsInvalidResourceVersion(t *testing.T) {
+	t.Run("merge patch", func(t *testing.T) {
+		h, store, before := publicPatchFixture(t)
+		rr := publicPatchRequest(t, h, t.Context(), constants.ContentTypeMergePatch, `{"metadata":{"resourceVersion":"abc"},"spec":{"field":"must-not-write"}}`)
+		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "invalid resourceVersion") {
+			t.Fatalf("merge PATCH: %d %s", rr.Code, rr.Body)
+		}
+		after, err := store.Get(t.Context(), "default", "patch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.(*object).Spec.Field != before.Spec.Field {
+			t.Fatal("rejected merge patch changed the stored object")
+		}
+	})
+
+	t.Run("put", func(t *testing.T) {
+		h, store, before := publicPatchFixture(t)
+		router := chi.NewRouter()
+		router.Put("/namespaces/{namespace}/objects/{name}", h.Update)
+		body := `{"apiVersion":"test.io/v1","kind":"Object","metadata":{"name":"patch","namespace":"default","resourceVersion":"abc"},"spec":{"field":"must-not-write"}}`
+		req := httptest.NewRequest(http.MethodPut, "/namespaces/default/objects/patch", strings.NewReader(body))
+		req.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "invalid resourceVersion") {
+			t.Fatalf("PUT: %d %s", rr.Code, rr.Body)
+		}
+		after, err := store.Get(t.Context(), "default", "patch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.(*object).Spec.Field != before.Spec.Field {
+			t.Fatal("rejected PUT changed the stored object")
+		}
+	})
+}
+
 func TestConvertingJSONPatchNoOpGeneration(t *testing.T) {
 	h, store, before := publicPatchFixture(t)
-	rr := publicPatchRequest(t, h, t.Context(), constants.ContentTypeJSONPatch, `[{"op":"test","path":"/metadata/uid","value":"original-uid"},{"op":"replace","path":"/spec/value","value":9007199254740993}]`)
+	rr := publicPatchRequest(t, h, t.Context(), constants.ContentTypeJSONPatch, `[{"op":"test","path":"/metadata/uid","value":"original-uid"},{"op":"test","path":"/spec/value","value":9007199254740993},{"op":"replace","path":"/spec/value","value":9007199254740993}]`)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("PATCH: %d %s", rr.Code, rr.Body)
 	}

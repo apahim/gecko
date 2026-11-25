@@ -729,13 +729,7 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 	// Update object in storage (cast to client.Object)
 	if err := h.store.Update(r.Context(), privateObj.(client.Object)); err != nil {
 		h.logger.Error(err, "Update failed (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
-		if errors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, err.Error())
-		} else if errors.IsConflict(err) {
-			writeError(w, http.StatusConflict, err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
-		}
+		writeUpdateError(w, err, "update object")
 		return
 	}
 
@@ -767,7 +761,7 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 	namespace := chi.URLParam(r, constants.URLParamNamespace)
 	name := chi.URLParam(r, constants.URLParamName)
 	contentType := r.Header.Get(constants.HeaderContentType)
-	h.logger.V(1).Info("[PATCH-CONVERTING] %s namespace=%s name=%s content-type=%s", h.gvk.Kind, namespace, name, contentType)
+	h.logger.V(1).Info("Patch (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name, "contentType", contentType)
 
 	input, httpStatus, err := h.preparePatch(r, namespace, name)
 	if err != nil {
@@ -803,18 +797,12 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.store.Update(r.Context(), privateClientObj); err != nil {
-		h.logger.V(1).Info("[PATCH-CONVERTING] %s namespace=%s name=%s error=%v", h.gvk.Kind, namespace, name, err)
-		if errors.IsNotFound(err) {
-			writeError(w, http.StatusNotFound, err.Error())
-		} else if errors.IsConflict(err) {
-			writeError(w, http.StatusConflict, err.Error())
-		} else {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
-		}
+		h.logger.Error(err, "Patch failed (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
+		writeUpdateError(w, err, "update object")
 		return
 	}
 
-	h.logger.V(1).Info("[PATCH-CONVERTING] %s namespace=%s name=%s status=patched", h.gvk.Kind, namespace, name)
+	h.logger.V(1).Info("Patched (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 
 	responsePublic, err := h.convertToPublicObject(privateObj)
 	if err != nil {
@@ -1098,11 +1086,7 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 
 			if err := h.store.Update(r.Context(), toStore); err != nil {
 				h.logger.Error(err, "Delete failed - update with deletionTimestamp", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
-				if errors.IsConflict(err) {
-					writeError(w, http.StatusConflict, err.Error())
-				} else {
-					writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
-				}
+				writeUpdateError(w, err, "update object")
 				return
 			}
 
