@@ -1,6 +1,13 @@
 package v1
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced
@@ -13,6 +20,33 @@ type Object struct {
 	Spec ObjectSpec `json:"spec,omitempty"`
 	// +orlop:public
 	Status ObjectStatus `json:"status,omitempty"`
+}
+
+// ValidateCreate rejects spec.publicField values prefixed with invalid-create
+// so handler tests can exercise create-path custom validation.
+func (o *Object) ValidateCreate(_ context.Context) error {
+	if strings.HasPrefix(o.Spec.PublicField, "invalid-create") {
+		return fmt.Errorf("spec.publicField is rejected by create validation")
+	}
+	return nil
+}
+
+// ValidateUpdate rejects spec.publicField values prefixed with invalid-update
+// so handler tests can exercise update-path custom validation.
+func (o *Object) ValidateUpdate(_ context.Context, oldObj runtime.Object) error {
+	old, ok := oldObj.(*Object)
+	if !ok {
+		return fmt.Errorf("expected an Object old object")
+	}
+	if strings.HasPrefix(old.Spec.PublicField, "invalid-update") || strings.HasPrefix(o.Spec.PublicField, "invalid-update") {
+		return fmt.Errorf("spec.publicField is rejected by update validation")
+	}
+	return nil
+}
+
+// ValidateDelete permits deletion; it completes the CustomValidator interface.
+func (o *Object) ValidateDelete(_ context.Context) error {
+	return nil
 }
 
 // +kubebuilder:object:root=true
