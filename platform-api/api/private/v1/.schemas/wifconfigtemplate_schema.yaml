@@ -32,28 +32,29 @@ properties:
                   role placeholders.
                 maxLength: 128
                 type: string
-              maxCustomRoleIDLength:
-                description: maxCustomRoleIDLength bounds rendered custom role identifiers.
+              maximumCustomRoleIDLength:
+                description: maximumCustomRoleIDLength bounds rendered custom role
+                  identifiers.
                 format: int32
                 maximum: 64
                 minimum: 1
                 type: integer
-              maxInfraIDLength:
-                description: maxInfraIDLength bounds the installation identifier.
+              maximumInfraIDLength:
+                description: maximumInfraIDLength bounds the installation identifier.
                 format: int32
                 maximum: 12
                 minimum: 1
                 type: integer
-              maxServiceAccountIDLength:
-                description: maxServiceAccountIDLength bounds rendered service account
-                  identifiers.
+              maximumServiceAccountIDLength:
+                description: maximumServiceAccountIDLength bounds rendered service
+                  account identifiers.
                 format: int32
                 maximum: 30
                 minimum: 6
                 type: integer
-              maxWorkloadIdentityIDLength:
-                description: maxWorkloadIdentityIDLength bounds rendered pool and
-                  provider identifiers.
+              maximumWorkloadIdentityIDLength:
+                description: maximumWorkloadIdentityIDLength bounds rendered pool
+                  and provider identifiers.
                 format: int32
                 maximum: 32
                 minimum: 4
@@ -70,10 +71,10 @@ properties:
                 type: string
             required:
             - customRoleIDTemplate
-            - maxCustomRoleIDLength
-            - maxInfraIDLength
-            - maxServiceAccountIDLength
-            - maxWorkloadIdentityIDLength
+            - maximumCustomRoleIDLength
+            - maximumInfraIDLength
+            - maximumServiceAccountIDLength
+            - maximumWorkloadIdentityIDLength
             - workloadIdentityPoolIDTemplate
             - workloadIdentityProviderIDTemplate
             type: object

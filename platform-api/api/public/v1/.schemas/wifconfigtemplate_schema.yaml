@@ -29,22 +29,22 @@ properties:
               customRoleIDTemplate:
                 maxLength: 128
                 type: string
-              maxCustomRoleIDLength:
+              maximumCustomRoleIDLength:
                 format: int32
                 maximum: 64
                 minimum: 1
                 type: integer
-              maxInfraIDLength:
+              maximumInfraIDLength:
                 format: int32
                 maximum: 12
                 minimum: 1
                 type: integer
-              maxServiceAccountIDLength:
+              maximumServiceAccountIDLength:
                 format: int32
                 maximum: 30
                 minimum: 6
                 type: integer
-              maxWorkloadIdentityIDLength:
+              maximumWorkloadIdentityIDLength:
                 format: int32
                 maximum: 32
                 minimum: 4
@@ -57,10 +57,10 @@ properties:
                 type: string
             required:
             - customRoleIDTemplate
-            - maxCustomRoleIDLength
-            - maxInfraIDLength
-            - maxServiceAccountIDLength
-            - maxWorkloadIdentityIDLength
+            - maximumCustomRoleIDLength
+            - maximumInfraIDLength
+            - maximumServiceAccountIDLength
+            - maximumWorkloadIdentityIDLength
             - workloadIdentityPoolIDTemplate
             - workloadIdentityProviderIDTemplate
             type: object

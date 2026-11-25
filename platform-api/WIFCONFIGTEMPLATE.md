@@ -32,8 +32,10 @@ or a cloud IAM controller.
 
 The digest is `sha256:` followed by 64 lowercase hexadecimal characters. Its input
 is UTF-8 Go `encoding/json` output of a `WIFConfigTemplateSpec` with `verified`
-omitted, using field order `schemaVersion`, then `iam`, and the declared typed IAM
-field order. There are no insignificant whitespace characters or trailing newline.
+omitted, enveloped as `schemaVersion`, then `iam`, then re-encoded through generic
+JSON so that every object key sorts alphabetically. The digest therefore depends
+only on contract content, never on Go struct declaration order at any nesting
+level. There are no insignificant whitespace characters or trailing newline.
 This is **not RFC 8785**. Resource metadata, release-boundary name and verification
 are not part of the executable contract.
 

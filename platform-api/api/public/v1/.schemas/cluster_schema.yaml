@@ -218,9 +218,11 @@ properties:
                           type: string
                         name:
                           maxLength: 32
+                          minLength: 1
                           type: string
                         uid:
                           maxLength: 128
+                          minLength: 1
                           type: string
                       required:
                       - digest
@@ -543,8 +545,9 @@ properties:
         description: |-
           IAMRequirementsStatus is a read-only projection of known release contracts,
           not a dispatch receipt, cloud attestation, or authorization for an IAM update.
-          A client must re-read all related resources and require Complete at the same
-          object generation before using this view to prepare a permission retention plan.
+          A client must re-read all related resources, require Complete at the same
+          object generation, and reject missing, stale, or future lastRefreshTime
+          values before using this view to prepare a permission retention plan.
         properties:
           clusterUID:
             maxLength: 128
@@ -573,9 +576,11 @@ properties:
                     type: string
                   name:
                     maxLength: 32
+                    minLength: 1
                     type: string
                   uid:
                     maxLength: 128
+                    minLength: 1
                     type: string
                 required:
                 - digest
@@ -622,9 +627,11 @@ properties:
                     type: string
                   name:
                     maxLength: 32
+                    minLength: 1
                     type: string
                   uid:
                     maxLength: 128
+                    minLength: 1
                     type: string
                 required:
                 - digest

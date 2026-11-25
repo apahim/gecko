@@ -4,8 +4,9 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // IAMRequirementsStatus is a read-only projection of known release contracts,
 // not a dispatch receipt, cloud attestation, or authorization for an IAM update.
-// A client must re-read all related resources and require Complete at the same
-// object generation before using this view to prepare a permission retention plan.
+// A client must re-read all related resources, require Complete at the same
+// object generation, and reject missing, stale, or future lastRefreshTime
+// values before using this view to prepare a permission retention plan.
 type IAMRequirementsStatus struct {
 	// state is Incomplete when known work cannot be fully identified. Missing
 	// status is also incomplete; it never means that no permissions are needed.

@@ -11,10 +11,10 @@ iam:
     - ingress-op
     - nodepool-mgmt
   naming:
-    maxInfraIDLength: 12
-    maxCustomRoleIDLength: 64
-    maxServiceAccountIDLength: 30
-    maxWorkloadIdentityIDLength: 32
+    maximumInfraIDLength: 12
+    maximumCustomRoleIDLength: 64
+    maximumServiceAccountIDLength: 30
+    maximumWorkloadIdentityIDLength: 32
     customRoleIDTemplate: "hcp_{infraIDHex}_{role}"
     workloadIdentityPoolIDTemplate: "{infraID}-wi-pool"
     workloadIdentityProviderIDTemplate: "{infraID}-k8s-provider"

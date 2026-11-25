@@ -41,9 +41,11 @@ properties:
             type: string
           name:
             maxLength: 32
+            minLength: 1
             type: string
           uid:
             maxLength: 128
+            minLength: 1
             type: string
         required:
         - digest

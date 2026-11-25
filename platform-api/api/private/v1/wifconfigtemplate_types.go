@@ -22,7 +22,10 @@ type WIFConfigTemplateList struct {
 	metav1.TypeMeta `json:",inline"`
 	// +optional
 	metav1.ListMeta `json:"metadata,omitempty"`
+	// items is the list of WIFConfigTemplates.
 	// +orlop:public
+	// +required
+	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=10000
 	Items []WIFConfigTemplate `json:"items"`
 }
@@ -98,30 +101,30 @@ type WIFConfigIAM struct {
 
 // WIFConfigNaming bounds deterministic naming without truncation.
 type WIFConfigNaming struct {
-	// maxInfraIDLength bounds the installation identifier.
+	// maximumInfraIDLength bounds the installation identifier.
 	// +orlop:public
 	// +required
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=12
-	MaxInfraIDLength int32 `json:"maxInfraIDLength"`
-	// maxCustomRoleIDLength bounds rendered custom role identifiers.
+	MaximumInfraIDLength int32 `json:"maximumInfraIDLength"`
+	// maximumCustomRoleIDLength bounds rendered custom role identifiers.
 	// +orlop:public
 	// +required
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=64
-	MaxCustomRoleIDLength int32 `json:"maxCustomRoleIDLength"`
-	// maxServiceAccountIDLength bounds rendered service account identifiers.
+	MaximumCustomRoleIDLength int32 `json:"maximumCustomRoleIDLength"`
+	// maximumServiceAccountIDLength bounds rendered service account identifiers.
 	// +orlop:public
 	// +required
 	// +kubebuilder:validation:Minimum=6
 	// +kubebuilder:validation:Maximum=30
-	MaxServiceAccountIDLength int32 `json:"maxServiceAccountIDLength"`
-	// maxWorkloadIdentityIDLength bounds rendered pool and provider identifiers.
+	MaximumServiceAccountIDLength int32 `json:"maximumServiceAccountIDLength"`
+	// maximumWorkloadIdentityIDLength bounds rendered pool and provider identifiers.
 	// +orlop:public
 	// +required
 	// +kubebuilder:validation:Minimum=4
 	// +kubebuilder:validation:Maximum=32
-	MaxWorkloadIdentityIDLength int32 `json:"maxWorkloadIdentityIDLength"`
+	MaximumWorkloadIdentityIDLength int32 `json:"maximumWorkloadIdentityIDLength"`
 	// customRoleIDTemplate uses the supported infraIDHex and role placeholders.
 	// +orlop:public
 	// +required
@@ -267,11 +270,13 @@ type WIFConfigTemplateReference struct {
 	// name is the canonical release boundary of the template.
 	// +orlop:public
 	// +required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=32
 	Name string `json:"name"`
 	// uid identifies the exact retained template resource.
 	// +orlop:public
 	// +required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	UID string `json:"uid"`
 	// digest is the SHA-256 of the canonical schemaVersion and IAM contract.

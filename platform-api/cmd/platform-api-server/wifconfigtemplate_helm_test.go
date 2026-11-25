@@ -37,7 +37,7 @@ func TestWIFConfigTemplateHelmRendering(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if digest != "sha256:6d14a6155e6e2ced361919c4fa0e615e6863b8cb3b3ade0d7e52032deb613406" {
+		if digest != "sha256:71d9aaf90729b0365610a16bd46d7cb4d4582e1e69b79f114f968086017d1af4" {
 			t.Fatal("rendered IAM permissions/trust changed")
 		}
 		for _, guard := range []string{"Prune=false", "Delete=false", "SkipDryRunOnMissingResource=true"} {

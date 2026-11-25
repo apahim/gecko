@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -25,6 +26,19 @@ var (
 )
 
 var wifComponents = []string{"cloud-controller", "cloud-network", "ctrlplane-op", "gcp-pd-csi", "image-registry", "ingress-op", "nodepool-mgmt"}
+
+// wifImpersonationPermissions are the service-account impersonation and
+// credential-minting permissions. Custom roles are always project-bound, so
+// any of these would break the exact-worker-account actAs boundary that only
+// spec.iam.serviceAccountRoleBindings may establish.
+var wifImpersonationPermissions = map[string]bool{
+	"iam.serviceAccounts.actAs":          true,
+	"iam.serviceAccounts.getAccessToken": true,
+	"iam.serviceAccounts.signJwt":        true,
+	"iam.serviceAccounts.signBlob":       true,
+	"iam.serviceAccounts.signBytes":      true,
+	"iam.serviceAccountKeys.create":      true,
+}
 
 // ValidateCreate checks structure, completeness and supported execution semantics.
 func (w *WIFConfigTemplate) ValidateCreate(_ context.Context) error {
@@ -102,13 +116,13 @@ func validateWIFConfigSpec(spec WIFConfigTemplateSpec) error {
 
 func validateWIFNaming(iam WIFConfigIAM) error {
 	n := iam.Naming
-	if n.MaxInfraIDLength < 1 || n.MaxInfraIDLength > 12 || n.MaxCustomRoleIDLength < 1 || n.MaxCustomRoleIDLength > 64 || n.MaxServiceAccountIDLength < 6 || n.MaxServiceAccountIDLength > 30 || n.MaxWorkloadIdentityIDLength < 4 || n.MaxWorkloadIdentityIDLength > 32 {
+	if n.MaximumInfraIDLength < 1 || n.MaximumInfraIDLength > 12 || n.MaximumCustomRoleIDLength < 1 || n.MaximumCustomRoleIDLength > 64 || n.MaximumServiceAccountIDLength < 6 || n.MaximumServiceAccountIDLength > 30 || n.MaximumWorkloadIdentityIDLength < 4 || n.MaximumWorkloadIdentityIDLength > 32 {
 		return fmt.Errorf("spec.iam.naming contains unsupported identifier bounds")
 	}
 	if n.CustomRoleIDTemplate != "hcp_{infraIDHex}_{role}" || n.WorkloadIdentityPoolIDTemplate != "{infraID}-wi-pool" || n.WorkloadIdentityProviderIDTemplate != "{infraID}-k8s-provider" {
 		return fmt.Errorf("spec.iam.naming must use the supported schemaVersion 1 naming templates")
 	}
-	if n.MaxInfraIDLength+int32(len("-k8s-provider")) > n.MaxWorkloadIdentityIDLength {
+	if n.MaximumInfraIDLength+int32(len("-k8s-provider")) > n.MaximumWorkloadIdentityIDLength {
 		return fmt.Errorf("spec.iam.naming cannot render the maximum infra ID without truncation")
 	}
 	accounts := map[string]bool{}
@@ -116,10 +130,20 @@ func validateWIFNaming(iam WIFConfigIAM) error {
 		if !slices.Contains(wifComponents, account.Name) || accounts[account.Name] || account.AccountIDTemplate != "{infraID}-"+account.Name {
 			return fmt.Errorf("spec.iam.serviceAccounts must contain unique supported components and account templates")
 		}
-		if n.MaxInfraIDLength+1+int32(len(account.Name)) > n.MaxServiceAccountIDLength {
+		if n.MaximumInfraIDLength+1+int32(len(account.Name)) > n.MaximumServiceAccountIDLength {
 			return fmt.Errorf("spec.iam.serviceAccounts cannot render the maximum infra ID without truncation")
 		}
-		if !uniqueWIFStrings(account.WorkloadIdentitySubjects, 16, 256, wifSubject.MatchString) {
+		if !uniqueWIFStrings(account.WorkloadIdentitySubjects, 16, 256, func(subject string) bool {
+			// The regex bounds the guest subject charset and the total length;
+			// the namespace and service-account name segments are additionally
+			// bounded to the Kubernetes 63-character name limit, which the total
+			// length bound alone would exceed with no usable guest identity.
+			if !wifSubject.MatchString(subject) {
+				return false
+			}
+			segments := strings.Split(subject, ":")
+			return len(segments) == 4 && len(segments[2]) <= 63 && len(segments[3]) <= 63
+		}) {
 			return fmt.Errorf("spec.iam.serviceAccounts requires bounded unique exact guest service-account subjects")
 		}
 		accounts[account.Name] = true
@@ -141,7 +165,12 @@ func validateWIFGrants(iam WIFConfigIAM) error {
 		if !wifRoleName.MatchString(role.Name) || roles[role.Name] || !uniqueWIFStrings(role.Permissions, 512, 128, wifPermission.MatchString) {
 			return fmt.Errorf("spec.iam.roles requires unique logical names and bounded unique GCP permissions")
 		}
-		if 5+2*n.MaxInfraIDLength+int32(len(role.Name)) > n.MaxCustomRoleIDLength {
+		for _, permission := range role.Permissions {
+			if wifImpersonationPermissions[permission] {
+				return fmt.Errorf("spec.iam.roles cannot grant service-account impersonation; only the exact worker serviceAccountRoleBindings grant may")
+			}
+		}
+		if 5+2*n.MaximumInfraIDLength+int32(len(role.Name)) > n.MaximumCustomRoleIDLength {
 			return fmt.Errorf("spec.iam.roles cannot render the maximum infra ID without truncation")
 		}
 		roles[role.Name] = true
@@ -173,8 +202,9 @@ func validateWIFGrants(iam WIFConfigIAM) error {
 	return nil
 }
 
-// WIFConfigDigest returns sha256:<hex> over encoding/json of the schemaVersion
-// and IAM fields, with all set/map lists and grants sorted by their complete keys.
+// WIFConfigDigest returns sha256:<hex> over the canonical encoding of the
+// schemaVersion and IAM fields, with all set/map lists and grants sorted by
+// their complete keys and every object key sorted alphabetically.
 // Verification and resource metadata are excluded. Sorting never mutates input.
 func WIFConfigDigest(spec WIFConfigTemplateSpec) (string, error) {
 	// A new spec field must receive an explicit protocol/immutability decision.
@@ -208,8 +238,11 @@ func WIFConfigDigest(spec WIFConfigTemplateSpec) (string, error) {
 	for i := range iam.ServiceAccountRoleBindings {
 		sort.Strings(iam.ServiceAccountRoleBindings[i].MemberServiceAccountRefs)
 	}
-	// Encode only the explicitly versioned executable envelope, in fixed order.
-	// Verification, metadata and boundary name are never digest inputs.
+	// Encode only the explicitly versioned executable envelope. Verification,
+	// metadata and boundary name are never digest inputs. The envelope is
+	// re-encoded through generic JSON so every object key sorts alphabetically:
+	// the digest must depend only on contract content, never on Go struct
+	// declaration order at any nesting level.
 	data, err = json.Marshal(struct {
 		// +kubebuilder:validation:Minimum=1
 		// +kubebuilder:validation:Maximum=1
@@ -218,6 +251,13 @@ func WIFConfigDigest(spec WIFConfigTemplateSpec) (string, error) {
 	}{SchemaVersion: spec.SchemaVersion, IAM: iam})
 	if err != nil {
 		return "", fmt.Errorf("encode canonical IAM contract: %w", err)
+	}
+	var canonical any
+	if err := json.Unmarshal(data, &canonical); err != nil {
+		return "", fmt.Errorf("normalize canonical IAM contract: %w", err)
+	}
+	if data, err = json.Marshal(canonical); err != nil {
+		return "", fmt.Errorf("encode sorted IAM contract: %w", err)
 	}
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(data)), nil
 }
@@ -257,7 +297,7 @@ func validateWIFReference(ctx context.Context, ref WIFConfigTemplateReference, r
 	if requireVerified && (template.Spec.Verified == nil || !*template.Spec.Verified) {
 		return fmt.Errorf("template must be verified before recording a new application")
 	}
-	if int32(len(infraID)) > template.Spec.IAM.Naming.MaxInfraIDLength {
+	if int32(len(infraID)) > template.Spec.IAM.Naming.MaximumInfraIDLength {
 		return fmt.Errorf("installation infraID exceeds the referenced template's naming limit")
 	}
 	return nil

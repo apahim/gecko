@@ -437,10 +437,12 @@ properties:
                   name:
                     description: name is the canonical release boundary of the template.
                     maxLength: 32
+                    minLength: 1
                     type: string
                   uid:
                     description: uid identifies the exact retained template resource.
                     maxLength: 128
+                    minLength: 1
                     type: string
                 required:
                 - digest
@@ -497,10 +499,12 @@ properties:
                   name:
                     description: name is the canonical release boundary of the template.
                     maxLength: 32
+                    minLength: 1
                     type: string
                   uid:
                     description: uid identifies the exact retained template resource.
                     maxLength: 128
+                    minLength: 1
                     type: string
                 required:
                 - digest
@@ -559,10 +563,12 @@ properties:
                   name:
                     description: name is the canonical release boundary of the template.
                     maxLength: 32
+                    minLength: 1
                     type: string
                   uid:
                     description: uid identifies the exact retained template resource.
                     maxLength: 128
+                    minLength: 1
                     type: string
                 required:
                 - digest
@@ -624,10 +630,12 @@ properties:
                   name:
                     description: name is the canonical release boundary of the template.
                     maxLength: 32
+                    minLength: 1
                     type: string
                   uid:
                     description: uid identifies the exact retained template resource.
                     maxLength: 128
+                    minLength: 1
                     type: string
                 required:
                 - digest

@@ -57,7 +57,7 @@ func TestWIFConfigBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("baseline executable digest: %s", digest)
-	if digest != "sha256:6d14a6155e6e2ced361919c4fa0e615e6863b8cb3b3ade0d7e52032deb613406" {
+	if digest != "sha256:71d9aaf90729b0365610a16bd46d7cb4d4582e1e69b79f114f968086017d1af4" {
 		t.Fatal("baseline executable contract changed; review permissions/trust before accepting a new golden digest")
 	}
 }
@@ -135,6 +135,26 @@ func TestWIFConfigValidation(t *testing.T) {
 			r := &w.Spec.IAM.Roles[0]
 			r.Permissions = append(r.Permissions, r.Permissions[0])
 		},
+		"actAs permission": func(w *WIFConfigTemplate) {
+			r := &w.Spec.IAM.Roles[0]
+			r.Permissions = append(r.Permissions, "iam.serviceAccounts.actAs")
+		},
+		"token minting permission": func(w *WIFConfigTemplate) {
+			r := &w.Spec.IAM.Roles[0]
+			r.Permissions = append(r.Permissions, "iam.serviceAccounts.getAccessToken")
+		},
+		"key minting permission": func(w *WIFConfigTemplate) {
+			r := &w.Spec.IAM.Roles[0]
+			r.Permissions = append(r.Permissions, "iam.serviceAccountKeys.create")
+		},
+		"long subject namespace": func(w *WIFConfigTemplate) {
+			s := &w.Spec.IAM.ServiceAccounts[0]
+			s.WorkloadIdentitySubjects = []string{"system:serviceaccount:" + strings.Repeat("a", 64) + ":operator"}
+		},
+		"long subject name": func(w *WIFConfigTemplate) {
+			s := &w.Spec.IAM.ServiceAccounts[0]
+			s.WorkloadIdentitySubjects = []string{"system:serviceaccount:openshift:" + strings.Repeat("a", 64)}
+		},
 		"duplicate role": func(w *WIFConfigTemplate) { w.Spec.IAM.Roles[1] = w.Spec.IAM.Roles[0] },
 		"unknown grant":  func(w *WIFConfigTemplate) { w.Spec.IAM.RoleBindings[0].RoleRef = "missing" },
 		"scope":          func(w *WIFConfigTemplate) { w.Spec.IAM.RoleBindings[0].Scope.Kind = "ResourceName" },
@@ -150,7 +170,7 @@ func TestWIFConfigValidation(t *testing.T) {
 			w.Spec.IAM.ServiceAccountRoleBindings[0].MemberServiceAccountRefs = append(w.Spec.IAM.ServiceAccountRoleBindings[0].MemberServiceAccountRefs, "cloud-controller")
 		},
 		"naming":     func(w *WIFConfigTemplate) { w.Spec.IAM.Naming.CustomRoleIDTemplate = "hcp_{role}" },
-		"truncation": func(w *WIFConfigTemplate) { w.Spec.IAM.Naming.MaxCustomRoleIDLength = 20 },
+		"truncation": func(w *WIFConfigTemplate) { w.Spec.IAM.Naming.MaximumCustomRoleIDLength = 20 },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -160,6 +180,19 @@ func TestWIFConfigValidation(t *testing.T) {
 				t.Fatal("invalid contract accepted")
 			}
 		})
+	}
+}
+
+func TestWIFSubjectNameBoundaries(t *testing.T) {
+	// The Kubernetes namespace and service-account name limit is 63 characters;
+	// subjects at the boundary must stay accepted while longer ones are rejected.
+	w := wifTestTemplate(t)
+	s := &w.Spec.IAM.ServiceAccounts[0]
+	s.WorkloadIdentitySubjects = []string{
+		"system:serviceaccount:" + strings.Repeat("a", 63) + ":" + strings.Repeat("b", 63),
+	}
+	if err := w.ValidateCreate(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -387,7 +420,7 @@ func TestWIFReferenceRejectsInvalidStoredContract(t *testing.T) {
 func TestWIFApplicationHonorsContractNamingLimit(t *testing.T) {
 	w := wifTestTemplate(t)
 	w.Spec.Verified = new(true)
-	w.Spec.IAM.Naming.MaxInfraIDLength = 1
+	w.Spec.IAM.Naming.MaximumInfraIDLength = 1
 	if err := w.ValidateCreate(t.Context()); err != nil {
 		t.Fatal(err)
 	}

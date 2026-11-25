@@ -64,15 +64,42 @@ func apiWIFReadCluster(t *testing.T, store *memory.MemoryStore) *privatev1.Clust
 	return obj.(*privatev1.Cluster)
 }
 
+func apiWIFAssertUnchanged(t *testing.T, before, after *privatev1.Cluster) {
+	t.Helper()
+	beforeJSON, err := json.Marshal(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterJSON, err := json.Marshal(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeJSON, afterJSON) {
+		t.Fatal("rejected patch changed persisted state")
+	}
+}
+
 func apiWIFAssertNoOp(t *testing.T, before, after *privatev1.Cluster) {
 	t.Helper()
-	beforeSpec, _ := json.Marshal(before.Spec)
-	afterSpec, _ := json.Marshal(after.Spec)
+	beforeSpec, err := json.Marshal(before.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterSpec, err := json.Marshal(after.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(beforeSpec, afterSpec) || after.Generation != before.Generation || after.ResourceVersion == before.ResourceVersion {
 		t.Fatal("identical-history JSONPatch changed spec/generation or lacked persisted readback")
 	}
-	beforeStatus, _ := json.Marshal(before.Status)
-	afterStatus, _ := json.Marshal(after.Status)
+	beforeStatus, err := json.Marshal(before.Status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterStatus, err := json.Marshal(after.Status)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(beforeStatus, afterStatus) {
 		t.Fatal("public JSONPatch changed private controller status")
 	}
@@ -264,11 +291,7 @@ func TestClusterIAMPublicPatchAPI(t *testing.T) {
 				t.Fatalf("invalid mutation: %d %s", res.Code, res.Body.String())
 			}
 			after := apiWIFReadCluster(t, store)
-			beforeJSON, _ := json.Marshal(before)
-			afterJSON, _ := json.Marshal(after)
-			if !bytes.Equal(beforeJSON, afterJSON) {
-				t.Fatal("rejected patch changed persisted state")
-			}
+			apiWIFAssertUnchanged(t, before, after)
 		})
 	}
 	// Clearing all public IAM fields in a PUT cannot erase retained history.
