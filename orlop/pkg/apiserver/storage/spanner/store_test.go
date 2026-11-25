@@ -24,6 +24,7 @@ import (
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -572,9 +573,15 @@ func TestSpannerStore_List(t *testing.T) {
 		store := setupTestStore(t)
 		ns := "test-list-labels"
 
-		store.Create(context.Background(), newTestObject(withName("obj1"), withNamespace(ns), withLabels(map[string]string{"env": "prod"})))
-		store.Create(context.Background(), newTestObject(withName("obj2"), withNamespace(ns), withLabels(map[string]string{"env": "staging"})))
-		store.Create(context.Background(), newTestObject(withName("obj3"), withNamespace(ns), withLabels(map[string]string{"env": "prod"})))
+		for _, obj := range []*unstructured.Unstructured{
+			newTestObject(withName("obj1"), withNamespace(ns), withLabels(map[string]string{"env": "prod"})),
+			newTestObject(withName("obj2"), withNamespace(ns), withLabels(map[string]string{"env": "staging"})),
+			newTestObject(withName("obj3"), withNamespace(ns), withLabels(map[string]string{"env": "prod"})),
+		} {
+			if err := store.Create(context.Background(), obj); err != nil {
+				t.Fatalf("Create() failed: %v", err)
+			}
+		}
 
 		listObj, err := store.List(context.Background(), storage.ListOptions{
 			Namespace:   ns,
@@ -708,6 +715,28 @@ func TestSpannerStore_Update(t *testing.T) {
 		err := store.Update(context.Background(), obj)
 		if err == nil {
 			t.Error("Expected error for missing object, got nil")
+		}
+	})
+
+	t.Run("rejects invalid resourceVersion", func(t *testing.T) {
+		store := setupTestStore(t)
+
+		obj := newTestObject(withName("rv-invalid"), withNamespace("test-update-invalid"))
+		if err := store.Create(context.Background(), obj); err != nil {
+			t.Fatalf("Create() failed: %v", err)
+		}
+
+		retrieved, err := store.Get(context.Background(), "test-update-invalid", "rv-invalid")
+		if err != nil {
+			t.Fatalf("Get() failed: %v", err)
+		}
+		for _, rv := range []string{"abc", "0", "-1", "1.5"} {
+			updated := retrieved.DeepCopyObject().(client.Object)
+			updated.SetResourceVersion(rv)
+			err := store.Update(context.Background(), updated)
+			if !apierrors.IsBadRequest(err) {
+				t.Fatalf("Update() with resourceVersion %q: got %v, want BadRequest", rv, err)
+			}
 		}
 	})
 }

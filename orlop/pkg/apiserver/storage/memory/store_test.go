@@ -7,6 +7,7 @@ import (
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -318,6 +319,28 @@ func TestMemoryStore_Update(t *testing.T) {
 		err := store.Update(ctx, obj)
 		if err == nil {
 			t.Error("Expected error for missing object, got nil")
+		}
+	})
+
+	t.Run("rejects invalid resourceVersion", func(t *testing.T) {
+		store := newTestStore()
+		ctx := context.Background()
+		obj := newTestObject(withName("test"), withNamespace("default"))
+		if err := store.Create(ctx, obj); err != nil {
+			t.Fatalf("Create() failed: %v", err)
+		}
+
+		retrieved, err := store.Get(ctx, "default", "test")
+		if err != nil {
+			t.Fatalf("Get() failed: %v", err)
+		}
+		for _, rv := range []string{"abc", "0", "-1", "1.5"} {
+			updated := retrieved.DeepCopyObject().(client.Object)
+			updated.SetResourceVersion(rv)
+			err := store.Update(ctx, updated)
+			if !apierrors.IsBadRequest(err) {
+				t.Fatalf("Update() with resourceVersion %q: got %v, want BadRequest", rv, err)
+			}
 		}
 	})
 }

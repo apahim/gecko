@@ -64,8 +64,14 @@ or replacing `metadata.resourceVersion`. An empty/zero stored revision fails
 closed. Its storage update uses the revision of the fetched snapshot without
 server-side replay. Memory and Spanner enforce the revision precondition;
 Postgres uses a conditional SQL UPDATE against the supplied revision, returning
-a conflict when a concurrent writer wins. Assertion writers must pass a fetched
-revision: a direct storage Update without one retains legacy unguarded semantics.
+a conflict when a concurrent writer wins. A non-empty revision that is not a
+positive integer is rejected with HTTP 400 (`invalid resourceVersion`) on every
+backend. Assertion writers must pass a fetched revision: a direct storage
+Update without one retains legacy unguarded semantics. Merge patch diverges
+from these guards: it silently overwrites `name`, `namespace`, `generation`,
+`finalizers`, and `deletionTimestamp`, and strips private-prefixed labels and
+annotations, rather than rejecting the request; aligning it with the JSONPatch
+guards is a tracked follow-up.
 The Postgres concurrent-write regression needs a running PostgreSQL instance
 (`POSTGRES_TEST_URL`), and the Spanner selector LIST/watch regressions need a
 Spanner emulator (`SPANNER_EMULATOR_HOST`); default unit-test success alone
@@ -73,7 +79,9 @@ cannot establish production backend readiness.
 
 A failed `test` returns HTTP 409 with the fixed message
 `JSON patch test failed`; malformed operations and invalid results return HTTP
-400. Patch-library errors and compared values are not returned or logged.
+400. `test` compares compacted raw JSON tokens, not parsed numeric values, so
+`2` does not match a stored `2.0`. Patch-library errors and compared values are
+not returned or logged.
 Clients requiring UID/RV preconditions should issue both `test` operations
 before their intended mutation. A successful parse or an arbitrary 4xx is not
 evidence that either test was evaluated.
