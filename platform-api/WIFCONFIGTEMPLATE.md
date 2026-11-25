@@ -13,8 +13,11 @@ or a cloud IAM controller.
 - `spec.schemaVersion: 1` identifies the executable protocol independently of the
   Kubernetes API envelope. Its accepted semantics must remain compatible; do not
   tighten version 1 validation against previously accepted stored contracts.
-- `spec.iam` contains typed naming, six component identities, custom-role
-  permissions, exact guest WIF subjects and exact-worker-SA actAs grants.
+- `spec.iam` contains typed naming, seven component identities, custom-role
+  permissions, exact guest WIF subjects and exact-worker-SA actAs grants. The
+  ingress component is contract-required but optional at the Cluster level:
+  `serviceAccountsRef.ingressEmail` is validated as installation-owned only
+  when set, matching the opt-in Ingress capability.
 - `spec.verified` is the only eligibility assertion. Omission means false. It is
   mutable independently of the executable contract. Setting false prevents future
   use by consumers once their availability/dispatch enforcement is deployed; it

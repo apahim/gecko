@@ -68,8 +68,8 @@ properties:
             items:
               maxLength: 32
               type: string
-            maxItems: 6
-            minItems: 6
+            maxItems: 7
+            minItems: 7
             type: array
             x-kubernetes-list-type: set
           roleBindings:
@@ -196,8 +196,8 @@ properties:
               - name
               - workloadIdentitySubjects
               type: object
-            maxItems: 6
-            minItems: 6
+            maxItems: 7
+            minItems: 7
             type: array
             x-kubernetes-list-map-keys:
             - name
@@ -215,8 +215,8 @@ properties:
                 items:
                   maxLength: 32
                   type: string
-                maxItems: 6
-                minItems: 6
+                maxItems: 7
+                minItems: 7
                 type: array
                 x-kubernetes-list-type: set
             required:

@@ -24,7 +24,7 @@ var (
 	wifInfraID     = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,10}[a-z0-9])?$`)
 )
 
-var wifComponents = []string{"cloud-controller", "cloud-network", "ctrlplane-op", "gcp-pd-csi", "image-registry", "nodepool-mgmt"}
+var wifComponents = []string{"cloud-controller", "cloud-network", "ctrlplane-op", "gcp-pd-csi", "image-registry", "ingress-op", "nodepool-mgmt"}
 
 // ValidateCreate checks structure, completeness and supported execution semantics.
 func (w *WIFConfigTemplate) ValidateCreate(_ context.Context) error {
@@ -92,7 +92,7 @@ func validateWIFConfigSpec(spec WIFConfigTemplateSpec) error {
 	}
 	iam := spec.IAM
 	if !exactWIFSet(iam.RequiredComponents, wifComponents) || len(iam.ServiceAccounts) != len(wifComponents) {
-		return fmt.Errorf("spec.iam must define all six required components exactly once")
+		return fmt.Errorf("spec.iam must define all seven required components exactly once")
 	}
 	if err := validateWIFNaming(iam); err != nil {
 		return err
@@ -161,7 +161,7 @@ func validateWIFGrants(iam WIFConfigIAM) error {
 		return fmt.Errorf("spec.iam.roleBindings must cover every component and custom role")
 	}
 	if iam.WorkloadIdentityBindings.Role != "roles/iam.workloadIdentityUser" || !exactWIFSet(iam.WorkloadIdentityBindings.ServiceAccountRefs, wifComponents) {
-		return fmt.Errorf("spec.iam.workloadIdentityBindings must grant workloadIdentityUser to all six components")
+		return fmt.Errorf("spec.iam.workloadIdentityBindings must grant workloadIdentityUser to all seven components")
 	}
 	if len(iam.ServiceAccountRoleBindings) != 1 {
 		return fmt.Errorf("spec.iam.serviceAccountRoleBindings must define one exact-worker-SA actAs grant")
@@ -303,6 +303,12 @@ func (c *Cluster) validateIAMIdentity(nextIAM *ClusterIAMSpec) error {
 		if email != c.Spec.InfraID+"-"+component+"@"+gcp.ProjectID+".iam.gserviceaccount.com" {
 			return fmt.Errorf("IAM applications must use the contract's installation-owned component accounts")
 		}
+	}
+	// The ingress component is optional at the Cluster level: a configured
+	// ingress account must also be installation-owned, but its absence stays
+	// valid for installations with the Ingress capability disabled.
+	if identities.IngressEmail != nil && *identities.IngressEmail != "" && *identities.IngressEmail != c.Spec.InfraID+"-ingress-op@"+gcp.ProjectID+".iam.gserviceaccount.com" {
+		return fmt.Errorf("IAM applications must use the contract's installation-owned component accounts")
 	}
 	return nil
 }

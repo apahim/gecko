@@ -8,6 +8,7 @@ iam:
     - ctrlplane-op
     - gcp-pd-csi
     - image-registry
+    - ingress-op
     - nodepool-mgmt
   naming:
     maxInfraIDLength: 12
@@ -39,6 +40,10 @@ iam:
       workloadIdentitySubjects:
         - system:serviceaccount:openshift-image-registry:cluster-image-registry-operator
         - system:serviceaccount:openshift-image-registry:registry
+    - name: ingress-op
+      accountIDTemplate: "{infraID}-ingress-op"
+      workloadIdentitySubjects:
+        - system:serviceaccount:openshift-ingress-operator:ingress-operator
     - name: nodepool-mgmt
       accountIDTemplate: "{infraID}-nodepool-mgmt"
       workloadIdentitySubjects:
@@ -185,6 +190,13 @@ iam:
         - storage.objects.delete
         - storage.objects.get
         - storage.objects.list
+    - name: hcpIngressProject
+      permissions:
+        - dns.changes.create
+        - dns.resourceRecordSets.create
+        - dns.resourceRecordSets.delete
+        - dns.resourceRecordSets.list
+        - dns.resourceRecordSets.update
     - name: hcpNodePoolProject
       permissions:
         - compute.disks.create
@@ -219,6 +231,10 @@ iam:
       roleRef: hcpImageRegistryProject
       scope:
         kind: Project
+    - serviceAccountRef: ingress-op
+      roleRef: hcpIngressProject
+      scope:
+        kind: Project
     - serviceAccountRef: nodepool-mgmt
       roleRef: hcpNodePoolProject
       scope:
@@ -231,6 +247,7 @@ iam:
       - ctrlplane-op
       - gcp-pd-csi
       - image-registry
+      - ingress-op
       - nodepool-mgmt
   serviceAccountRoleBindings:
     - role: roles/iam.serviceAccountUser

@@ -52,8 +52,8 @@ type WIFConfigIAM struct {
 
 	// +required
 	// +listType=set
-	// +kubebuilder:validation:MinItems=6
-	// +kubebuilder:validation:MaxItems=6
+	// +kubebuilder:validation:MinItems=7
+	// +kubebuilder:validation:MaxItems=7
 	// +kubebuilder:validation:items:MaxLength=32
 	RequiredComponents []string `json:"requiredComponents"`
 	// naming defines deterministic installation-owned resource names.
@@ -65,8 +65,8 @@ type WIFConfigIAM struct {
 	// +required
 	// +listType=map
 	// +listMapKey=name
-	// +kubebuilder:validation:MinItems=6
-	// +kubebuilder:validation:MaxItems=6
+	// +kubebuilder:validation:MinItems=7
+	// +kubebuilder:validation:MaxItems=7
 	ServiceAccounts []WIFConfigServiceAccount `json:"serviceAccounts"`
 	// roles defines installation-owned custom-role permissions.
 
@@ -218,8 +218,8 @@ type WIFConfigWorkloadIdentityBindings struct {
 
 	// +required
 	// +listType=set
-	// +kubebuilder:validation:MinItems=6
-	// +kubebuilder:validation:MaxItems=6
+	// +kubebuilder:validation:MinItems=7
+	// +kubebuilder:validation:MaxItems=7
 	// +kubebuilder:validation:items:MaxLength=32
 	ServiceAccountRefs []string `json:"serviceAccountRefs"`
 }

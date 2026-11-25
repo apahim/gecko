@@ -38,10 +38,10 @@ func TestWIFConfigBaseline(t *testing.T) {
 	if IsWIFConfigVerified(w.Spec) {
 		t.Fatal("baseline must not implicitly be verified")
 	}
-	if len(w.Spec.IAM.Roles) != 6 || len(w.Spec.IAM.RoleBindings) != 6 {
-		t.Fatal("baseline must contain six project custom roles and grants")
+	if len(w.Spec.IAM.Roles) != 7 || len(w.Spec.IAM.RoleBindings) != 7 {
+		t.Fatal("baseline must contain seven project custom roles and grants")
 	}
-	counts := map[string]int{"hcpCloudControllerProject": 51, "hcpCloudNetworkProject": 5, "hcpControlPlaneProject": 36, "hcpGCPPDCSIProject": 30, "hcpImageRegistryProject": 9, "hcpNodePoolProject": 11}
+	counts := map[string]int{"hcpCloudControllerProject": 51, "hcpCloudNetworkProject": 5, "hcpControlPlaneProject": 36, "hcpGCPPDCSIProject": 30, "hcpImageRegistryProject": 9, "hcpIngressProject": 5, "hcpNodePoolProject": 11}
 	total := 0
 	for _, role := range w.Spec.IAM.Roles {
 		if len(role.Permissions) != counts[role.Name] {
@@ -49,15 +49,15 @@ func TestWIFConfigBaseline(t *testing.T) {
 		}
 		total += len(role.Permissions)
 	}
-	if total != 142 {
-		t.Fatalf("permission entries = %d, want 142", total)
+	if total != 147 {
+		t.Fatalf("permission entries = %d, want 147", total)
 	}
 	digest, err := WIFConfigDigest(w.Spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("baseline executable digest: %s", digest)
-	if digest != "sha256:c0b4c3dbdd48d1925bf7c172ac0385639d00092f083b5cac11865e83c3acea71" {
+	if digest != "sha256:6d14a6155e6e2ced361919c4fa0e615e6863b8cb3b3ade0d7e52032deb613406" {
 		t.Fatal("baseline executable contract changed; review permissions/trust before accepting a new golden digest")
 	}
 }
@@ -287,6 +287,35 @@ func TestClusterIAMApplications(t *testing.T) {
 	}
 	if err := old.DeepCopy().ValidateUpdate(t.Context(), old); err != nil {
 		t.Fatalf("unavailable lookup invalidated retained history: %v", err)
+	}
+}
+
+func TestClusterIAMIngressIdentity(t *testing.T) {
+	w := wifTestTemplate(t)
+	w.Spec.Verified = new(true)
+	SetValidatorDeps(ValidatorDeps{AllowIAMApplicationWrites: true, WIFConfigTemplate: func(_ context.Context, name string) (*WIFConfigTemplate, error) {
+		if name == w.Name {
+			return w, nil
+		}
+		return nil, fmt.Errorf("not found")
+	}})
+	t.Cleanup(func() { SetValidatorDeps(ValidatorDeps{}) })
+	// The ingress component is optional at the Cluster level: applications stay
+	// valid without an ingress account.
+	base := wifTestCluster(wifTestRef(t, w))
+	if err := base.ValidateCreate(t.Context()); err != nil {
+		t.Fatalf("application without ingress email rejected: %v", err)
+	}
+	owned := "iam-new-1-ingress-op@test-project.iam.gserviceaccount.com"
+	withIngress := base.DeepCopy()
+	withIngress.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsRef.IngressEmail = &owned
+	if err := withIngress.ValidateCreate(t.Context()); err != nil {
+		t.Fatalf("installation-owned ingress email rejected: %v", err)
+	}
+	foreign := withIngress.DeepCopy()
+	*foreign.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsRef.IngressEmail = "customer-chosen@test-project.iam.gserviceaccount.com"
+	if err := foreign.ValidateCreate(t.Context()); err == nil {
+		t.Fatal("foreign ingress email accepted for an IAM application")
 	}
 }
 
