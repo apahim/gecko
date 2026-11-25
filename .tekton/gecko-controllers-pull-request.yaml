@@ -26,7 +26,7 @@ spec:
   - name: image-expires-after
     value: 5d
   - name: dockerfile
-    value: controllers/Containerfile
+    value: controllers/Dockerfile
   - name: path-context
     value: .
   pipelineSpec:
@@ -50,7 +50,7 @@ spec:
       description: Path to the source code of an application's component from where to build image.
       name: path-context
       type: string
-    - default: controllers/Containerfile
+    - default: Dockerfile
       description: Path to the Dockerfile inside the context specified by parameter path-context
       name: dockerfile
       type: string
