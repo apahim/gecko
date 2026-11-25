@@ -55,6 +55,12 @@ spec:
             - --public-port={{ .Values.publicApi.port }}
             - --enable-public-api={{ .Values.publicApi.enabled }}
             - --enable-iam-application-writes={{ .Values.iamApplications.enabled }}
+            {{- if .Values.publicApi.replicationWriteGuard.enabled }}
+            - --replication-write-guard
+            - --region={{ required "publicApi.replicationWriteGuard.region is required when the guard is enabled" .Values.publicApi.replicationWriteGuard.region }}
+            - --leader-region={{ required "publicApi.replicationWriteGuard.leaderRegion is required when the guard is enabled" .Values.publicApi.replicationWriteGuard.leaderRegion }}
+            - --replicate={{ required "publicApi.replicationWriteGuard.replicate is required when the guard is enabled" .Values.publicApi.replicationWriteGuard.replicate }}
+            {{- end }}
             {{- if .Values.esp.enabled }}
             - --public-address=127.0.0.1
             {{- else if .Values.publicApi.bindAddress }}
