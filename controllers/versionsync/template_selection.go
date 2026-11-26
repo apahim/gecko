@@ -1,6 +1,7 @@
 package versionsync
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -33,8 +34,11 @@ func parseNumericBase(name string) (major, minor, patch int, ok bool) {
 // never falls back across minors and never orders lexically (5.0.10 is a
 // higher floor than 5.0.6). Unverified templates are included: the
 // unverified highest match blocks availability instead of falling back to a
-// lower verified boundary. The result is deterministic regardless of input
-// order; boundary names are unique resource names, so there are no ties.
+// lower verified boundary. Retained templates failing current contract
+// validation are likewise included and block: they can never be pinned, and
+// selection never falls back to a lower boundary. The result is
+// deterministic regardless of input order; boundary names are unique
+// resource names, so there are no ties.
 func selectTemplateBoundary(versionName string, templates []privatev1.WIFConfigTemplate) *privatev1.WIFConfigTemplate {
 	major, minor, patch, ok := parseNumericBase(versionName)
 	if !ok {
@@ -56,13 +60,27 @@ func selectTemplateBoundary(versionName string, templates []privatev1.WIFConfigT
 	return selected
 }
 
+// pinnableBoundary reports whether a selected boundary satisfies the current
+// executable-contract validation. The IAM catalog is append-only and
+// contracts are immutable, so a retained boundary published under an earlier
+// contract revision can permanently fail current validation; such a boundary
+// can never be admitted as a pin. Callers treat unpinnable boundaries as
+// fail-closed unavailability instead of attempting writes admission rejects.
+func pinnableBoundary(t *privatev1.WIFConfigTemplate) error {
+	return t.ValidateCreate(context.Background())
+}
+
 // resolvePin builds the immutable reference (name, UID and executable digest)
 // for the selected boundary of a Version, or nil when no applicable boundary
-// exists. The reference always identifies live catalog state, so admission
-// validation accepts it without requiring verification.
+// exists or the selected boundary is unpinnable. The reference always
+// identifies live catalog state, so admission validation accepts it without
+// requiring verification.
 func resolvePin(versionName string, templates []privatev1.WIFConfigTemplate) (*privatev1.WIFConfigTemplateReference, error) {
 	selected := selectTemplateBoundary(versionName, templates)
 	if selected == nil {
+		return nil, nil
+	}
+	if err := pinnableBoundary(selected); err != nil {
 		return nil, nil
 	}
 	digest, err := privatev1.WIFConfigDigest(selected.Spec)

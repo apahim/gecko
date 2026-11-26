@@ -19,13 +19,16 @@ const (
 	availabilityReasonTemplateMissing    = "TemplateReferenceMissing"
 	availabilityReasonTemplateUnverified = "TemplateUnverified"
 	availabilityReasonTemplateStale      = "TemplateReferenceStale"
+	availabilityReasonTemplateInvalid    = "TemplateReferenceInvalid"
 	availabilityReasonReviewRequired     = "TemplateReferenceReviewRequired"
 )
 
 // versionAvailability computes the Available condition for one Version. True
 // requires complete release metadata plus a pinned reference that exactly
 // matches the highest applicable boundary's identity and executable digest
-// and is verified. A missing, False, Unknown or stale condition never
+// and is verified. Boundaries retained in the catalog but failing current
+// contract validation are unpinnable and block fail-closed with a distinct
+// reason. A missing, False, Unknown or stale condition never
 // authorizes dispatch; consumers must also require a current
 // observedGeneration, which the caller carries.
 func versionAvailability(version *privatev1.Version, templates []privatev1.WIFConfigTemplate) metav1.Condition {
@@ -40,6 +43,27 @@ func versionAvailability(version *privatev1.Version, templates []privatev1.WIFCo
 		return condition
 	}
 	pin := version.Spec.WIFConfigTemplateReference
+	floor := selectTemplateBoundary(version.Name, templates)
+	if floor == nil {
+		if pin == nil {
+			condition.Reason = availabilityReasonTemplateMissing
+			condition.Message = "No applicable IAM template boundary is pinned for this release"
+			return condition
+		}
+		// The pin is immutable once set, so a boundary disappearing from the
+		// catalog surfaces as a review-required unavailable state.
+		condition.Reason = availabilityReasonReviewRequired
+		condition.Message = fmt.Sprintf("The IAM catalog no longer contains an applicable boundary for pinned template %q", pin.Name)
+		return condition
+	}
+	// A retained boundary failing current contract validation can never be
+	// pinned or republished: block fail-closed instead of falling back to a
+	// lower boundary or attempting a write admission will reject.
+	if boundaryErr := pinnableBoundary(floor); boundaryErr != nil {
+		condition.Reason = availabilityReasonTemplateInvalid
+		condition.Message = fmt.Sprintf("The highest applicable IAM template boundary %q fails current contract validation and cannot be pinned: %v", floor.Name, boundaryErr)
+		return condition
+	}
 	if pin == nil {
 		condition.Reason = availabilityReasonTemplateMissing
 		condition.Message = "No applicable IAM template boundary is pinned for this release"
@@ -47,12 +71,6 @@ func versionAvailability(version *privatev1.Version, templates []privatev1.WIFCo
 	}
 	// The pin is immutable once set, so a later higher applicable boundary
 	// cannot repoint it: it surfaces as a review-required unavailable state.
-	floor := selectTemplateBoundary(version.Name, templates)
-	if floor == nil {
-		condition.Reason = availabilityReasonReviewRequired
-		condition.Message = fmt.Sprintf("The IAM catalog no longer contains an applicable boundary for pinned template %q", pin.Name)
-		return condition
-	}
 	if floor.Name != pin.Name {
 		condition.Reason = availabilityReasonReviewRequired
 		condition.Message = fmt.Sprintf("Pinned template boundary %q is below the highest applicable boundary %q; the reference is immutable and requires review", pin.Name, floor.Name)

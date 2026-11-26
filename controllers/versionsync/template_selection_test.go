@@ -1,6 +1,7 @@
 package versionsync
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"sigs.k8s.io/yaml"
 )
 
 func testTemplate(name, uid string, verified bool) privatev1.WIFConfigTemplate {
@@ -17,6 +20,27 @@ func testTemplate(name, uid string, verified bool) privatev1.WIFConfigTemplate {
 		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID(uid)},
 		Spec:       privatev1.WIFConfigTemplateSpec{Verified: &verified},
 	}
+}
+
+// validTemplate returns a boundary whose contract passes current executable
+// validation, loading the reviewed chart baseline. Tests that exercise
+// pinning must use it: retained-but-invalid boundaries are deliberately
+// unpinnable, and an empty contract fails validation.
+func validTemplate(t *testing.T, name, uid string, verified bool) privatev1.WIFConfigTemplate {
+	t.Helper()
+	data, err := os.ReadFile("../../helm/charts/platform-api-server/files/wifconfigtemplate-project.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := privatev1.WIFConfigTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID(uid)},
+		Spec:       privatev1.WIFConfigTemplateSpec{Verified: &verified},
+	}
+	if err := yaml.UnmarshalStrict(data, &template.Spec); err != nil {
+		t.Fatal(err)
+	}
+	template.Spec.Verified = &verified
+	return template
 }
 
 func TestSelectTemplateBoundary(t *testing.T) {
@@ -142,7 +166,7 @@ func TestSelectTemplateBoundaryShuffledInput(t *testing.T) {
 
 func TestResolvePin(t *testing.T) {
 	t.Run("builds reference from live catalog state", func(t *testing.T) {
-		template := testTemplate("5.0.0", "template-uid", true)
+		template := validTemplate(t, "5.0.0", "template-uid", true)
 		pin, err := resolvePin("5.0.6", []privatev1.WIFConfigTemplate{template})
 		require.NoError(t, err)
 		require.NotNil(t, pin)
@@ -159,5 +183,21 @@ func TestResolvePin(t *testing.T) {
 		pin, err := resolvePin("not-a-version", []privatev1.WIFConfigTemplate{testTemplate("5.0.0", "uid-a", true)})
 		require.NoError(t, err)
 		assert.Nil(t, pin)
+	})
+	t.Run("unpinnable highest boundary yields no pin and no fallback", func(t *testing.T) {
+		// A retained boundary failing current contract validation: selection
+		// still prefers it as the highest applicable boundary, but it can
+		// never be admitted as a pin.
+		invalid := testTemplate("5.0.3", "uid-high", true)
+		valid := validTemplate(t, "5.0.0", "uid-low", true)
+		templates := []privatev1.WIFConfigTemplate{invalid, valid}
+
+		selected := selectTemplateBoundary("5.0.6", templates)
+		require.NotNil(t, selected)
+		assert.Equal(t, "5.0.3", selected.Name, "selection must not fall back below an invalid highest boundary")
+
+		pin, err := resolvePin("5.0.6", templates)
+		require.NoError(t, err)
+		assert.Nil(t, pin, "an unpinnable boundary must not produce a pin")
 	})
 }

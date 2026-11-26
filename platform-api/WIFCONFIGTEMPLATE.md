@@ -114,7 +114,12 @@ Phase 1 introduced the API and opt-in packaging. Phase 1.5 delivers versionsync
 ownership of `Available`, prerelease numeric-base floor selection, preservation
 of pinned references during catalog synchronization and minimal status RBAC,
 with an independent fast eligibility loop (default 30s POC cadence, configured
-deliberately in production). Server dispatch enforcement must still ship
+deliberately in production). Because the catalog is append-only and contracts
+immutable, a boundary retained from an earlier contract revision can
+permanently fail current validation; such a boundary is unpinnable and its
+selection blocks the release fail-closed (`TemplateReferenceInvalid`) instead
+of falling back to a lower boundary, without attempting writes admission
+rejects. Server dispatch enforcement must still ship
 before activation in Phase 2. A template's verified assertion alone does not
 authorize a Cluster or independently establish runtime permissions.
 

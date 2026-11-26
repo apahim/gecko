@@ -67,7 +67,7 @@ func refreshTestController(t *testing.T, store client.Client) *Controller {
 // and reports it available in the same pass, with a current observed
 // generation.
 func TestRefreshEligibilityPinsAndReportsAvailable(t *testing.T) {
-	template := testTemplate("5.0.0", "template-uid", true)
+	template := validTemplate(t, "5.0.0", "template-uid", true)
 	store := ciStore(t, availabilityVersion("5.0.6", 3, nil), &template)
 
 	refreshTestController(t, store).refreshEligibility(context.Background(), newTestLogger(t))
@@ -83,8 +83,8 @@ func TestRefreshEligibilityPinsAndReportsAvailable(t *testing.T) {
 // The unverified highest match blocks availability; selection never falls
 // back to a lower verified boundary.
 func TestRefreshEligibilityUnverifiedHighestMatchBlocks(t *testing.T) {
-	verified := testTemplate("5.0.0", "uid-low", true)
-	unverified := testTemplate("5.0.3", "uid-high", false)
+	verified := validTemplate(t, "5.0.0", "uid-low", true)
+	unverified := validTemplate(t, "5.0.3", "uid-high", false)
 	store := ciStore(t, availabilityVersion("5.0.6", 1, nil), &verified, &unverified)
 
 	refreshTestController(t, store).refreshEligibility(context.Background(), newTestLogger(t))
@@ -100,8 +100,8 @@ func TestRefreshEligibilityUnverifiedHighestMatchBlocks(t *testing.T) {
 // Pins are immutable: a later higher applicable boundary produces a
 // review-required unavailable condition, never a repointed reference.
 func TestRefreshEligibilityHigherBoundaryRequiresReview(t *testing.T) {
-	pinned := testTemplate("5.0.0", "uid-low", true)
-	higher := testTemplate("5.0.3", "uid-high", true)
+	pinned := validTemplate(t, "5.0.0", "uid-low", true)
+	higher := validTemplate(t, "5.0.3", "uid-high", true)
 	store := ciStore(t, availabilityVersion("5.0.6", 2, pinnedReference(t, pinned)), &pinned, &higher)
 	before := readVersion(t, store, "5.0.6").DeepCopy()
 
@@ -115,7 +115,7 @@ func TestRefreshEligibilityHigherBoundaryRequiresReview(t *testing.T) {
 }
 
 func TestRefreshEligibilityStaleReference(t *testing.T) {
-	template := testTemplate("5.0.0", "real-uid", true)
+	template := validTemplate(t, "5.0.0", "real-uid", true)
 	for _, tc := range []struct {
 		name   string
 		mutate func(ref *privatev1.WIFConfigTemplateReference)
@@ -185,7 +185,7 @@ func TestRefreshEligibilityIncompleteMetadata(t *testing.T) {
 // Re-running the pass (a producer restart or a no-op tick) issues no writes
 // and keeps transition times stable.
 func TestRefreshEligibilityNoOpAndRestartStability(t *testing.T) {
-	template := testTemplate("5.0.0", "template-uid", true)
+	template := validTemplate(t, "5.0.0", "template-uid", true)
 	store := ciStore(t, availabilityVersion("5.0.6", 3, nil), &template)
 	controller := refreshTestController(t, store)
 
@@ -218,10 +218,34 @@ func TestRefreshEligibilitySkipsPassOnTemplateReadFailure(t *testing.T) {
 	assert.Nil(t, readVersionCondition(t, store, "5.0.6"))
 }
 
+// A retained boundary failing current contract validation can never be
+// pinned: the fast loop attempts no rejected write, leaves the Version
+// unpinned, and reports a distinct fail-closed condition instead of falling
+// back to a lower valid boundary. Retained catalogs can hold such boundaries
+// permanently because the catalog is append-only and contracts immutable.
+func TestRefreshEligibilityInvalidBoundaryBlocks(t *testing.T) {
+	valid := validTemplate(t, "5.0.0", "uid-low", true)
+	invalid := testTemplate("5.0.3", "uid-high", true)
+	store := ciStore(t, availabilityVersion("5.0.6", 1, nil))
+	require.NoError(t, store.Create(context.Background(), &valid))
+	require.NoError(t, store.Create(context.Background(), &invalid))
+	before := readVersion(t, store, "5.0.6").DeepCopy()
+
+	refreshTestController(t, store).refreshEligibility(context.Background(), newTestLogger(t))
+
+	after := readVersion(t, store, "5.0.6")
+	assert.Nil(t, after.Spec.WIFConfigTemplateReference, "an invalid boundary must not be pinned")
+	assert.Equal(t, before.Spec, after.Spec)
+	condition := availabilityCondition(t, store, "5.0.6")
+	assert.Equal(t, metav1.ConditionFalse, condition.Status)
+	assert.Equal(t, availabilityReasonTemplateInvalid, condition.Reason)
+	assert.Contains(t, condition.Message, "5.0.3")
+}
+
 // A failed pin write (for example a conflict) is retried on the next pass;
 // the failed pass writes no condition against a stale generation.
 func TestRefreshEligibilityRetriesFailedPinWrite(t *testing.T) {
-	template := testTemplate("5.0.0", "template-uid", true)
+	template := validTemplate(t, "5.0.0", "template-uid", true)
 	store := ciStore(t, availabilityVersion("5.0.6", 3, nil), &template)
 
 	failing := &updateFailing{Client: store, failures: 1}

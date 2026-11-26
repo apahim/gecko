@@ -545,7 +545,7 @@ func TestApplyPreservesPinnedReference(t *testing.T) {
 // published is pinned by the discovery sync, even when owned fields are
 // otherwise unchanged.
 func TestApplyPinsUnpinnedVersion(t *testing.T) {
-	template := testTemplate("5.0.0", "template-uid", true)
+	template := validTemplate(t, "5.0.0", "template-uid", true)
 	store := &mockStoreClient{
 		templates: []privatev1.WIFConfigTemplate{template},
 		versions: []privatev1.Version{{
@@ -594,7 +594,7 @@ func TestApplyNeverRepointsPinnedReference(t *testing.T) {
 
 // Newly discovered Versions are created with their resolved boundary pin.
 func TestApplyCreatesVersionsWithPins(t *testing.T) {
-	template := testTemplate("5.0.0", "template-uid", true)
+	template := validTemplate(t, "5.0.0", "template-uid", true)
 	store := &mockStoreClient{templates: []privatev1.WIFConfigTemplate{template}}
 	controller := &Controller{apiClient: store}
 	desired := map[string]privatev1.VersionSpec{
@@ -607,6 +607,29 @@ func TestApplyCreatesVersionsWithPins(t *testing.T) {
 	digest, err := privatev1.WIFConfigDigest(template.Spec)
 	require.NoError(t, err)
 	assert.Equal(t, &privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: digest}, store.created[0].Spec.WIFConfigTemplateReference)
+}
+
+// A retained boundary failing current contract validation must not abort the
+// snapshot: owned fields still apply, the Version stays unpinned, and no
+// write is attempted that admission would reject.
+func TestApplySkipsPinningUnpinnableBoundary(t *testing.T) {
+	store := &mockStoreClient{
+		templates: []privatev1.WIFConfigTemplate{testTemplate("5.0.3", "uid-high", true)},
+		versions: []privatev1.Version{{
+			ObjectMeta: objectMeta("5.0.6"),
+			Spec:       privatev1.VersionSpec{ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:old"},
+		}},
+	}
+	controller := &Controller{apiClient: store}
+	desired := map[string]privatev1.VersionSpec{
+		"5.0.6": {ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:new"},
+	}
+
+	require.NoError(t, controller.apply(context.Background(), newTestLogger(t), desired))
+
+	require.Len(t, store.updated, 1)
+	assert.Equal(t, "quay.io/release:new", store.updated[0].Spec.ReleaseImage)
+	assert.Nil(t, store.updated[0].Spec.WIFConfigTemplateReference, "an unpinnable boundary must not produce a pin")
 }
 
 // Failed template reads preserve pins, leave unpinned Versions unpinned, and
