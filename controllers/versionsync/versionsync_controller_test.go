@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,10 +40,12 @@ func (m *mockStatusWriter) Apply(_ context.Context, _ runtime.ApplyConfiguration
 	return nil
 }
 
-// mockStoreClient is a minimal client.Client backed by Version and Channel resources.
+// mockStoreClient is a minimal client.Client backed by Version, Channel and WIFConfigTemplate resources.
 type mockStoreClient struct {
 	versions       []privatev1.Version
 	channels       []privatev1.Channel
+	templates      []privatev1.WIFConfigTemplate
+	templateErr    error
 	created        []*privatev1.Version
 	updated        []*privatev1.Version
 	deleted        []*privatev1.Version
@@ -62,6 +65,11 @@ func (m *mockStoreClient) List(_ context.Context, list client.ObjectList, _ ...c
 	case *privatev1.ChannelList:
 		m.listedChannels = true
 		typedList.Items = append([]privatev1.Channel(nil), m.channels...)
+	case *privatev1.WIFConfigTemplateList:
+		if m.templateErr != nil {
+			return m.templateErr
+		}
+		typedList.Items = append([]privatev1.WIFConfigTemplate(nil), m.templates...)
 	default:
 		return fmt.Errorf("unexpected list type %T", list)
 	}
@@ -499,4 +507,151 @@ func TestApplyCreatesUpdatesAndDeletesVersions(t *testing.T) {
 
 func objectMeta(name string) metav1.ObjectMeta {
 	return metav1.ObjectMeta{Name: name}
+}
+
+func validDigest(seed string) string {
+	return "sha256:" + strings.Repeat(seed[:1], 64)
+}
+
+// Owned-field updates must never wipe a pinned template reference: the
+// admission-immutable pin is carried forward through every catalog change.
+func TestApplyPreservesPinnedReference(t *testing.T) {
+	template := testTemplate("5.0.0", "template-uid", true)
+	pin := &privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: validDigest("a")}
+	store := &mockStoreClient{
+		templates: []privatev1.WIFConfigTemplate{template},
+		versions: []privatev1.Version{{
+			ObjectMeta: objectMeta("5.0.6"),
+			Spec: privatev1.VersionSpec{
+				ChannelGroups:              []string{"stable"},
+				ReleaseImage:               "quay.io/release:old",
+				WIFConfigTemplateReference: pin,
+			},
+		}},
+	}
+	controller := &Controller{apiClient: store}
+	desired := map[string]privatev1.VersionSpec{
+		"5.0.6": {ChannelGroups: []string{"fast", "stable"}, ReleaseImage: "quay.io/release:new"},
+	}
+
+	require.NoError(t, controller.apply(context.Background(), newTestLogger(t), desired))
+
+	require.Len(t, store.updated, 1)
+	assert.Equal(t, "quay.io/release:new", store.updated[0].Spec.ReleaseImage)
+	assert.Equal(t, pin, store.updated[0].Spec.WIFConfigTemplateReference, "owned-field updates must never wipe the pinned reference")
+}
+
+// First-reference late binding: an unpinned Version whose boundary has been
+// published is pinned by the discovery sync, even when owned fields are
+// otherwise unchanged.
+func TestApplyPinsUnpinnedVersion(t *testing.T) {
+	template := testTemplate("5.0.0", "template-uid", true)
+	store := &mockStoreClient{
+		templates: []privatev1.WIFConfigTemplate{template},
+		versions: []privatev1.Version{{
+			ObjectMeta: objectMeta("5.0.6"),
+			Spec:       privatev1.VersionSpec{ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:5.0.6"},
+		}},
+	}
+	controller := &Controller{apiClient: store}
+	desired := map[string]privatev1.VersionSpec{
+		"5.0.6": {ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:5.0.6"},
+	}
+
+	require.NoError(t, controller.apply(context.Background(), newTestLogger(t), desired))
+
+	require.Len(t, store.updated, 1)
+	digest, err := privatev1.WIFConfigDigest(template.Spec)
+	require.NoError(t, err)
+	assert.Equal(t, &privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: digest}, store.updated[0].Spec.WIFConfigTemplateReference)
+}
+
+// Pins are set once and never repointed: a higher applicable boundary does
+// not produce a spec write against an already pinned Version.
+func TestApplyNeverRepointsPinnedReference(t *testing.T) {
+	high := testTemplate("5.0.3", "uid-high", true)
+	pin := &privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "uid-low", Digest: validDigest("b")}
+	store := &mockStoreClient{
+		templates: []privatev1.WIFConfigTemplate{high, testTemplate("5.0.0", "uid-low", true)},
+		versions: []privatev1.Version{{
+			ObjectMeta: objectMeta("5.0.6"),
+			Spec: privatev1.VersionSpec{
+				ChannelGroups:              []string{"stable"},
+				ReleaseImage:               "quay.io/release:5.0.6",
+				WIFConfigTemplateReference: pin,
+			},
+		}},
+	}
+	controller := &Controller{apiClient: store}
+	desired := map[string]privatev1.VersionSpec{
+		"5.0.6": {ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:5.0.6"},
+	}
+
+	require.NoError(t, controller.apply(context.Background(), newTestLogger(t), desired))
+
+	assert.Empty(t, store.updated, "a pinned reference must not be repointed to a higher boundary")
+}
+
+// Newly discovered Versions are created with their resolved boundary pin.
+func TestApplyCreatesVersionsWithPins(t *testing.T) {
+	template := testTemplate("5.0.0", "template-uid", true)
+	store := &mockStoreClient{templates: []privatev1.WIFConfigTemplate{template}}
+	controller := &Controller{apiClient: store}
+	desired := map[string]privatev1.VersionSpec{
+		"5.0.6": {ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:5.0.6"},
+	}
+
+	require.NoError(t, controller.apply(context.Background(), newTestLogger(t), desired))
+
+	require.Len(t, store.created, 1)
+	digest, err := privatev1.WIFConfigDigest(template.Spec)
+	require.NoError(t, err)
+	assert.Equal(t, &privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: digest}, store.created[0].Spec.WIFConfigTemplateReference)
+}
+
+// Failed template reads preserve pins, leave unpinned Versions unpinned, and
+// block destructive stale-Version aging until reads recover.
+func TestApplyTemplateReadFailurePreservesPinsAndBlocksAging(t *testing.T) {
+	pin := &privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: validDigest("c")}
+	store := &mockStoreClient{
+		templateErr: fmt.Errorf("template catalog unavailable"),
+		versions: []privatev1.Version{
+			{
+				ObjectMeta: objectMeta("5.0.6"),
+				Spec: privatev1.VersionSpec{
+					ChannelGroups:              []string{"stable"},
+					ReleaseImage:               "quay.io/release:old",
+					WIFConfigTemplateReference: pin,
+				},
+			},
+			{
+				ObjectMeta: objectMeta("5.0.7"),
+				Spec:       privatev1.VersionSpec{ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:old"},
+			},
+			{
+				ObjectMeta: objectMeta("4.22.9"),
+				Spec:       privatev1.VersionSpec{ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:stale"},
+			},
+		},
+	}
+	controller := &Controller{apiClient: store}
+	desired := map[string]privatev1.VersionSpec{
+		"5.0.6": {ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:new"},
+		"5.0.7": {ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/release:new"},
+	}
+
+	require.NoError(t, controller.apply(context.Background(), newTestLogger(t), desired))
+
+	require.Len(t, store.updated, 2)
+	for _, updated := range store.updated {
+		switch updated.Name {
+		case "5.0.6":
+			assert.Equal(t, pin, updated.Spec.WIFConfigTemplateReference, "failed template reads must preserve pins")
+		case "5.0.7":
+			assert.Nil(t, updated.Spec.WIFConfigTemplateReference, "failed template reads must not pin new references")
+		default:
+			t.Fatalf("unexpected update for %q", updated.Name)
+		}
+	}
+	assert.Empty(t, store.deleted, "failed template reads must block destructive stale-Version aging")
 }

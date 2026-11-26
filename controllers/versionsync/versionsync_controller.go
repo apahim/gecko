@@ -25,6 +25,11 @@ import (
 const (
 	syncInterval = 15 * time.Minute
 
+	// eligibilityInterval re-observes template verification changes and pins
+	// unpinned Versions faster than the discovery sync. The POC default is
+	// deliberately short; production deployments set it explicitly.
+	defaultEligibilityInterval = 30 * time.Second
+
 	// Stop probing a major after this many missing minor channels.
 	maxConsecutiveMissingMinors = 3
 
@@ -41,6 +46,7 @@ type Controller struct {
 	cincinnatiClient        *versionresolution.CincinnatiClient
 	log                     logger.Logger
 	apiClient               client.Client
+	eligibilityInterval     time.Duration
 }
 
 func NewController(
@@ -49,15 +55,25 @@ func NewController(
 	apiClient client.Client,
 ) *Controller {
 	return &Controller{
-		cincinnatiClient: cincinnatiClient,
-		log:              log,
-		apiClient:        apiClient,
+		cincinnatiClient:    cincinnatiClient,
+		log:                 log,
+		apiClient:           apiClient,
+		eligibilityInterval: defaultEligibilityInterval,
 	}
 }
 
 // NewCIController synchronizes the accepted releases selected by each Channel.
 func NewCIController(source *ReleaseControllerClient, log logger.Logger, apiClient client.Client) *Controller {
-	return &Controller{releaseControllerClient: source, log: log, apiClient: apiClient}
+	return &Controller{releaseControllerClient: source, log: log, apiClient: apiClient, eligibilityInterval: defaultEligibilityInterval}
+}
+
+// SetEligibilityInterval configures the fast availability-refresh cadence.
+// Non-positive values keep the default.
+func (c *Controller) SetEligibilityInterval(interval time.Duration) *Controller {
+	if interval > 0 {
+		c.eligibilityInterval = interval
+	}
+	return c
 }
 
 // Start implements manager.Runnable.
@@ -67,15 +83,19 @@ func (c *Controller) Start(ctx context.Context) error {
 
 	c.sync(ctx, log)
 
-	ticker := time.NewTicker(syncInterval)
-	defer ticker.Stop()
+	discovery := time.NewTicker(syncInterval)
+	defer discovery.Stop()
+	eligibility := time.NewTicker(c.eligibilityInterval)
+	defer eligibility.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
+		case <-discovery.C:
 			c.sync(ctx, log)
+		case <-eligibility.C:
+			c.refreshEligibility(ctx, log)
 		}
 	}
 }
@@ -113,6 +133,9 @@ func (c *Controller) sync(ctx context.Context, log logger.Logger) {
 		return
 	}
 	c.reportDefaults(ctx, log, channels, desired, "")
+	// Refresh availability immediately so post-apply generation bumps get a
+	// current observedGeneration instead of waiting for the fast loop.
+	c.refreshEligibility(ctx, log)
 }
 
 // fetchCIVersions gathers the complete snapshot before any Version is changed.
@@ -317,6 +340,45 @@ func (c *Controller) channels(ctx context.Context) ([]privatev1.Channel, error) 
 	return channels.Items, nil
 }
 
+func (c *Controller) templates(ctx context.Context) ([]privatev1.WIFConfigTemplate, error) {
+	var templates privatev1.WIFConfigTemplateList
+	if err := c.apiClient.List(ctx, &templates); err != nil {
+		return nil, fmt.Errorf("list wifconfigtemplates: %w", err)
+	}
+	return templates.Items, nil
+}
+
+// nextSpec builds the Version spec to persist: desired catalog-owned fields
+// plus the existing pin carried forward (never wiped), or a freshly resolved
+// pin for an unpinned Version when template reads succeeded.
+func (c *Controller) nextSpec(
+	ctx context.Context,
+	log logger.Logger,
+	name string,
+	desired privatev1.VersionSpec,
+	existing *privatev1.WIFConfigTemplateReference,
+	templates []privatev1.WIFConfigTemplate,
+	templateErr error,
+) privatev1.VersionSpec {
+	next := desired
+	if existing != nil {
+		next.WIFConfigTemplateReference = existing
+		return next
+	}
+	if templateErr != nil {
+		return next
+	}
+	pin, err := resolvePin(name, templates)
+	if err != nil {
+		// A single undigestable template must not fail the whole snapshot;
+		// the Version stays unpinned and unavailable, which is fail-closed.
+		log.Errorf(ctx, "resolve IAM template reference for Version %q failed: %v", name, err)
+		return next
+	}
+	next.WIFConfigTemplateReference = pin
+	return next
+}
+
 func (c *Controller) apply(
 	ctx context.Context,
 	log logger.Logger,
@@ -327,6 +389,8 @@ func (c *Controller) apply(
 		return fmt.Errorf("list versions: %w", err)
 	}
 
+	templates, templateErr := c.templates(ctx)
+
 	existing := make(map[string]*privatev1.Version, len(current.Items))
 
 	for i := range current.Items {
@@ -334,14 +398,20 @@ func (c *Controller) apply(
 		existing[version.Name] = version
 	}
 
-	// Update existing Versions first.
+	// Update existing Versions first. A pinned template reference is never
+	// wiped; an unpinned Version is pinned to its selected boundary.
 	for name, spec := range desired {
 		version, found := existing[name]
-		if !found || specEqual(&version.Spec, &spec) {
+		if !found {
 			continue
 		}
 
-		version.Spec = spec
+		next := c.nextSpec(ctx, log, name, spec, version.Spec.WIFConfigTemplateReference, templates, templateErr)
+		if specEqual(&version.Spec, &next) {
+			continue
+		}
+
+		version.Spec = next
 		if err := c.apiClient.Update(ctx, version); err != nil {
 			return fmt.Errorf("update version %q: %w", name, err)
 		}
@@ -359,7 +429,7 @@ func (c *Controller) apply(
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name,
 			},
-			Spec: spec,
+			Spec: c.nextSpec(ctx, log, name, spec, nil, templates, templateErr),
 		}
 
 		if err := c.apiClient.Create(ctx, version); err != nil {
@@ -370,6 +440,14 @@ func (c *Controller) apply(
 	}
 
 	// Delete stale Versions only after the complete snapshot has been applied.
+	// Failed template reads block destructive stale-Version aging: pins
+	// cannot be resolved and availability is unknown, so stale Versions are
+	// retained until template reads recover.
+	if templateErr != nil {
+		log.Errorf(ctx, "preserving stale Versions because template reads failed: %v", templateErr)
+		return nil
+	}
+
 	for i := range current.Items {
 		version := &current.Items[i]
 		if _, found := desired[version.Name]; found {
@@ -444,7 +522,9 @@ func specEqual(a, b *privatev1.VersionSpec) bool {
 			return false
 		}
 	}
-	return true
+	// The pinned template reference participates in equality: a carried or
+	// freshly resolved pin is a deliberate spec change, never a wipe.
+	return equality.Semantic.DeepEqual(a.WIFConfigTemplateReference, b.WIFConfigTemplateReference)
 }
 
 func containsString(values []string, target string) bool {

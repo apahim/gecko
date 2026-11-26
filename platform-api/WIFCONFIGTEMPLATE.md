@@ -110,11 +110,13 @@ Run the local Helm-to-API contract check with:
 HELM_BIN=/path/to/helm go test ./cmd/platform-api-server -run TestWIFConfigTemplateHelmRendering
 ```
 
-Phase 1 introduces the API and opt-in packaging only. Versionsync ownership of
-`Available`, prerelease numeric-base floor selection, preservation of pinned
-references during catalog synchronization, minimal status RBAC and server dispatch
-enforcement must ship before activation in Phase 2. A template's verified assertion
-alone does not authorize a Cluster or independently establish runtime permissions.
+Phase 1 introduced the API and opt-in packaging. Phase 1.5 delivers versionsync
+ownership of `Available`, prerelease numeric-base floor selection, preservation
+of pinned references during catalog synchronization and minimal status RBAC,
+with an independent fast eligibility loop (default 30s POC cadence, configured
+deliberately in production). Server dispatch enforcement must still ship
+before activation in Phase 2. A template's verified assertion alone does not
+authorize a Cluster or independently establish runtime permissions.
 
 ## Read-only IAM requirements API
 

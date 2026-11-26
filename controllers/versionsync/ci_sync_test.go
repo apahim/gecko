@@ -64,7 +64,7 @@ func ciStore(t *testing.T, objects ...client.Object) client.Client {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	require.NoError(t, privatev1.AddToScheme(scheme))
-	return fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&privatev1.Channel{}).WithObjects(objects...).Build()
+	return fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&privatev1.Channel{}, &privatev1.Version{}).WithObjects(objects...).Build()
 }
 func readChannel(t *testing.T, store client.Client, name string) *privatev1.Channel {
 	t.Helper()
