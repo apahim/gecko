@@ -42,7 +42,11 @@ func TestTypedWatchProjection(t *testing.T) {
 				if strings.Contains(string(data), "obsolete") {
 					t.Fatal("obsolete field exposed")
 				}
-				if _, found, _ := unstructured.NestedFieldNoCopy(document.Object, "spec", "obsolete"); !found {
+				_, found, err := unstructured.NestedFieldNoCopy(document.Object, "spec", "obsolete")
+				if err != nil {
+					t.Fatalf("lookup obsolete source field: %v", err)
+				}
+				if !found {
 					t.Fatal("projection mutated stored event")
 				}
 			case <-time.After(5 * time.Second):
