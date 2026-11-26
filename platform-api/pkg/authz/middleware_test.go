@@ -338,7 +338,7 @@ func testRegionRequirements(condition *string) []privatev1.RoleBindingRequiremen
 	}
 	values := []string{"us-east1"}
 	if *condition == "false" {
-		values = []string{}
+		values = []string{"never-match"}
 	}
 	return []privatev1.RoleBindingRequirement{{Key: "region", Operator: "In", Values: values}}
 }

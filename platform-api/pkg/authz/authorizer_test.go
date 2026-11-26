@@ -211,7 +211,7 @@ func TestHasNamespacePermissionIgnoresBindingConditions(t *testing.T) {
 		Spec: privatev1.RoleBindingSpec{
 			Subject:    "alice@example.com",
 			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
-			Conditions: []privatev1.RoleBindingRequirement{{Key: "name", Operator: "In", Values: []string{}}},
+			Conditions: []privatev1.RoleBindingRequirement{{Key: "name", Operator: "In", Values: []string{"never-match"}}},
 		},
 	}
 	binding.Name = "conditioned-viewer"

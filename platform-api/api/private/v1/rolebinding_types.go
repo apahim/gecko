@@ -98,11 +98,12 @@ type RoleBindingRequirement struct {
 	// values are literal strings except '*' matches zero or more characters.
 	// Matching is case-sensitive and whole-string. No escape language is supported.
 	// Empty or whitespace-only strings are rejected; other values are not trimmed.
-	// Empty arrays and duplicates are valid. In [] matches nothing; NotIn []
-	// matches every present attribute. Misspelled exclusions may broaden access.
+	// At least one value is required; duplicates are allowed.
+	// Misspelled exclusions may broaden access.
 	// +orlop:public
 	// +required
 	// +listType=atomic
+	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:items:MinLength=1
 	Values []string `json:"values"`
 }

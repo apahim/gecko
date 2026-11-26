@@ -26,8 +26,8 @@ type Requirement struct {
 // Compile validates structural requirements and emits a deterministic predicate.
 // Empty input is unconditioned and returns nil. Values are not checked for
 // resource-name/region validity or uniqueness. Empty/whitespace-only values
-// are rejected; nonblank values are preserved exactly. A nil
-// Values slice represents a missing/null array and is rejected; [] is valid.
+// are rejected; nonblank values are preserved exactly. A nil or empty
+// Values slice is rejected; every requirement needs at least one value.
 // '*' is the only wildcard. All other characters are literal, including '\'.
 func Compile(requirements []Requirement) (*string, error) {
 	if len(requirements) == 0 {
@@ -62,8 +62,8 @@ func compileRequirement(requirement Requirement) (string, error) {
 	if requirement.Operator != "In" && requirement.Operator != "NotIn" {
 		return "", fmt.Errorf("operator must be In or NotIn")
 	}
-	if requirement.Values == nil {
-		return "", fmt.Errorf("values must be an array of strings")
+	if len(requirement.Values) == 0 {
+		return "", fmt.Errorf("values must contain at least one string")
 	}
 	matches := make([]string, 0, len(requirement.Values))
 	for _, value := range requirement.Values {

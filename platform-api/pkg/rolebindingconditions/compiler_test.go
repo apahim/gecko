@@ -64,7 +64,6 @@ func TestCompileMatching(t *testing.T) {
 				{"multiple wildcard", []string{"d**m*"}, "demo", true, true},
 				{"bare wildcard", []string{"*"}, "anything", true, true},
 				{"missing", []string{"*"}, "", false, false},
-				{"empty list", []string{}, "any", true, false},
 				{"surrounding whitespace preserved", []string{" x "}, " x ", true, true},
 				{"surrounding whitespace not trimmed", []string{" x "}, "x", true, false},
 				{"duplicates", []string{"x", "x"}, "x", true, true},
@@ -184,5 +183,20 @@ func TestCompileRejectsBlankValues(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestCompileRejectsEmptyValues(t *testing.T) {
+	for _, key := range []string{"name", "region"} {
+		for _, op := range []string{"In", "NotIn"} {
+			for _, values := range [][]string{nil, {}} {
+				if expression, err := Compile([]Requirement{{key, op, values}}); err == nil || expression != nil {
+					t.Fatalf("accepted %s/%s values=%#v", key, op, values)
+				}
+			}
+		}
+	}
+	if expression, err := Compile([]Requirement{}); err != nil || expression != nil {
+		t.Fatal("top-level empty conditions rejected")
 	}
 }

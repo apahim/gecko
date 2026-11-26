@@ -33,7 +33,7 @@ func TestRoleBindingConditionsHTTP(t *testing.T) {
 			name := "allowed-conditions-" + surface.name
 			collection := server.apiPrefix + "/namespaces/project-a/rolebindings"
 			path := collection + "/" + name
-			conditions := []privatev1.RoleBindingRequirement{{Key: "region", Operator: "In", Values: []string{"TYPO", "europe-*", " literal value "}}, {Key: "name", Operator: "NotIn", Values: []string{}}}
+			conditions := []privatev1.RoleBindingRequirement{{Key: "region", Operator: "In", Values: []string{"TYPO", "europe-*", " literal value "}}, {Key: "name", Operator: "NotIn", Values: []string{"never-match"}}}
 			body := func(revision string, requirements interface{}, include bool) []byte {
 				t.Helper()
 				spec := map[string]interface{}{"subject": "bob@example.com", "roleRef": map[string]interface{}{"kind": "PlatformRole", "name": "cluster-viewer", "apiGroup": privatev1.GroupVersion.Group}}
@@ -227,6 +227,18 @@ func testRoleBindingSchemaInput(t *testing.T, private bool, path, collection str
 	t.Helper()
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch} {
 		for _, invalid := range []string{
+			`[{"key":"name","operator":"In","values":[]}]`,
+			`[{"key":"name","operator":"In","values":null}]`,
+			`[{"key":"name","operator":"In"}]`,
+			`[{"key":"name","operator":"NotIn","values":[]}]`,
+			`[{"key":"name","operator":"NotIn","values":null}]`,
+			`[{"key":"name","operator":"NotIn"}]`,
+			`[{"key":"region","operator":"In","values":[]}]`,
+			`[{"key":"region","operator":"In","values":null}]`,
+			`[{"key":"region","operator":"In"}]`,
+			`[{"key":"region","operator":"NotIn","values":[]}]`,
+			`[{"key":"region","operator":"NotIn","values":null}]`,
+			`[{"key":"region","operator":"NotIn"}]`,
 			`[{"key":"name","operator":"Like","values":["x"]}]`,
 			`[{"key":"other","operator":"In","values":["x"]}]`,
 			`[{"key":"name","operator":"In","values":null}]`,

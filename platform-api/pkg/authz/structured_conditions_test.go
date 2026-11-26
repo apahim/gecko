@@ -235,3 +235,47 @@ func TestLegacyRawConditionIgnored(t *testing.T) {
 		})
 	}
 }
+
+func TestEmptyStoredRequirementsGrantNothing(t *testing.T) {
+	for _, key := range []string{"name", "region"} {
+		for _, op := range []string{"In", "NotIn"} {
+			t.Run(key+"/"+op, func(t *testing.T) {
+				stores, a := newTestAuthorizer(t)
+				seedClusterBinding(t, stores, "project-a", []string{"cluster.get", "cluster.list"}, nil)
+				original, err := stores.RoleBindings.Get(t.Context(), "project-a", "alice-viewer")
+				if err != nil {
+					t.Fatal(err)
+				}
+				bad := original.(*privatev1.RoleBinding).DeepCopy()
+				bad.Name = "invalid-empty"
+				bad.ResourceVersion = ""
+				bad.UID = ""
+				bad.Spec.Conditions = []privatev1.RoleBindingRequirement{{Key: privatev1.RoleBindingConditionKey(key), Operator: privatev1.RoleBindingConditionOperator(op), Values: []string{}}}
+				if err := stores.RoleBindings.Create(t.Context(), bad); err != nil {
+					t.Fatal(err)
+				}
+				if err := a.Reload(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				allowed, err := a.Authorize(t.Context(), "alice@example.com", GetCluster, "project-a")
+				if err != nil || !allowed {
+					t.Fatalf("valid independent binding lost: %v %v", allowed, err)
+				}
+				if err := stores.RoleBindings.Delete(t.Context(), "project-a", "alice-viewer"); err != nil {
+					t.Fatal(err)
+				}
+				if err := a.Reload(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				allowed, err = a.Authorize(t.Context(), "alice@example.com", GetCluster, "project-a")
+				if err != nil || allowed {
+					t.Fatalf("empty values granted access: %v %v", allowed, err)
+				}
+				allowed, err = a.HasNamespacePermission(t.Context(), "alice@example.com", ListClusters, "project-a")
+				if err != nil || allowed {
+					t.Fatalf("empty values admitted list: %v %v", allowed, err)
+				}
+			})
+		}
+	}
+}

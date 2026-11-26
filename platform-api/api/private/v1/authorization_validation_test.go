@@ -2,8 +2,11 @@ package v1
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 func testRoleBinding(requirements []RoleBindingRequirement) *RoleBinding {
@@ -17,7 +20,7 @@ func TestRoleBindingConditionValidation(t *testing.T) {
 		valid        bool
 	}{
 		{"omitted", nil, true}, {"mixed", []RoleBindingRequirement{{"region", "In", []string{"TYPO", "europe-*", " literal value "}}, {"name", "NotIn", []string{"*-private"}}}, true},
-		{"empty alternatives", []RoleBindingRequirement{{"name", "NotIn", []string{}}}, true},
+		{"empty alternatives", []RoleBindingRequirement{{"name", "NotIn", []string{}}}, false},
 		{"duplicates", []RoleBindingRequirement{{"name", "In", []string{"x", "x"}}, {"name", "In", []string{"x"}}}, true},
 		{"bad key", []RoleBindingRequirement{{"version", "In", []string{"x"}}}, false},
 		{"bad operator", []RoleBindingRequirement{{"name", "Like", []string{"x"}}}, false},
@@ -61,5 +64,29 @@ func TestRoleBindingUpdatePreservesIdentity(t *testing.T) {
 				t.Fatal("validation mutated old object")
 			}
 		})
+	}
+}
+
+func TestRequirementValuesSchemaMinimum(t *testing.T) {
+	for _, path := range []string{".schemas/rolebinding_schema.yaml", "../../public/v1/.schemas/rolebinding_schema.yaml"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema map[string]interface{}
+		if err := yaml.Unmarshal(data, &schema); err != nil {
+			t.Fatal(err)
+		}
+		conditions := schema["properties"].(map[string]interface{})["spec"].(map[string]interface{})["properties"].(map[string]interface{})["conditions"].(map[string]interface{})
+		if minimum, ok := conditions["minItems"]; ok && minimum != float64(0) {
+			t.Fatalf("top-level conditions must allow empty: %v", minimum)
+		}
+		node := schema
+		for _, key := range []string{"properties", "spec", "properties", "conditions", "items", "properties", "values"} {
+			node = node[key].(map[string]interface{})
+		}
+		if node["minItems"] != float64(1) {
+			t.Fatalf("%s: minItems=%v", path, node["minItems"])
+		}
 	}
 }
