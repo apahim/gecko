@@ -1,11 +1,12 @@
 # WIFConfigTemplate API contract and rollout
 
 `gcp.managed.openshift.io/v1` exposes a platform-scoped, retained IAM catalog.
-Public routes offer get/list only, but catalog reads are **not** exempt from
-authorization. Until explicit platform-scoped Cedar grants and frontend routing
-are delivered, authenticated callers without a grant are denied. Writes use the
-delegated private API and platform RBAC. This is not a separate Kubernetes CRD
-or a cloud IAM controller.
+Public routes offer get/list only; those reads are authorization-exempt for
+authenticated callers, matching Version, Channel and PlatformRole (GCP-1266
+precedent). Authentication remains mandatory. Explicit platform-scoped Cedar
+grants (GCP-1406) will replace the exemption and must remove it in the same
+rollout. Writes use the delegated private API and platform RBAC. This is not a
+separate Kubernetes CRD or a cloud IAM controller.
 
 ## Contract and identity
 

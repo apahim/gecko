@@ -175,6 +175,7 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 		{name: "list versions", path: apiPrefix + "/versions"},
 		{name: "list channels", path: apiPrefix + "/channels"},
 		{name: "list platform roles", path: apiPrefix + "/platformroles"},
+		{name: "list IAM templates", path: apiPrefix + "/wifconfigtemplates"},
 	} {
 		t.Run(path.name, func(t *testing.T) {
 			if got, _ := request(http.MethodGet, path.path, true); got != http.StatusOK {
@@ -191,6 +192,7 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 		{name: "get version", path: apiPrefix + "/versions/4.22.1", wantContains: "4.22.1", wantAbsent: "releaseImage"},
 		{name: "get channel", path: apiPrefix + "/channels/stable", wantContains: "4.22.1"},
 		{name: "get platform role", path: apiPrefix + "/platformroles/catalog-reader", wantContains: "role.get"},
+		{name: "get IAM template", path: apiPrefix + "/wifconfigtemplates/5.0.0", wantContains: "compute.instances.get"},
 	} {
 		t.Run(path.name, func(t *testing.T) {
 			status, body := request(http.MethodGet, path.path, true)
@@ -204,9 +206,6 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 				t.Errorf("response %s unexpectedly contains %q", path.path, path.wantAbsent)
 			}
 		})
-	}
-	if !enforce {
-		testPublicIAMCatalogRoutesWithoutAuthorization(t, request, apiPrefix)
 	}
 	testMissingPublicCatalogItems(t, request, apiPrefix)
 
@@ -227,8 +226,6 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 		{name: "authenticated catalog watch", method: http.MethodGet, path: apiPrefix + "/versions?watch=true", authenticated: true, wantStatus: http.StatusForbidden},
 		{name: "unauthenticated IAM list", method: http.MethodGet, path: apiPrefix + "/wifconfigtemplates", wantStatus: http.StatusUnauthorized},
 		{name: "unauthenticated IAM get", method: http.MethodGet, path: apiPrefix + "/wifconfigtemplates/5.0.0", wantStatus: http.StatusUnauthorized},
-		{name: "authenticated IAM list without Cedar grant", method: http.MethodGet, path: apiPrefix + "/wifconfigtemplates", authenticated: true, wantStatus: http.StatusForbidden},
-		{name: "authenticated IAM get without Cedar grant", method: http.MethodGet, path: apiPrefix + "/wifconfigtemplates/5.0.0", authenticated: true, wantStatus: http.StatusForbidden},
 		{name: "authenticated IAM create", method: http.MethodPost, path: apiPrefix + "/wifconfigtemplates", authenticated: true, wantStatus: http.StatusForbidden},
 		{name: "authenticated IAM patch", method: http.MethodPatch, path: apiPrefix + "/wifconfigtemplates/5.0.0", authenticated: true, wantStatus: http.StatusForbidden},
 		{name: "authenticated IAM delete", method: http.MethodDelete, path: apiPrefix + "/wifconfigtemplates/5.0.0", authenticated: true, wantStatus: http.StatusForbidden},
@@ -260,17 +257,9 @@ func testPublicAPICatalogReads(t *testing.T, enforce bool) {
 
 }
 
-// Route and public projection are available, but an authorization-enabled
-// server denies these reads until explicit platform Cedar grants are deployed.
-func testPublicIAMCatalogRoutesWithoutAuthorization(t *testing.T, request func(string, string, bool) (int, string), apiPrefix string) {
-	t.Helper()
-	for _, path := range []string{apiPrefix + "/wifconfigtemplates", apiPrefix + "/wifconfigtemplates/5.0.0"} {
-		if status, body := request(http.MethodGet, path, true); status != http.StatusOK || !strings.Contains(body, "compute.instances.get") {
-			t.Errorf("authorization-disabled IAM GET %s = %d: %s", path, status, body)
-		}
-	}
-}
-
+// Authenticated catalog reads of WIFConfigTemplate are authorization-exempt
+// (get/list), matching Version, Channel and PlatformRole. Explicit
+// platform-scoped Cedar grants (GCP-1406) will replace the exemption.
 func testMissingPublicCatalogItems(t *testing.T, request func(string, string, bool) (int, string), apiPrefix string) {
 	t.Helper()
 	for _, path := range []string{
