@@ -682,7 +682,12 @@ func (h *ResourceHandler) ApplyPatch(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// This is an update via apply
 		if v, ok := typedResult.(types.CustomValidator); ok {
-			existingTyped, err := conversion.TypedOldObject(h.scheme, h.gvk, existing)
+			existingServing, err := h.convertToServingVersion(existing)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to convert old object for validation")
+				return
+			}
+			existingTyped, err := conversion.TypedOldObject(h.scheme, h.gvk, existingServing)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, fmt.Sprintf("converting old object: %v", err))
 				return

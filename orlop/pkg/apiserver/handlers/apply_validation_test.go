@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,12 +12,14 @@ import (
 	"github.com/go-logr/logr"
 
 	privatev1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
+	privatev2 "github.com/openshift-online/gecko/orlop/apis/private/test/v2"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/apply"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 
 	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 )
@@ -141,5 +145,77 @@ func TestApplyPatchAcceptsValidObjects(t *testing.T) {
 	}
 	if stored := got.(*privatev1.Object); stored.Spec.PublicField != "updated-via-apply" {
 		t.Fatalf("expected stored spec.publicField=updated-via-apply, got %q", stored.Spec.PublicField)
+	}
+}
+
+func TestApplyPatchValidatesServingVersionOfStoredObject(t *testing.T) {
+	for _, test := range []struct {
+		name, oldValue, newValue string
+		wantStatus               int
+	}{
+		{name: "valid update", oldValue: "original", newValue: "updated", wantStatus: http.StatusOK},
+		{name: "invalid new value", oldValue: "original", newValue: "invalid-update-new", wantStatus: http.StatusBadRequest},
+		{name: "invalid old value", oldValue: "invalid-update-old", newValue: "updated", wantStatus: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h, _ := newApplyValidationHandler(t)
+			if err := privatev2.AddToScheme(h.scheme); err != nil {
+				t.Fatal(err)
+			}
+			// managedfields uses the scheme to convert the live storage object
+			// while merging; the handler must also convert it for validation.
+			if err := h.scheme.AddConversionFunc((*privatev2.Object)(nil), (*privatev1.Object)(nil), func(a, b interface{}, _ conversion.Scope) error {
+				old, next := a.(*privatev2.Object), b.(*privatev1.Object)
+				next.ObjectMeta = *old.ObjectMeta.DeepCopy()
+				next.Spec.PublicField = old.Spec.PublicField
+				next.SetGroupVersionKind(gvkV1)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			h.SetStorageGVK(gvkV2)
+			store := memory.NewMemoryStore("objects", h.scheme, gvkV2)
+			h.store = store
+			seed := &privatev2.Object{
+				TypeMeta:   metav1.TypeMeta{APIVersion: gvkV2.GroupVersion().String(), Kind: gvkV2.Kind},
+				ObjectMeta: metav1.ObjectMeta{Name: "cross-version", Namespace: "default"},
+				Spec:       privatev2.ObjectSpec{PublicField: test.oldValue},
+			}
+			if err := store.Create(t.Context(), seed); err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.Get(t.Context(), "default", seed.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rr := applyValidationRequest(h, seed.Name, applyConfigBody(seed.Name, test.newValue), true)
+			if rr.Code != test.wantStatus {
+				t.Fatalf("apply update = %d, want %d: %s", rr.Code, test.wantStatus, rr.Body)
+			}
+			after, err := store.Get(t.Context(), "default", seed.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored := after.(*privatev2.Object)
+			if test.wantStatus == http.StatusOK {
+				if stored.Spec.PublicField != test.newValue {
+					t.Fatalf("stored value = %q, want %q", stored.Spec.PublicField, test.newValue)
+				}
+				var served privatev1.Object
+				if err := json.Unmarshal(rr.Body.Bytes(), &served); err != nil {
+					t.Fatal(err)
+				}
+				if served.APIVersion != gvkV1.GroupVersion().String() || served.Spec.PublicField != test.newValue {
+					t.Fatalf("unexpected serving-version response: %+v", served)
+				}
+			} else {
+				if !strings.Contains(rr.Body.String(), "spec.publicField is rejected by update validation") {
+					t.Fatalf("update was not rejected by the serving-version field validator: %s", rr.Body)
+				}
+				if !reflect.DeepEqual(before, after) {
+					t.Fatal("rejected apply update changed persisted state")
+				}
+			}
+		})
 	}
 }
