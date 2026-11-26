@@ -200,3 +200,38 @@ func TestCompileRejectsEmptyValues(t *testing.T) {
 		t.Fatal("top-level empty conditions rejected")
 	}
 }
+
+func TestCompileBoundsInputBeforeExpansion(t *testing.T) {
+	for _, requirements := range [][]Requirement{
+		{{"name", "In", []string{strings.Repeat("*x", 1<<19)}}},
+		{{"name", "In", make([]string, 1<<20)}},
+		make([]Requirement, 1<<20),
+		{{"name", "In", []string{strings.Repeat("日", 4097)}}},
+	} {
+		if result, err := Compile(requirements); err == nil || result != nil {
+			t.Fatal("unbounded input accepted")
+		}
+	}
+	// The lower bound must not reject a valid exact boundary.
+	value := strings.Repeat("x", 4096-len("(context has resourceName && (context.resourceName == \"\"))"))
+	if _, err := Compile([]Requirement{{"name", "In", []string{value}}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompilePreservesRedundantWildcardRuns(t *testing.T) {
+	for _, value := range []string{strings.Repeat("*", 1<<20), "a" + strings.Repeat("*", 1<<20) + "b"} {
+		got, err := Compile([]Requirement{{"name", "In", []string{value}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		normalized := "*"
+		if strings.HasPrefix(value, "a") {
+			normalized = "a*b"
+		}
+		want, err := Compile([]Requirement{{"name", "In", []string{normalized}}})
+		if err != nil || *got != *want {
+			t.Fatal("redundant wildcard semantics changed")
+		}
+	}
+}

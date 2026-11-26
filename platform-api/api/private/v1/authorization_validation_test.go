@@ -90,3 +90,9 @@ func TestRequirementValuesSchemaMinimum(t *testing.T) {
 		}
 	}
 }
+
+func TestCompileRoleBindingConditionsRejectsImpossibleRequirementCount(t *testing.T) {
+	if expression, err := CompileRoleBindingConditions(make([]RoleBindingRequirement, 4097)); err == nil || expression != nil {
+		t.Fatal("impossible requirement count accepted")
+	}
+}

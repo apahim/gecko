@@ -87,3 +87,27 @@ func TestTypedWatchErrorsAndStop(t *testing.T) {
 		t.Fatal("watch did not stop")
 	}
 }
+
+func TestProjectedWatchStopWithUnreadEvent(t *testing.T) {
+	source := watch.NewRaceFreeFake()
+	projected := make(chan struct{})
+	w := newProjectedWatch(source, func(e watch.Event) (watch.Event, bool) { close(projected); return e, true })
+	defer w.Stop()
+	source.Action(watch.Added, &metav1.Status{})
+	select {
+	case <-projected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("projection did not run")
+	}
+	// Do not receive the pending event. Stop must cancel its outgoing send.
+	w.Stop()
+	w.Stop()
+	select {
+	case <-w.(*projectedWatch).finished:
+		if !source.IsStopped() {
+			t.Fatal("upstream not stopped")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch blocked on unread event")
+	}
+}

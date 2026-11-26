@@ -33,6 +33,12 @@ func Compile(requirements []Requirement) (*string, error) {
 	if len(requirements) == 0 {
 		return nil, nil
 	}
+	// Every requirement/value and every normalized pattern rune consumes at least one
+	// emitted character. Reject impossible inputs before allocating output slices
+	// or splitting patterns. These are derived bounds, not new API limits.
+	if err := checkInputBudget(requirements); err != nil {
+		return nil, err
+	}
 	expressions := make([]string, 0, len(requirements))
 	for i, requirement := range requirements {
 		expression, err := compileRequirement(requirement)
@@ -77,7 +83,7 @@ func compileRequirement(requirement Requirement) (string, error) {
 			matches = append(matches, "context."+attribute+" == "+string(types.String(value).MarshalCedar()))
 			continue
 		}
-		parts := strings.Split(value, "*")
+		parts := strings.Split(collapseStars(value), "*")
 		components := make([]any, 0, 2*len(parts)-1)
 		for i, literal := range parts {
 			if i != 0 {
@@ -98,4 +104,57 @@ func compileRequirement(requirement Requirement) (string, error) {
 		disjunction = "(" + disjunction + ")"
 	}
 	return "(context has " + attribute + " && " + disjunction + ")", nil
+}
+
+// checkInputBudget bounds compiler allocations even for untrusted stored input.
+// It stops scanning once the lower bound exceeds the final expression limit.
+func checkInputBudget(requirements []Requirement) error {
+	budget := MaxExpressionCharacters
+	consume := func(n int) bool {
+		if n > budget {
+			return false
+		}
+		budget -= n
+		return true
+	}
+	exceeded := func() error {
+		return fmt.Errorf("generated condition exceeds %d characters (input lower bound)", MaxExpressionCharacters)
+	}
+	if !consume(len(requirements)) {
+		return exceeded()
+	}
+	for _, requirement := range requirements {
+		if !consume(len(requirement.Values)) {
+			return exceeded()
+		}
+		for _, value := range requirement.Values {
+			previousStar := false
+			for _, r := range value {
+				if r == '*' && previousStar {
+					continue
+				}
+				previousStar = r == '*'
+				if !consume(1) {
+					return exceeded()
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// collapseStars mirrors Cedar's pattern normalization without allocating one
+// split/component entry per redundant star. The preflight bounds the resulting
+// text, not raw wildcard-run length.
+func collapseStars(value string) string {
+	var result strings.Builder
+	previousStar := false
+	for _, r := range value {
+		if r == '*' && previousStar {
+			continue
+		}
+		previousStar = r == '*'
+		result.WriteRune(r)
+	}
+	return result.String()
 }
