@@ -81,7 +81,7 @@ func resolvePin(versionName string, templates []privatev1.WIFConfigTemplate) (*p
 		return nil, nil
 	}
 	if err := pinnableBoundary(selected); err != nil {
-		return nil, nil
+		return nil, nil //nolint:nilerr // Unpinnable boundaries are an expected catalog state, not an error.
 	}
 	digest, err := privatev1.WIFConfigDigest(selected.Spec)
 	if err != nil {
