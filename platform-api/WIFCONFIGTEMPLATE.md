@@ -95,12 +95,12 @@ by self-heal. Do not use a direct patch for a durable revocation while GitOps st
 declares true. Rendered manifests retain `Prune=false,Delete=false` and tolerate
 initial aggregated-API registration with `SkipDryRunOnMissingResource=true`.
 
-The catalog is opt-in (`wifConfigTemplates.enabled`, `entries`). Initially every
-entry uses the reviewed project-wide baseline from the chart's `files/` directory.
-Do not edit this immutable file after publication to update an existing boundary.
-A genuinely different future contract needs its own retained contract data and a
-new version-boundary manifest; the current single-baseline packaging must be
-extended explicitly for that use case. Admission rejecting an immutable change is
+The catalog is opt-in (`wifConfigTemplates.enabled`, `entries`). Each entry
+selects its own immutable contract manifest through `contractFile`, defaulting
+to the reviewed project-wide baseline from the chart's `files/` directory. Do
+not edit a published file to update an existing boundary. A genuinely different
+future contract needs its own retained contract data and a new version-boundary
+manifest selected by a new entry. Admission rejecting an immutable change is
 the intended fail-safe, not a reason to delete/recreate the template.
 
 The chart defaults publish no templates and disable new Cluster assertions.

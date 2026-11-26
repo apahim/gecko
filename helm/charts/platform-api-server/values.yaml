@@ -6,6 +6,15 @@ image:
   tag: "365ddef"
   pullPolicy: Always
 
+# Spanner DDL migration Job image, pinned independently from the API image so
+# API/catalog-only image bumps cannot recreate the Force=true,Replace=true Job
+# and re-run migrations. Bump deliberately when new DDL must ship.
+migrationImage:
+  registry: us-docker.pkg.dev
+  repository: gcp-hcp-commons/gcp-hcp-images/gecko-platform-api-server
+  tag: "365ddef"
+  pullPolicy: Always
+
 nameOverride: ""
 fullnameOverride: ""
 
@@ -52,6 +61,10 @@ wifConfigTemplates:
   entries: []
   # - name: "5.0.0"
   #   verified: false
+  #   # Per-boundary immutable contract manifest. Defaults to the reviewed
+  #   # project-wide baseline; a genuinely different contract needs its own
+  #   # retained file under files/ and must not edit a published one.
+  #   contractFile: "files/wifconfigtemplate-project.yaml"
 
 platformRoles:
   # System PlatformRoles are managed by Helm/private API and are never

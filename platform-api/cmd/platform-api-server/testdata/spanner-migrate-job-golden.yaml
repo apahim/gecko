@@ -1,0 +1,66 @@
+---
+# Source: platform-api-server/templates/spanner-migrate-job.yaml
+# Spanner DDL migration Job. Runs at wave -5 alongside SpannerDatabase + IAM
+# (per GCP-171 3-wave standard: -5 for infra, 0 for apps). Uses a dedicated service account with
+# roles/spanner.databaseAdmin so the main Deployment only needs databaseUser.
+#
+# Migrations are idempotent (ensureTable checks existence, handles AlreadyExists).
+# Replace=true allows ArgoCD to delete+recreate the Job when the spec changes
+# (Jobs are immutable in Kubernetes).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wif-phase1-platform-api-server-migrate
+  labels:
+    helm.sh/chart: platform-api-server-0.1.0
+    app.kubernetes.io/name: platform-api-server
+    app.kubernetes.io/instance: wif-phase1
+    app.kubernetes.io/version: "365ddef"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+    argocd.argoproj.io/sync-options: Force=true,Replace=true
+spec:
+  backoffLimit: 3
+  # Must exceed the in-process migration timeout (5 min) and cover all
+  # backoffLimit retries: 5 min x 4 attempts = 20 min, plus headroom.
+  activeDeadlineSeconds: 1500
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-api-server-migrate
+        app.kubernetes.io/instance: wif-phase1
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: wif-phase1-platform-api-server-migrate
+      securityContext:
+        fsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: migrate
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          image: "us-docker.pkg.dev/gcp-hcp-commons/gcp-hcp-images/gecko-platform-api-server:365ddef"
+          imagePullPolicy: Always
+          args:
+            - --migrate-only
+          env:
+            - name: SPANNER_DATABASE
+              value: "projects/test-project/instances/test-instance/databases/gecko"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+
