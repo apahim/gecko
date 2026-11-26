@@ -78,8 +78,9 @@ func NormalizeEmail(email string) (string, error) {
 }
 
 // ValidatorDeps supplies storage-backed checks without coupling API types to
-// server storage implementations. A nil callback skips only its storage-backed
-// check, as needed by standalone API validation tests.
+// server storage implementations. Legacy authorization/upgrade callbacks may be
+// omitted in standalone validation tests. IAM reference/application lookup instead
+// fails closed when its callback is absent; new application writes also default off.
 //
 //nolint:kubeapilinter // runtime validation callbacks are not serialized API fields.
 type ValidatorDeps struct {
@@ -89,7 +90,9 @@ type ValidatorDeps struct {
 	// ValidateClusterRelease reports whether the Version catalog offers a
 	// release version in a channel group. It receives the effective channel
 	// group (empty spec values already defaulted).
-	ValidateClusterRelease func(context.Context, string, string) error
+	ValidateClusterRelease    func(context.Context, string, string) error
+	WIFConfigTemplate         func(context.Context, string) (*WIFConfigTemplate, error)
+	AllowIAMApplicationWrites bool
 }
 
 var validatorDeps struct {

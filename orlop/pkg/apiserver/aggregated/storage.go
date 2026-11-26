@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 
@@ -257,7 +258,12 @@ func (s *ResourceStorage) Delete(ctx context.Context, name string, deleteValidat
 			return nil, false, err
 		}
 	}
-	if v, ok := existing.(types.CustomValidator); ok {
+	typed, err := conversion.TypedOldObject(s.scheme, s.gvk, existing)
+	if err != nil {
+		s.logger.Error(err, "decode object for delete validation", "kind", s.gvk.Kind, "namespace", namespace, "name", name)
+		return nil, false, errors.NewInternalError(fmt.Errorf("decode object for delete validation"))
+	}
+	if v, ok := typed.(types.CustomValidator); ok {
 		if err := v.ValidateDelete(ctx); err != nil {
 			return nil, false, errors.NewBadRequest(fmt.Sprintf("validation failed: %v", err))
 		}

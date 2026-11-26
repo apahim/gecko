@@ -642,9 +642,24 @@ func (h *ResourceHandler) ApplyPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The apply manager may return an unstructured object; convert through the
+	// scheme so the type's CustomValidator hooks can run before the write.
+	typedResult, err := conversion.TypedOldObject(h.scheme, h.gvk, result)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("converting object for validation: %v", err))
+		return
+	}
+
 	// Save to storage (create or update)
 	if existing == nil {
 		// This is a create via apply
+		if v, ok := typedResult.(types.CustomValidator); ok {
+			if err := v.ValidateCreate(r.Context()); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))
+				return
+			}
+		}
+
 		accessor.SetUID(k8stypes.UID(uuid.New().String()))
 		accessor.SetCreationTimestamp(metav1.Time{Time: time.Now()})
 		accessor.SetGeneration(1)
@@ -666,6 +681,23 @@ func (h *ResourceHandler) ApplyPatch(w http.ResponseWriter, r *http.Request) {
 		h.logger.Info("Created via apply", "namespace", namespace, "name", name, "fieldManager", fieldManager)
 	} else {
 		// This is an update via apply
+		if v, ok := typedResult.(types.CustomValidator); ok {
+			existingServing, err := h.convertToServingVersion(existing)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to convert old object for validation")
+				return
+			}
+			existingTyped, err := conversion.TypedOldObject(h.scheme, h.gvk, existingServing)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("converting old object: %v", err))
+				return
+			}
+			if err := v.ValidateUpdate(r.Context(), existingTyped); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))
+				return
+			}
+		}
+
 		if err := h.store.Update(r.Context(), storeObj); err != nil {
 			writeUpdateError(w, err, "update object")
 			return
@@ -725,7 +757,13 @@ func (h *ResourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if v, ok := existing.(types.CustomValidator); ok {
+	typed, err := conversion.TypedOldObject(h.scheme, h.gvk, existing)
+	if err != nil {
+		h.logger.Error(err, "Delete failed - decode object for delete validation", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
+		writeError(w, http.StatusInternalServerError, "failed to decode object for delete validation")
+		return
+	}
+	if v, ok := typed.(types.CustomValidator); ok {
 		if err := v.ValidateDelete(r.Context()); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))
 			return

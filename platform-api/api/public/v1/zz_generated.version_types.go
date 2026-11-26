@@ -5,6 +5,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
 // +orlop:authorization-exempt-verbs: get,list
+// +kubebuilder:subresource:status
 // Version provides clients with versions for cluster creation and upgrade
 // validation, including their channel-group membership. Version resources are
 // synchronized from Cincinnati by the version-sync controller and are read-only
@@ -16,6 +17,11 @@ type Version struct {
 
 	// +required
 	Spec VersionSpec `json:"spec"`
+
+	// status reports current release availability.
+
+	// +optional
+	Status VersionStatus `json:"status,omitempty,omitzero"`
 }
 
 // +kubebuilder:object:root=true
@@ -29,6 +35,10 @@ type VersionList struct {
 
 // VersionSpec contains release information synchronized from Cincinnati.
 type VersionSpec struct {
+	// wifConfigTemplateReference pins the release's installation IAM contract once resolved.
+
+	// +optional
+	WIFConfigTemplateReference *WIFConfigTemplateReference `json:"wifConfigTemplateReference,omitempty"` //nolint:kubeapilinter // Full Reference follows Gecko API naming conventions rather than upstream Ref abbreviations.
 	// ChannelGroups contains the Cincinnati channel groups containing this release.
 
 	// +required
@@ -36,6 +46,18 @@ type VersionSpec struct {
 	// +kubebuilder:validation:UniqueItems=true
 	// +listType=set
 	ChannelGroups []string `json:"channelGroups"`
+}
+
+// VersionStatus reports catalog availability observations.
+type VersionStatus struct {
+	// conditions reports availability; consumers require current Available=True.
+
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 func init() { register(&Version{}, &VersionList{}) }

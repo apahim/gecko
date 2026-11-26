@@ -1052,7 +1052,13 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if v, ok := existing.(types.CustomValidator); ok {
+	typed, err := conversion.TypedOldObject(h.privateScheme, h.gvk, existing)
+	if err != nil {
+		h.logger.Error(err, "Delete failed - decode object for delete validation", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
+		writeError(w, http.StatusInternalServerError, "failed to decode object for delete validation")
+		return
+	}
+	if v, ok := typed.(types.CustomValidator); ok {
 		if err := v.ValidateDelete(r.Context()); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))
 			return

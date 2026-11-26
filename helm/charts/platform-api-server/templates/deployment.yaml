@@ -54,6 +54,7 @@ spec:
             - --tls-key-file=/etc/tls/tls.key
             - --public-port={{ .Values.publicApi.port }}
             - --enable-public-api={{ .Values.publicApi.enabled }}
+            - --enable-iam-application-writes={{ .Values.iamApplications.enabled }}
             {{- if .Values.publicApi.replicationWriteGuard.enabled }}
             - --replication-write-guard
             - --region={{ required "publicApi.replicationWriteGuard.region is required when the guard is enabled" .Values.publicApi.replicationWriteGuard.region }}

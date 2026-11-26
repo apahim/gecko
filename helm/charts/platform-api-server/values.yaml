@@ -41,6 +41,18 @@ publicApi:
     # public registry and fails startup on an unknown (e.g. private-only) type.
     replicate: roles.gcp.managed.openshift.io,rolebindings.gcp.managed.openshift.io
 
+iamApplications:
+  # Enable only after ALL API replicas and dependent controllers understand IAM
+  # history and dispatch prerequisites. Keep disabled throughout Phase 1.
+  enabled: false
+
+wifConfigTemplates:
+  # Enable only after deploying API support. Existing catalog entries are retained.
+  enabled: false
+  entries: []
+  # - name: "5.0.0"
+  #   verified: false
+
 platformRoles:
   # System PlatformRoles are managed by Helm/private API and are never
   # projected to the public API.

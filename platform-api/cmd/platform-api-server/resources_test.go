@@ -4,18 +4,19 @@ import (
 	"testing"
 )
 
-func TestGetPublicResourcesAuthorizationExemptCatalogVerbs(t *testing.T) {
+func TestGetPublicResourcesCatalogVerbs(t *testing.T) {
 	wantAuthorizationExempt := map[string]bool{
-		"Channel":      true,
-		"PlatformRole": true,
-		"Version":      true,
+		"Channel":           true,
+		"PlatformRole":      true,
+		"Version":           true,
+		"WIFConfigTemplate": false,
 	}
 	seen := make(map[string]bool)
 	for _, resource := range getPublicResources() {
-		if _, found := wantAuthorizationExempt[resource.GVK.Kind]; found {
+		if exempt, found := wantAuthorizationExempt[resource.GVK.Kind]; found {
 			seen[resource.GVK.Kind] = true
-			if !resource.AuthorizationExemptVerbAllowed("get") || !resource.AuthorizationExemptVerbAllowed("list") {
-				t.Errorf("%s must allow authorization-exempt get and list verbs", resource.GVK.Kind)
+			if resource.AuthorizationExemptVerbAllowed("get") != exempt || resource.AuthorizationExemptVerbAllowed("list") != exempt {
+				t.Errorf("%s authorization exemption for get/list = %t/%t, want %t", resource.GVK.Kind, resource.AuthorizationExemptVerbAllowed("get"), resource.AuthorizationExemptVerbAllowed("list"), exempt)
 			}
 			if resource.Namespaced {
 				t.Errorf("%s is namespaced, want cluster-scoped", resource.GVK.Kind)

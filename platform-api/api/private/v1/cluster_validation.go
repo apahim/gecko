@@ -45,6 +45,9 @@ func (c *Cluster) ValidateCreate(ctx context.Context) error {
 	if err := c.validateReleaseCatalog(ctx); err != nil {
 		return err
 	}
+	if err := c.validateIAM(ctx, nil); err != nil {
+		return err
+	}
 	return c.validateMaintenanceConfig(true)
 }
 
@@ -72,6 +75,9 @@ func (c *Cluster) ValidateUpdate(ctx context.Context, oldObj runtime.Object) err
 	oldCluster, ok := oldObj.(*Cluster)
 	if !ok {
 		return fmt.Errorf("expected old object to be *Cluster, got %T", oldObj)
+	}
+	if err := c.validateIAM(ctx, oldCluster); err != nil {
+		return err
 	}
 	// Previously accepted timing configurations must not block unrelated spec
 	// changes or controller status writes. Public updates have already applied
