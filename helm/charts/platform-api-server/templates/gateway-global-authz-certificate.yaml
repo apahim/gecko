@@ -1,0 +1,27 @@
+{{- if .Values.gateway.globalAuthorization.enabled }}
+{{- $hostname := required "gateway.globalAuthorization.hostname must be set when enabled" .Values.gateway.globalAuthorization.hostname -}}
+{{- $projectId := required "gateway.projectId must be set when global authorization is enabled" .Values.gateway.projectId -}}
+{{- $authorization := required "gateway.globalAuthorization.certificate.dnsAuthorization must be set when enabled" .Values.gateway.globalAuthorization.certificate.dnsAuthorization -}}
+{{- $certificateName := required "gateway.globalAuthorization.certificate.name must be set when enabled" .Values.gateway.globalAuthorization.certificate.name -}}
+{{- if and .Values.gateway.enabled .Values.gateway.certificate.enabled (eq $certificateName .Values.gateway.certificate.name) -}}
+{{- fail "gateway.globalAuthorization.certificate.name must differ from gateway.certificate.name when both certificates are enabled" -}}
+{{- end -}}
+---
+apiVersion: certificatemanager.cnrm.cloud.google.com/v1beta1
+kind: CertificateManagerCertificate
+metadata:
+  name: {{ $certificateName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: global-authorization-certificate
+spec:
+  location: global
+  managed:
+    domains:
+      - {{ $hostname | quote }}
+    dnsAuthorizationsRefs:
+      - external: {{ $authorization | quote }}
+  projectRef:
+    external: {{ $projectId | quote }}
+{{- end }}
