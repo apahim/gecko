@@ -57,7 +57,7 @@ func TestWIFConfigBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("baseline executable digest: %s", digest)
-	if digest != "sha256:71d9aaf90729b0365610a16bd46d7cb4d4582e1e69b79f114f968086017d1af4" {
+	if digest != "sha256:63975f7b264368634bc10a4bff7474142492e833257578a42c912d57336f2971" {
 		t.Fatal("baseline executable contract changed; review permissions/trust before accepting a new golden digest")
 	}
 }
@@ -83,14 +83,14 @@ func TestWIFConfigDigestAndImmutability(t *testing.T) {
 	slices.Reverse(w.Spec.IAM.RequiredComponents)
 	slices.Reverse(w.Spec.IAM.Roles)
 	slices.Reverse(w.Spec.IAM.RoleBindings)
-	slices.Reverse(w.Spec.IAM.WorkloadIdentityBindings.ServiceAccountRefs)
+	slices.Reverse(w.Spec.IAM.WorkloadIdentityBindings.ServiceAccountReferences)
 	for i := range w.Spec.IAM.Roles {
 		slices.Reverse(w.Spec.IAM.Roles[i].Permissions)
 	}
 	for i := range w.Spec.IAM.ServiceAccounts {
 		slices.Reverse(w.Spec.IAM.ServiceAccounts[i].WorkloadIdentitySubjects)
 	}
-	slices.Reverse(w.Spec.IAM.ServiceAccountRoleBindings[0].MemberServiceAccountRefs)
+	slices.Reverse(w.Spec.IAM.ServiceAccountRoleBindings[0].MemberServiceAccountReferences)
 	snapshot := w.DeepCopy()
 	if got, err := WIFConfigDigest(w.Spec); err != nil || got != digest {
 		t.Fatalf("list ordering changed digest: %q %v", got, err)
@@ -143,6 +143,10 @@ func TestWIFConfigValidation(t *testing.T) {
 			r := &w.Spec.IAM.Roles[0]
 			r.Permissions = append(r.Permissions, "iam.serviceAccounts.getAccessToken")
 		},
+		"OIDC token minting permission": func(w *WIFConfigTemplate) {
+			r := &w.Spec.IAM.Roles[0]
+			r.Permissions = append(r.Permissions, "iam.serviceAccounts.getOpenIdToken")
+		},
 		"key minting permission": func(w *WIFConfigTemplate) {
 			r := &w.Spec.IAM.Roles[0]
 			r.Permissions = append(r.Permissions, "iam.serviceAccountKeys.create")
@@ -156,7 +160,7 @@ func TestWIFConfigValidation(t *testing.T) {
 			s.WorkloadIdentitySubjects = []string{"system:serviceaccount:openshift:" + strings.Repeat("a", 64)}
 		},
 		"duplicate role": func(w *WIFConfigTemplate) { w.Spec.IAM.Roles[1] = w.Spec.IAM.Roles[0] },
-		"unknown grant":  func(w *WIFConfigTemplate) { w.Spec.IAM.RoleBindings[0].RoleRef = "missing" },
+		"unknown grant":  func(w *WIFConfigTemplate) { w.Spec.IAM.RoleBindings[0].RoleReference = "missing" },
 		"scope":          func(w *WIFConfigTemplate) { w.Spec.IAM.RoleBindings[0].Scope.Kind = "ResourceName" },
 		"duplicate grant": func(w *WIFConfigTemplate) {
 			w.Spec.IAM.RoleBindings = append(w.Spec.IAM.RoleBindings, w.Spec.IAM.RoleBindings[0])
@@ -167,7 +171,7 @@ func TestWIFConfigValidation(t *testing.T) {
 		"federation role": func(w *WIFConfigTemplate) { w.Spec.IAM.WorkloadIdentityBindings.Role = "roles/owner" },
 		"actAs scope":     func(w *WIFConfigTemplate) { w.Spec.IAM.ServiceAccountRoleBindings[0].Scope.Kind = "Project" },
 		"actAs members": func(w *WIFConfigTemplate) {
-			w.Spec.IAM.ServiceAccountRoleBindings[0].MemberServiceAccountRefs = append(w.Spec.IAM.ServiceAccountRoleBindings[0].MemberServiceAccountRefs, "cloud-controller")
+			w.Spec.IAM.ServiceAccountRoleBindings[0].MemberServiceAccountReferences = append(w.Spec.IAM.ServiceAccountRoleBindings[0].MemberServiceAccountReferences, "cloud-controller")
 		},
 		"naming":     func(w *WIFConfigTemplate) { w.Spec.IAM.Naming.CustomRoleIDTemplate = "hcp_{role}" },
 		"truncation": func(w *WIFConfigTemplate) { w.Spec.IAM.Naming.MaximumCustomRoleIDLength = 20 },
@@ -359,12 +363,12 @@ func TestVersionWIFReferencePin(t *testing.T) {
 	t.Cleanup(func() { SetValidatorDeps(ValidatorDeps{}) })
 	old := &Version{}
 	next := old.DeepCopy()
-	next.Spec.WIFConfigTemplateRef = &ref
+	next.Spec.WIFConfigTemplateReference = &ref
 	if err := next.ValidateUpdate(t.Context(), old); err != nil {
 		t.Fatal(err)
 	}
 	old = next.DeepCopy()
-	next.Spec.WIFConfigTemplateRef = nil
+	next.Spec.WIFConfigTemplateReference = nil
 	if next.ValidateUpdate(t.Context(), old) == nil {
 		t.Fatal("cleared pinned reference accepted")
 	}

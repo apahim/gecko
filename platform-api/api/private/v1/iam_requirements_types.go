@@ -67,8 +67,8 @@ type IAMReleaseRequirement struct {
 	// +required
 	// +kubebuilder:validation:MaxLength=128
 	ChannelGroup string `json:"channelGroup"`
-	// templateRef pins the exact immutable IAM contract.
+	// templateReference pins the exact immutable IAM contract.
 	// +orlop:public
 	// +required
-	TemplateRef WIFConfigTemplateReference `json:"templateRef"`
+	TemplateReference WIFConfigTemplateReference `json:"templateReference"` //nolint:kubeapilinter // Full Reference follows Gecko API naming conventions rather than upstream Ref abbreviations.
 }

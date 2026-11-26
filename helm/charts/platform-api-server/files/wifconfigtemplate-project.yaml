@@ -211,37 +211,37 @@ iam:
         - compute.subnetworks.use
         - compute.zoneOperations.get
   roleBindings:
-    - serviceAccountRef: cloud-controller
-      roleRef: hcpCloudControllerProject
+    - serviceAccountReference: cloud-controller
+      roleReference: hcpCloudControllerProject
       scope:
         kind: Project
-    - serviceAccountRef: cloud-network
-      roleRef: hcpCloudNetworkProject
+    - serviceAccountReference: cloud-network
+      roleReference: hcpCloudNetworkProject
       scope:
         kind: Project
-    - serviceAccountRef: ctrlplane-op
-      roleRef: hcpControlPlaneProject
+    - serviceAccountReference: ctrlplane-op
+      roleReference: hcpControlPlaneProject
       scope:
         kind: Project
-    - serviceAccountRef: gcp-pd-csi
-      roleRef: hcpGCPPDCSIProject
+    - serviceAccountReference: gcp-pd-csi
+      roleReference: hcpGCPPDCSIProject
       scope:
         kind: Project
-    - serviceAccountRef: image-registry
-      roleRef: hcpImageRegistryProject
+    - serviceAccountReference: image-registry
+      roleReference: hcpImageRegistryProject
       scope:
         kind: Project
-    - serviceAccountRef: ingress-op
-      roleRef: hcpIngressProject
+    - serviceAccountReference: ingress-op
+      roleReference: hcpIngressProject
       scope:
         kind: Project
-    - serviceAccountRef: nodepool-mgmt
-      roleRef: hcpNodePoolProject
+    - serviceAccountReference: nodepool-mgmt
+      roleReference: hcpNodePoolProject
       scope:
         kind: Project
   workloadIdentityBindings:
     role: roles/iam.workloadIdentityUser
-    serviceAccountRefs:
+    serviceAccountReferences:
       - cloud-controller
       - cloud-network
       - ctrlplane-op
@@ -254,6 +254,6 @@ iam:
       scope:
         kind: ServiceAccount
         reference: WorkerServiceAccount
-      memberServiceAccountRefs:
+      memberServiceAccountReferences:
         - gcp-pd-csi
         - nodepool-mgmt

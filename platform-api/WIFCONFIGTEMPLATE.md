@@ -26,7 +26,8 @@ or a cloud IAM controller.
   this initial API, avoiding reference/deletion races and retaining historical
   contracts. Deliberate retirement is a future policy.
 - A reference identifies template name, UID and executable-content digest. Version
-  references are set once; ordinary Version disappearance/aging remains allowed.
+  `spec.wifConfigTemplateReference` is set once; ordinary Version disappearance/aging
+  remains allowed. Requirements and private dispatch receipts use `templateReference`.
 
 ### Digest protocol
 
@@ -40,12 +41,20 @@ This is **not RFC 8785**. Resource metadata, release-boundary name and verificat
 are not part of the executable contract.
 
 Before encoding, sort `requiredComponents`; sort service accounts and roles by
-name; sort subjects, permissions, WIF account refs and actAs member refs byte-wise;
-sort role bindings by `serviceAccountRef + "/" + roleRef`. The current protocol
-supports one worker-SA grant, so it requires no outer-list sort. Computation clones
-input and does not mutate a caller's lists. The baseline golden digest is pinned
-in API and Helm integration tests. A new spec field requires an explicit protocol
-and immutability decision, not incidental inclusion/exclusion by a refactor.
+name; sort subjects, permissions, WIF account references and actAs member references
+byte-wise; sort role bindings by `serviceAccountReference + "/" + roleReference`.
+The current protocol supports one worker-SA grant, so it requires no outer-list
+sort. Computation clones input and does not mutate a caller's lists. The baseline
+golden digest is pinned in API and Helm integration tests. A new spec field requires
+an explicit protocol and immutability decision, not incidental inclusion/exclusion
+by a refactor.
+
+The reviewed baseline digest is
+`sha256:63975f7b264368634bc10a4bff7474142492e833257578a42c912d57336f2971`.
+Before first publication, the new reference fields were expanded from `*Ref`/`*Refs`
+to `*Reference`/`*References`. This changes the executable JSON keys and digest,
+not the baseline permissions, subjects or grant topology. It is not a migration
+mechanism for any published contract.
 
 ## Cluster assertions and write activation
 

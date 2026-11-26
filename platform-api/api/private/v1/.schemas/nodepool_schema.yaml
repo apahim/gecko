@@ -424,9 +424,9 @@ properties:
                   prerelease suffix.
                 maxLength: 128
                 type: string
-              templateRef:
-                description: templateRef binds the exact retained IAM contract authorizing
-                  this intent.
+              templateReference:
+                description: templateReference binds the exact retained IAM contract
+                  authorizing this intent.
                 properties:
                   digest:
                     description: digest is the SHA-256 of the canonical schemaVersion
@@ -455,7 +455,7 @@ properties:
             - objectUID
             - releaseImage
             - releaseVersion
-            - templateRef
+            - templateReference
             type: object
           pending:
             description: pending is a durably committed, possibly partially delivered
@@ -486,9 +486,9 @@ properties:
                   prerelease suffix.
                 maxLength: 128
                 type: string
-              templateRef:
-                description: templateRef binds the exact retained IAM contract authorizing
-                  this intent.
+              templateReference:
+                description: templateReference binds the exact retained IAM contract
+                  authorizing this intent.
                 properties:
                   digest:
                     description: digest is the SHA-256 of the canonical schemaVersion
@@ -517,7 +517,7 @@ properties:
             - objectUID
             - releaseImage
             - releaseVersion
-            - templateRef
+            - templateReference
             type: object
         type: object
       iamRequirements:
@@ -551,8 +551,8 @@ properties:
                   prerelease suffix.
                 maxLength: 128
                 type: string
-              templateRef:
-                description: templateRef pins the exact immutable IAM contract.
+              templateReference:
+                description: templateReference pins the exact immutable IAM contract.
                 properties:
                   digest:
                     description: digest is the SHA-256 of the canonical schemaVersion
@@ -579,7 +579,7 @@ properties:
             - channelGroup
             - releaseImage
             - releaseVersion
-            - templateRef
+            - templateReference
             type: object
           lastRefreshTime:
             description: |-
@@ -618,8 +618,8 @@ properties:
                   prerelease suffix.
                 maxLength: 128
                 type: string
-              templateRef:
-                description: templateRef pins the exact immutable IAM contract.
+              templateReference:
+                description: templateReference pins the exact immutable IAM contract.
                 properties:
                   digest:
                     description: digest is the SHA-256 of the canonical schemaVersion
@@ -646,7 +646,7 @@ properties:
             - channelGroup
             - releaseImage
             - releaseVersion
-            - templateRef
+            - templateReference
             type: object
           state:
             description: |-

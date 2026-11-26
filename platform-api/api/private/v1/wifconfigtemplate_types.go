@@ -193,16 +193,16 @@ type WIFConfigProjectScope struct {
 
 // WIFConfigRoleBinding grants a custom role to one component.
 type WIFConfigRoleBinding struct {
-	// serviceAccountRef references a component account.
+	// serviceAccountReference references a component account.
 	// +orlop:public
 	// +required
 	// +kubebuilder:validation:MaxLength=32
-	ServiceAccountRef string `json:"serviceAccountRef"`
-	// roleRef references a logical custom role.
+	ServiceAccountReference string `json:"serviceAccountReference"` //nolint:kubeapilinter // Full Reference follows Gecko API naming conventions rather than upstream Ref abbreviations.
+	// roleReference references a logical custom role.
 	// +orlop:public
 	// +required
 	// +kubebuilder:validation:MaxLength=32
-	RoleRef string `json:"roleRef"`
+	RoleReference string `json:"roleReference"` //nolint:kubeapilinter // Full Reference follows Gecko API naming conventions rather than upstream Ref abbreviations.
 	// scope restricts this grant to the customer project.
 	// +orlop:public
 	// +required
@@ -217,14 +217,14 @@ type WIFConfigWorkloadIdentityBindings struct {
 	// +kubebuilder:validation:Enum="roles/iam.workloadIdentityUser"
 	// +kubebuilder:validation:MaxLength=30
 	Role string `json:"role"`
-	// serviceAccountRefs identifies all federated component accounts.
+	// serviceAccountReferences identifies all federated component accounts.
 	// +orlop:public
 	// +required
 	// +listType=set
 	// +kubebuilder:validation:MinItems=7
 	// +kubebuilder:validation:MaxItems=7
 	// +kubebuilder:validation:items:MaxLength=32
-	ServiceAccountRefs []string `json:"serviceAccountRefs"`
+	ServiceAccountReferences []string `json:"serviceAccountReferences"` //nolint:kubeapilinter // Full References follows Gecko API naming conventions rather than upstream Refs abbreviations.
 }
 
 // WIFConfigWorkerScope identifies the single exact worker account installation input.
@@ -255,14 +255,14 @@ type WIFConfigServiceAccountRoleBinding struct {
 	// +orlop:public
 	// +required
 	Scope WIFConfigWorkerScope `json:"scope"`
-	// memberServiceAccountRefs lists the components granted actAs.
+	// memberServiceAccountReferences lists the components granted actAs.
 	// +orlop:public
 	// +required
 	// +listType=set
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=6
 	// +kubebuilder:validation:items:MaxLength=32
-	MemberServiceAccountRefs []string `json:"memberServiceAccountRefs"`
+	MemberServiceAccountReferences []string `json:"memberServiceAccountReferences"` //nolint:kubeapilinter // Full References follows Gecko API naming conventions rather than upstream Refs abbreviations.
 }
 
 // WIFConfigTemplateReference pins both resource identity and executable content.

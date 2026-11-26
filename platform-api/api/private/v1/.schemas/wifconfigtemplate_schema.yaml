@@ -93,8 +93,8 @@ properties:
             items:
               description: WIFConfigRoleBinding grants a custom role to one component.
               properties:
-                roleRef:
-                  description: roleRef references a logical custom role.
+                roleReference:
+                  description: roleReference references a logical custom role.
                   maxLength: 32
                   type: string
                 scope:
@@ -109,14 +109,14 @@ properties:
                   required:
                   - kind
                   type: object
-                serviceAccountRef:
-                  description: serviceAccountRef references a component account.
+                serviceAccountReference:
+                  description: serviceAccountReference references a component account.
                   maxLength: 32
                   type: string
               required:
-              - roleRef
+              - roleReference
               - scope
-              - serviceAccountRef
+              - serviceAccountReference
               type: object
             maxItems: 128
             minItems: 1
@@ -159,9 +159,9 @@ properties:
               description: WIFConfigServiceAccountRoleBinding defines an exact-worker-SA
                 grant.
               properties:
-                memberServiceAccountRefs:
-                  description: memberServiceAccountRefs lists the components granted
-                    actAs.
+                memberServiceAccountReferences:
+                  description: memberServiceAccountReferences lists the components
+                    granted actAs.
                   items:
                     maxLength: 32
                     type: string
@@ -197,7 +197,7 @@ properties:
                   - reference
                   type: object
               required:
-              - memberServiceAccountRefs
+              - memberServiceAccountReferences
               - role
               - scope
               type: object
@@ -251,8 +251,8 @@ properties:
                 - roles/iam.workloadIdentityUser
                 maxLength: 30
                 type: string
-              serviceAccountRefs:
-                description: serviceAccountRefs identifies all federated component
+              serviceAccountReferences:
+                description: serviceAccountReferences identifies all federated component
                   accounts.
                 items:
                   maxLength: 32
@@ -263,7 +263,7 @@ properties:
                 x-kubernetes-list-type: set
             required:
             - role
-            - serviceAccountRefs
+            - serviceAccountReferences
             type: object
         required:
         - naming

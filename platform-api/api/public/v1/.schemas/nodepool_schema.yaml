@@ -312,7 +312,7 @@ properties:
               releaseVersion:
                 maxLength: 128
                 type: string
-              templateRef:
+              templateReference:
                 description: WIFConfigTemplateReference pins both resource identity
                   and executable content.
                 properties:
@@ -337,7 +337,7 @@ properties:
             - channelGroup
             - releaseImage
             - releaseVersion
-            - templateRef
+            - templateReference
             type: object
           lastRefreshTime:
             format: date-time
@@ -363,7 +363,7 @@ properties:
               releaseVersion:
                 maxLength: 128
                 type: string
-              templateRef:
+              templateReference:
                 description: WIFConfigTemplateReference pins both resource identity
                   and executable content.
                 properties:
@@ -388,7 +388,7 @@ properties:
             - channelGroup
             - releaseImage
             - releaseVersion
-            - templateRef
+            - templateReference
             type: object
           state:
             enum:

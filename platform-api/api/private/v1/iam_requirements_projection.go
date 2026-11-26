@@ -36,10 +36,10 @@ func releaseRequirement(r *IAMDispatchReceipt, objectUID, clusterUID string) (*I
 	if r == nil {
 		return nil, true
 	}
-	if r.ObjectUID != objectUID || r.ClusterUID != clusterUID || r.ReleaseVersion == "" || r.ReleaseImage == "" || r.ChannelGroup == "" || validateWIFReferenceShape(r.TemplateRef) != nil {
+	if r.ObjectUID != objectUID || r.ClusterUID != clusterUID || r.ReleaseVersion == "" || r.ReleaseImage == "" || r.ChannelGroup == "" || validateWIFReferenceShape(r.TemplateReference) != nil {
 		return nil, false
 	}
-	return &IAMReleaseRequirement{ReleaseVersion: r.ReleaseVersion, ReleaseImage: r.ReleaseImage, ChannelGroup: r.ChannelGroup, TemplateRef: r.TemplateRef}, true
+	return &IAMReleaseRequirement{ReleaseVersion: r.ReleaseVersion, ReleaseImage: r.ReleaseImage, ChannelGroup: r.ChannelGroup, TemplateReference: r.TemplateReference}, true
 }
 
 // SyncClusterIAMRequirements updates only the public observation. It does not

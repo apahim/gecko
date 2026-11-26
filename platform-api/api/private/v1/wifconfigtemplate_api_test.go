@@ -248,7 +248,7 @@ func TestClusterIAMPublicPatchAPI(t *testing.T) {
 	afterForgery.Status.IAMDispatch = &privatev1.IAMDispatchState{Dispatched: &privatev1.IAMDispatchReceipt{
 		ObjectUID: string(afterForgery.UID), ClusterUID: string(afterForgery.UID),
 		ReleaseVersion: afterForgery.Spec.Release.Version, ChannelGroup: afterForgery.Spec.Release.ChannelGroup,
-		ReleaseImage: "private-payload", TemplateRef: ref,
+		ReleaseImage: "private-payload", TemplateReference: ref,
 	}}
 	if err := store.Update(t.Context(), afterForgery); err != nil {
 		t.Fatal(err)
@@ -415,7 +415,7 @@ func TestVersionStatusSubresourcePreservesPinnedSpec(t *testing.T) {
 	}
 	gvk := privatev1.GroupVersion.WithKind("Version")
 	store := memory.NewMemoryStore("versions", scheme, gvk)
-	v := &privatev1.Version{TypeMeta: metav1.TypeMeta{APIVersion: privatev1.GroupVersion.String(), Kind: "Version"}, ObjectMeta: metav1.ObjectMeta{Name: "5.0.0", Generation: 1}, Spec: privatev1.VersionSpec{ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/example/release@sha256:abc", WIFConfigTemplateRef: &privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: "sha256:" + strings.Repeat("0", 64)}}}
+	v := &privatev1.Version{TypeMeta: metav1.TypeMeta{APIVersion: privatev1.GroupVersion.String(), Kind: "Version"}, ObjectMeta: metav1.ObjectMeta{Name: "5.0.0", Generation: 1}, Spec: privatev1.VersionSpec{ChannelGroups: []string{"stable"}, ReleaseImage: "quay.io/example/release@sha256:abc", WIFConfigTemplateReference: &privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: "sha256:" + strings.Repeat("0", 64)}}}
 	if err := store.Create(t.Context(), v); err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestVersionStatusSubresourcePreservesPinnedSpec(t *testing.T) {
 	updater := rest.DefaultUpdatedObjectInfo(nil, func(_ context.Context, _ runtime.Object, old runtime.Object) (runtime.Object, error) {
 		next := old.DeepCopyObject().(*privatev1.Version)
 		next.Spec.ReleaseImage = "forged-spec"
-		next.Spec.WIFConfigTemplateRef = nil
+		next.Spec.WIFConfigTemplateReference = nil
 		next.Status.Conditions = []metav1.Condition{{Type: "Available", Status: metav1.ConditionTrue, Reason: "Available", Message: "test", ObservedGeneration: 1, LastTransitionTime: metav1.Now()}}
 		return next, nil
 	})
@@ -437,7 +437,7 @@ func TestVersionStatusSubresourcePreservesPinnedSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := obj.(*privatev1.Version)
-	if got.Spec.ReleaseImage != v.Spec.ReleaseImage || got.Spec.WIFConfigTemplateRef == nil || len(got.Status.Conditions) != 1 {
+	if got.Spec.ReleaseImage != v.Spec.ReleaseImage || got.Spec.WIFConfigTemplateReference == nil || len(got.Status.Conditions) != 1 {
 		t.Fatal("status subresource failed spec/status isolation")
 	}
 }

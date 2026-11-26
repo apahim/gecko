@@ -39,9 +39,9 @@ properties:
           It is intentionally not exposed through the public API.
         minLength: 1
         type: string
-      wifConfigTemplateRef:
-        description: wifConfigTemplateRef pins the release's installation IAM contract
-          once resolved.
+      wifConfigTemplateReference:
+        description: wifConfigTemplateReference pins the release's installation IAM
+          contract once resolved.
         properties:
           digest:
             description: digest is the SHA-256 of the canonical schemaVersion and

@@ -34,7 +34,7 @@ type IAMDispatchReceipt struct {
 	// +required
 	// +kubebuilder:validation:MaxLength=128
 	ChannelGroup string `json:"channelGroup"`
-	// templateRef binds the exact retained IAM contract authorizing this intent.
+	// templateReference binds the exact retained IAM contract authorizing this intent.
 	// +required
-	TemplateRef WIFConfigTemplateReference `json:"templateRef"`
+	TemplateReference WIFConfigTemplateReference `json:"templateReference"` //nolint:kubeapilinter // Full Reference follows Gecko API naming conventions rather than upstream Ref abbreviations.
 }

@@ -31,7 +31,7 @@ properties:
         type: array
         uniqueItems: true
         x-kubernetes-list-type: set
-      wifConfigTemplateRef:
+      wifConfigTemplateReference:
         description: WIFConfigTemplateReference pins both resource identity and executable
           content.
         properties:

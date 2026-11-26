@@ -76,7 +76,7 @@ properties:
             items:
               description: WIFConfigRoleBinding grants a custom role to one component.
               properties:
-                roleRef:
+                roleReference:
                   maxLength: 32
                   type: string
                 scope:
@@ -91,13 +91,13 @@ properties:
                   required:
                   - kind
                   type: object
-                serviceAccountRef:
+                serviceAccountReference:
                   maxLength: 32
                   type: string
               required:
-              - roleRef
+              - roleReference
               - scope
-              - serviceAccountRef
+              - serviceAccountReference
               type: object
             maxItems: 128
             minItems: 1
@@ -133,7 +133,7 @@ properties:
               description: WIFConfigServiceAccountRoleBinding defines an exact-worker-SA
                 grant.
               properties:
-                memberServiceAccountRefs:
+                memberServiceAccountReferences:
                   items:
                     maxLength: 32
                     type: string
@@ -165,7 +165,7 @@ properties:
                   - reference
                   type: object
               required:
-              - memberServiceAccountRefs
+              - memberServiceAccountReferences
               - role
               - scope
               type: object
@@ -211,7 +211,7 @@ properties:
                 - roles/iam.workloadIdentityUser
                 maxLength: 30
                 type: string
-              serviceAccountRefs:
+              serviceAccountReferences:
                 items:
                   maxLength: 32
                   type: string
@@ -221,7 +221,7 @@ properties:
                 x-kubernetes-list-type: set
             required:
             - role
-            - serviceAccountRefs
+            - serviceAccountReferences
             type: object
         required:
         - naming

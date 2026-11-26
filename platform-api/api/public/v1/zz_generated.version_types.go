@@ -35,10 +35,10 @@ type VersionList struct {
 
 // VersionSpec contains release information synchronized from Cincinnati.
 type VersionSpec struct {
-	// wifConfigTemplateRef pins the release's installation IAM contract once resolved.
+	// wifConfigTemplateReference pins the release's installation IAM contract once resolved.
 
 	// +optional
-	WIFConfigTemplateRef *WIFConfigTemplateReference `json:"wifConfigTemplateRef,omitempty"`
+	WIFConfigTemplateReference *WIFConfigTemplateReference `json:"wifConfigTemplateReference,omitempty"` //nolint:kubeapilinter // Full Reference follows Gecko API naming conventions rather than upstream Ref abbreviations.
 	// ChannelGroups contains the Cincinnati channel groups containing this release.
 
 	// +required

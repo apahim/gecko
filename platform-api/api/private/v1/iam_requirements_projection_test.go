@@ -15,7 +15,7 @@ import (
 func requirementReceipt(object, parent, version string) *privatev1.IAMDispatchReceipt {
 	return &privatev1.IAMDispatchReceipt{ObjectUID: object, ClusterUID: parent, ReleaseVersion: version,
 		ReleaseImage: "quay.io/example/release@sha256:" + strings.Repeat("a", 64), ChannelGroup: "candidate",
-		TemplateRef: privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: "sha256:" + strings.Repeat("b", 64)}}
+		TemplateReference: privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: "sha256:" + strings.Repeat("b", 64)}}
 }
 
 func TestIAMRequirementsClusterProjectionAndPublicIsolation(t *testing.T) {
@@ -95,7 +95,7 @@ func assertClusterPublicRequirements(t *testing.T, c *privatev1.Cluster) {
 		t.Fatal(err)
 	}
 	pub := converted.(*publicv1.Cluster)
-	if pub.Status.IAMRequirements == nil || pub.Status.IAMRequirements.Dispatched == nil || pub.Status.IAMRequirements.Dispatched.TemplateRef.UID != "template-uid" || pub.Status.IAMRequirements.ObservedGeneration != 3 {
+	if pub.Status.IAMRequirements == nil || pub.Status.IAMRequirements.Dispatched == nil || pub.Status.IAMRequirements.Dispatched.TemplateReference.UID != "template-uid" || pub.Status.IAMRequirements.ObservedGeneration != 3 {
 		t.Fatalf("public contract projection missing: %+v", pub.Status.IAMRequirements)
 	}
 	encoded, err := json.Marshal(pub)

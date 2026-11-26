@@ -34,6 +34,7 @@ var wifComponents = []string{"cloud-controller", "cloud-network", "ctrlplane-op"
 var wifImpersonationPermissions = map[string]bool{
 	"iam.serviceAccounts.actAs":          true,
 	"iam.serviceAccounts.getAccessToken": true,
+	"iam.serviceAccounts.getOpenIdToken": true,
 	"iam.serviceAccounts.signJwt":        true,
 	"iam.serviceAccounts.signBlob":       true,
 	"iam.serviceAccounts.signBytes":      true,
@@ -180,23 +181,23 @@ func validateWIFGrants(iam WIFConfigIAM) error {
 	}
 	grants, usedRoles, boundAccounts := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, grant := range iam.RoleBindings {
-		key := grant.ServiceAccountRef + "/" + grant.RoleRef
-		if !accounts[grant.ServiceAccountRef] || !roles[grant.RoleRef] || grant.Scope.Kind != "Project" || grants[key] {
+		key := grant.ServiceAccountReference + "/" + grant.RoleReference
+		if !accounts[grant.ServiceAccountReference] || !roles[grant.RoleReference] || grant.Scope.Kind != "Project" || grants[key] {
 			return fmt.Errorf("spec.iam.roleBindings requires unique project grants referencing defined accounts and roles")
 		}
-		grants[key], usedRoles[grant.RoleRef], boundAccounts[grant.ServiceAccountRef] = true, true, true
+		grants[key], usedRoles[grant.RoleReference], boundAccounts[grant.ServiceAccountReference] = true, true, true
 	}
 	if len(usedRoles) != len(roles) || len(boundAccounts) != len(accounts) {
 		return fmt.Errorf("spec.iam.roleBindings must cover every component and custom role")
 	}
-	if iam.WorkloadIdentityBindings.Role != "roles/iam.workloadIdentityUser" || !exactWIFSet(iam.WorkloadIdentityBindings.ServiceAccountRefs, wifComponents) {
+	if iam.WorkloadIdentityBindings.Role != "roles/iam.workloadIdentityUser" || !exactWIFSet(iam.WorkloadIdentityBindings.ServiceAccountReferences, wifComponents) {
 		return fmt.Errorf("spec.iam.workloadIdentityBindings must grant workloadIdentityUser to all seven components")
 	}
 	if len(iam.ServiceAccountRoleBindings) != 1 {
 		return fmt.Errorf("spec.iam.serviceAccountRoleBindings must define one exact-worker-SA actAs grant")
 	}
 	grant := iam.ServiceAccountRoleBindings[0]
-	if grant.Role != "roles/iam.serviceAccountUser" || grant.Scope.Kind != "ServiceAccount" || grant.Scope.Reference != "WorkerServiceAccount" || !exactWIFSet(grant.MemberServiceAccountRefs, []string{"gcp-pd-csi", "nodepool-mgmt"}) {
+	if grant.Role != "roles/iam.serviceAccountUser" || grant.Scope.Kind != "ServiceAccount" || grant.Scope.Reference != "WorkerServiceAccount" || !exactWIFSet(grant.MemberServiceAccountReferences, []string{"gcp-pd-csi", "nodepool-mgmt"}) {
 		return fmt.Errorf("spec.iam.serviceAccountRoleBindings must grant only CSI and NodePool management actAs on WorkerServiceAccount")
 	}
 	return nil
@@ -232,11 +233,11 @@ func WIFConfigDigest(spec WIFConfigTemplateSpec) (string, error) {
 	}
 	sort.Slice(iam.RoleBindings, func(i, j int) bool {
 		a, b := iam.RoleBindings[i], iam.RoleBindings[j]
-		return a.ServiceAccountRef+"/"+a.RoleRef < b.ServiceAccountRef+"/"+b.RoleRef
+		return a.ServiceAccountReference+"/"+a.RoleReference < b.ServiceAccountReference+"/"+b.RoleReference
 	})
-	sort.Strings(iam.WorkloadIdentityBindings.ServiceAccountRefs)
+	sort.Strings(iam.WorkloadIdentityBindings.ServiceAccountReferences)
 	for i := range iam.ServiceAccountRoleBindings {
-		sort.Strings(iam.ServiceAccountRoleBindings[i].MemberServiceAccountRefs)
+		sort.Strings(iam.ServiceAccountRoleBindings[i].MemberServiceAccountReferences)
 	}
 	// Encode only the explicitly versioned executable envelope. Verification,
 	// metadata and boundary name are never digest inputs. The envelope is
@@ -391,10 +392,10 @@ func validateIAMApplications(ctx context.Context, nextIAM, oldIAM *ClusterIAMSpe
 
 // ValidateCreate validates an optional Version reference; resolution belongs to versionsync.
 func (v *Version) ValidateCreate(ctx context.Context) error {
-	if v.Spec.WIFConfigTemplateRef == nil {
+	if v.Spec.WIFConfigTemplateReference == nil {
 		return nil
 	}
-	return validateWIFReference(ctx, *v.Spec.WIFConfigTemplateRef, false, "")
+	return validateWIFReference(ctx, *v.Spec.WIFConfigTemplateReference, false, "")
 }
 
 // ValidateUpdate pins a reference once set, allowing unrelated catalog metadata updates.
@@ -403,9 +404,9 @@ func (v *Version) ValidateUpdate(ctx context.Context, oldObj runtime.Object) err
 	if !ok {
 		return fmt.Errorf("expected a Version old object")
 	}
-	if old.Spec.WIFConfigTemplateRef != nil {
-		if !reflect.DeepEqual(v.Spec.WIFConfigTemplateRef, old.Spec.WIFConfigTemplateRef) {
-			return fmt.Errorf("spec.wifConfigTemplateRef is immutable once set")
+	if old.Spec.WIFConfigTemplateReference != nil {
+		if !reflect.DeepEqual(v.Spec.WIFConfigTemplateReference, old.Spec.WIFConfigTemplateReference) {
+			return fmt.Errorf("spec.wifConfigTemplateReference is immutable once set")
 		}
 		return nil
 	}
