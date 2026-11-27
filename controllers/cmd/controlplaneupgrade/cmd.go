@@ -20,6 +20,7 @@ import (
 // authorization). Maintenance windows and exclusions are now inlined into the
 // Cluster spec, so no separate ControlPlaneUpgradePolicy watch is needed.
 func NewCommand(rf *setup.RootFlags) *cobra.Command {
+	var iamEnforcement bool
 	cmd := &cobra.Command{
 		Use:   "control-plane-upgrade",
 		Short: "Run the control-plane-upgrade controller",
@@ -42,7 +43,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("index clusters by channel group: %w", err)
 			}
 
-			rec := controlplaneupgrade.NewReconciler(mgr.GetClient(), log)
+			rec := controlplaneupgrade.NewReconciler(mgr.GetClient(), log).
+				WithIAMDispatchEnforcement(iamEnforcement)
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).
@@ -55,6 +57,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			return mgr.Start(ctx)
 		},
 	}
+
+	cmd.Flags().BoolVar(&iamEnforcement, "iam-dispatch-enforcement", false, "Gate upgrade approval on the IAM dispatch predicate (staged activation)")
 
 	return cmd
 }

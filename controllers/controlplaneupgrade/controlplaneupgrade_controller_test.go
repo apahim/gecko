@@ -1327,3 +1327,107 @@ func TestReconcile_ConfigurationPreparationFailureDoesNotRetry(t *testing.T) {
 	require.Equal(t, "4.23.8", store.cluster.Spec.Release.Version)
 	require.Equal(t, "PreparationFailed", meta.FindStatusCondition(store.cluster.Status.Conditions, conditionDegraded).Reason)
 }
+
+// ---------------------------------------------------------------------------
+// IAM dispatch predicate at the approval boundary
+// ---------------------------------------------------------------------------
+
+func pinnedCatalogRelease(name string) privatev1.Version {
+	release := privatev1.Version{ObjectMeta: metav1.ObjectMeta{Name: name, Generation: 1}}
+	release.Spec.ChannelGroups = []string{"stable"}
+	pin := privatev1.WIFConfigTemplateReference{Name: "4.15.0", UID: "template-uid", Digest: "sha256:" + strings.Repeat("a", 64)}
+	release.Spec.WIFConfigTemplateReference = &pin
+	meta.SetStatusCondition(&release.Status.Conditions, metav1.Condition{
+		Type: privatev1.VersionAvailable, Status: metav1.ConditionTrue, Reason: "Available", ObservedGeneration: 1,
+	})
+	return release
+}
+
+func assertIAMGate(t *testing.T, captured *privatev1.Cluster) {
+	t.Helper()
+	available := meta.FindStatusCondition(captured.Status.Conditions, conditionAvailable)
+	require.NotNil(t, available)
+	require.Equal(t, metav1.ConditionFalse, available.Status)
+	require.Equal(t, privatev1.WIFConfigUpdateRequired, available.Reason, "missing target coverage must surface as WIFConfigUpdateRequired, never NoUpgradeAvailable")
+	accepted := meta.FindStatusCondition(captured.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted)
+	require.Equal(t, metav1.ConditionFalse, accepted.Status)
+	require.Equal(t, privatev1.WIFConfigUpdateRequired, accepted.Reason)
+	require.Equal(t, metav1.ConditionFalse, meta.FindStatusCondition(captured.Status.Conditions, conditionDegraded).Status, "an IAM prerequisite is not a configuration failure")
+}
+
+// Customer-requested approval is gated by the shared IAM dispatch predicate:
+// the target is blocked as WIFConfigUpdateRequired (not NoUpgradeAvailable and
+// not degraded) until the customer asserts the exact pinned contract.
+func TestReconcile_IAMGateBlocksCustomerApprovalUntilContractAsserted(t *testing.T) {
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
+	cluster.Spec.Release.Version = "4.15.1"
+
+	r, store := buildReconciler(t, cluster)
+	store.releases = []privatev1.Version{pinnedCatalogRelease("4.15.1")}
+	r.WithIAMDispatchEnforcement(true)
+
+	result, err := r.Reconcile(context.Background(), clusterReq("cluster-1"))
+	require.NoError(t, err)
+	require.Equal(t, requeuePending, result.RequeueAfter)
+	require.False(t, store.updateCalled, "the target release must not be normalized into the spec while blocked")
+	assertIAMGate(t, store.statusWriter.captured.(*privatev1.Cluster))
+
+	// The customer asserts the exact pinned contract; approval proceeds.
+	store.cluster.Spec.Platform = privatev1.ClusterPlatformSpec{GCP: &privatev1.GCPClusterPlatform{
+		IAM: &privatev1.ClusterIAMSpec{TemplateApplications: []privatev1.WIFConfigTemplateReference{
+			*store.releases[0].Spec.WIFConfigTemplateReference,
+		}},
+	}}
+	result, err = r.Reconcile(context.Background(), clusterReq("cluster-1"))
+	require.NoError(t, err)
+	require.Equal(t, requeueObserving, result.RequeueAfter)
+	captured := store.statusWriter.captured.(*privatev1.Cluster)
+	require.True(t, meta.IsStatusConditionTrue(captured.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted))
+	require.NotNil(t, captured.Status.ControlPlaneUpgrade)
+	require.Equal(t, "4.15.1", captured.Status.ControlPlaneUpgrade.TargetVersion)
+	require.Equal(t, privatev1.TargetSourceCustomer, captured.Status.ControlPlaneUpgrade.TargetSource)
+}
+
+// Automatic approval is gated by the same shared predicate with the same
+// reason: the advertised target exists and stays selected, never silently
+// replaced by an alternative or reported as NoUpgradeAvailable.
+func TestReconcile_IAMGateBlocksAutomaticApprovalWithUpdateRequired(t *testing.T) {
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
+
+	r, store := buildReconciler(t, cluster)
+	store.releases = []privatev1.Version{pinnedCatalogRelease("4.15.1")}
+	r.WithIAMDispatchEnforcement(true)
+
+	result, err := r.Reconcile(context.Background(), clusterReq("cluster-1"))
+	require.NoError(t, err)
+	require.Equal(t, requeuePending, result.RequeueAfter)
+	require.False(t, store.updateCalled)
+	captured := store.statusWriter.captured.(*privatev1.Cluster)
+	assertIAMGate(t, captured)
+	require.Nil(t, captured.Status.ControlPlaneUpgrade, "no target may be recorded while the gate blocks")
+	require.Equal(t, "4.15.0", store.cluster.Spec.Release.Version, "the spec must stay on the observed release")
+}
+
+// An unavailable version contract blocks approval with the platform action
+// reason, carrying the Version's own availability reason.
+func TestReconcile_IAMGateBlocksAutomaticApprovalOnUnavailableContract(t *testing.T) {
+	cluster := readyCluster("4.15.0", []string{"4.15.1"})
+	release := pinnedCatalogRelease("4.15.1")
+	meta.SetStatusCondition(&release.Status.Conditions, metav1.Condition{
+		Type: privatev1.VersionAvailable, Status: metav1.ConditionFalse, Reason: "TemplateUnverified", Message: "TemplateUnverified", ObservedGeneration: 1,
+	})
+
+	r, store := buildReconciler(t, cluster)
+	store.releases = []privatev1.Version{release}
+	r.WithIAMDispatchEnforcement(true)
+
+	result, err := r.Reconcile(context.Background(), clusterReq("cluster-1"))
+	require.NoError(t, err)
+	require.Equal(t, requeuePending, result.RequeueAfter)
+	captured := store.statusWriter.captured.(*privatev1.Cluster)
+	available := meta.FindStatusCondition(captured.Status.Conditions, conditionAvailable)
+	require.Equal(t, metav1.ConditionFalse, available.Status)
+	require.Equal(t, privatev1.VersionIAMUnavailable, available.Reason)
+	require.Contains(t, available.Message, "TemplateUnverified")
+	require.Nil(t, captured.Status.ControlPlaneUpgrade)
+}

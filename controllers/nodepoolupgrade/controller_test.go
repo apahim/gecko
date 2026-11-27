@@ -3,6 +3,7 @@ package nodepoolupgrade
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -377,4 +378,64 @@ func TestPendingScheduleCanChangeWhilePoolProgresses(t *testing.T) {
 	require.NoError(t, c.Status().Update(t.Context(), updated))
 	reconcilePool(t, r)
 	require.True(t, privatev1.NodePoolUpgradeActive(getPool(t, c)))
+}
+
+// The shared IAM dispatch predicate blocks an otherwise valid upgrade at the
+// scheduling boundary: the target stays selected and waiting (not degraded,
+// not submitted), and the block releases once the customer asserts the exact
+// pinned contract on the Cluster.
+func TestIAMDispatchBlocksSchedulingWithoutDegrading(t *testing.T) {
+	pool, cluster, release := testObjects()
+	release.Spec.WIFConfigTemplateReference = &privatev1.WIFConfigTemplateReference{Name: "4.22.0", UID: "template-uid", Digest: "sha256:" + strings.Repeat("a", 64)}
+	meta.SetStatusCondition(&release.Status.Conditions, metav1.Condition{Type: privatev1.VersionAvailable, Status: metav1.ConditionTrue, Reason: "Available", ObservedGeneration: release.Generation})
+	r, c := testReconciler(t, pool, cluster, release)
+	r.WithIAMDispatchEnforcement(true)
+
+	require.Equal(t, waitInterval, reconcilePool(t, r).RequeueAfter)
+	updated := getPool(t, c)
+	require.Equal(t, "4.22.14", updated.Status.Version, "the observed release must be kept")
+	require.False(t, privatev1.NodePoolReleaseApproved(updated), "the target must not be approved while uncovered")
+	require.Equal(t, pool.Spec.Release.Version, updated.Spec.Release.Version)
+	scheduled := meta.FindStatusCondition(updated.Status.Conditions, conditionScheduled)
+	require.NotNil(t, scheduled)
+	require.Equal(t, metav1.ConditionFalse, scheduled.Status)
+	require.Equal(t, privatev1.WIFConfigUpdateRequired, scheduled.Reason)
+	require.False(t, meta.IsStatusConditionTrue(updated.Status.Conditions, conditionDegraded), "an IAM prerequisite is not a rejected configuration")
+	submitted := meta.FindStatusCondition(updated.Status.Conditions, privatev1.NodePoolUpgradeSubmitted)
+	require.NotNil(t, submitted)
+	require.Equal(t, metav1.ConditionFalse, submitted.Status)
+	require.Equal(t, "NotSubmitted", submitted.Reason)
+
+	// The customer asserts the exact pinned contract; scheduling proceeds.
+	updatedCluster := &privatev1.Cluster{}
+	require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: cluster.Namespace, Name: cluster.Name}, updatedCluster))
+	updatedCluster.Spec.Platform.GCP = &privatev1.GCPClusterPlatform{IAM: &privatev1.ClusterIAMSpec{
+		TemplateApplications: []privatev1.WIFConfigTemplateReference{*release.Spec.WIFConfigTemplateReference},
+	}}
+	require.NoError(t, c.Update(t.Context(), updatedCluster))
+	reconcilePool(t, r)
+	require.True(t, privatev1.NodePoolReleaseApproved(getPool(t, c)), "approval resumes once the contract is asserted")
+}
+
+// An unavailable version contract blocks scheduling with the platform action
+// reason, still without degrading the target.
+func TestIAMDispatchBlocksOnUnavailableVersionContract(t *testing.T) {
+	pool, cluster, release := testObjects()
+	release.Spec.WIFConfigTemplateReference = &privatev1.WIFConfigTemplateReference{Name: "4.22.0", UID: "template-uid", Digest: "sha256:" + strings.Repeat("a", 64)}
+	meta.SetStatusCondition(&release.Status.Conditions, metav1.Condition{Type: privatev1.VersionAvailable, Status: metav1.ConditionFalse, Reason: "TemplateUnverified", ObservedGeneration: release.Generation})
+	cluster.Spec.Platform.GCP = &privatev1.GCPClusterPlatform{IAM: &privatev1.ClusterIAMSpec{
+		TemplateApplications: []privatev1.WIFConfigTemplateReference{*release.Spec.WIFConfigTemplateReference},
+	}}
+	r, c := testReconciler(t, pool, cluster, release)
+	r.WithIAMDispatchEnforcement(true)
+
+	require.Equal(t, waitInterval, reconcilePool(t, r).RequeueAfter)
+	updated := getPool(t, c)
+	require.False(t, privatev1.NodePoolReleaseApproved(updated))
+	scheduled := meta.FindStatusCondition(updated.Status.Conditions, conditionScheduled)
+	require.NotNil(t, scheduled)
+	require.Equal(t, metav1.ConditionFalse, scheduled.Status)
+	require.Equal(t, privatev1.VersionIAMUnavailable, scheduled.Reason)
+	require.Contains(t, scheduled.Message, "TemplateUnverified")
+	require.False(t, meta.IsStatusConditionTrue(updated.Status.Conditions, conditionDegraded))
 }

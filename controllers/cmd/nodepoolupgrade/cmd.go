@@ -14,7 +14,8 @@ import (
 
 // NewCommand returns the NodePool upgrade controller command.
 func NewCommand(rf *setup.RootFlags) *cobra.Command {
-	return &cobra.Command{
+	var iamEnforcement bool
+	cmd := &cobra.Command{
 		Use:   "nodepool-upgrade",
 		Short: "Run the NodePool upgrade controller",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -29,10 +30,15 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.NodePool{}).
 				WithOptions(rf.ControllerOpts()).
-				Complete(nodepoolupgrade.NewReconciler(mgr.GetClient())); err != nil {
+				Complete(nodepoolupgrade.NewReconciler(mgr.GetClient()).
+					WithIAMDispatchEnforcement(iamEnforcement)); err != nil {
 				return fmt.Errorf("setup NodePool upgrade controller: %w", err)
 			}
 			return mgr.Start(cmd.Context())
 		},
 	}
+
+	cmd.Flags().BoolVar(&iamEnforcement, "iam-dispatch-enforcement", false, "Gate upgrade scheduling on the IAM dispatch predicate (staged activation)")
+
+	return cmd
 }

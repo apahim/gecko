@@ -44,6 +44,10 @@ type Reconciler struct {
 	log       logger.Logger
 	now       func() time.Time
 	admission AdmissionGate
+	// iamEnforcement gates approval on the shared IAM dispatch predicate.
+	// The final installer Apply boundary re-checks it independently, so a
+	// cached approval can never bypass a fresh check.
+	iamEnforcement bool
 }
 
 func NewReconciler(apiClient client.Client, log logger.Logger) *Reconciler {
@@ -52,6 +56,12 @@ func NewReconciler(apiClient client.Client, log logger.Logger) *Reconciler {
 
 // WithAdmissionGate connects a capacity coordinator without changing the API.
 func (r *Reconciler) WithAdmissionGate(gate AdmissionGate) *Reconciler { r.admission = gate; return r }
+
+// WithIAMDispatchEnforcement gates approval on the IAM dispatch predicate.
+func (r *Reconciler) WithIAMDispatchEnforcement(enabled bool) *Reconciler {
+	r.iamEnforcement = enabled
+	return r
+}
 
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	var cluster privatev1.Cluster

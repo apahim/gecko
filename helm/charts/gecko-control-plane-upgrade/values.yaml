@@ -14,6 +14,9 @@ logLevel: info
 logFormat: json
 workers: 10
 
+# Gate upgrade approval on the IAM dispatch predicate (staged activation).
+iamDispatchEnforcement: false
+
 serviceAccount:
   create: true
   annotations: {}

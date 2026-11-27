@@ -14,6 +14,9 @@ logLevel: info
 logFormat: json
 workers: 10
 
+# Gate upgrade scheduling on the IAM dispatch predicate (staged activation).
+iamDispatchEnforcement: false
+
 networkPolicy:
   enabled: true
   # Restrict these to the API server ranges when known. In-cluster API traffic

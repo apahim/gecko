@@ -111,6 +111,20 @@ func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, t
 		}
 		return r.block(ctx, c, unavailable.Reason, unavailable.Message, true)
 	}
+	// The IAM dispatch predicate gates every approval entrypoint — customer,
+	// automatic and critical override — with one shared check. Missing
+	// coverage surfaces as WIFConfigUpdateRequired, never NoUpgradeAvailable
+	// or a silent alternative selection; the final installer Apply boundary
+	// re-checks it independently.
+	if r.iamEnforcement {
+		evaluation, err := catalog.EvaluateDispatch(ctx, r.apiClient, c, target, releaseGroup(c))
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		if permitted, reason, message := evaluation.NewWorkPermitted(); !permitted {
+			return r.block(ctx, c, reason, message, false)
+		}
+	}
 	current, _ := utilversion.ParseSemantic(c.Status.HostedClusterResult.Version)
 	selected, _ := utilversion.ParseSemantic(target)
 	isYStream := current.Major() != selected.Major() || current.Minor() != selected.Minor()
@@ -161,7 +175,8 @@ func (r *Reconciler) block(ctx context.Context, c *privatev1.Cluster, reason, me
 	if degraded {
 		degradedStatus = metav1.ConditionTrue
 	}
-	if degraded || reason == "TargetNotAvailable" || reason == waitingForVersionCatalogReason {
+	if degraded || reason == "TargetNotAvailable" || reason == waitingForVersionCatalogReason ||
+		reason == privatev1.WIFConfigUpdateRequired || reason == privatev1.VersionIAMUnavailable {
 		availableStatus = metav1.ConditionFalse
 	}
 	return r.writeStatus(ctx, c, c.Status.ControlPlaneUpgrade, requeuePending,
