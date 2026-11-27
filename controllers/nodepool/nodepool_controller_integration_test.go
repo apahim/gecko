@@ -112,16 +112,20 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 		Where("spec.groupKey", "==", groupKey).
 		Documents(ctx).GetAll()
 	require.NoError(t, err)
-	require.Len(t, applySnapshots, 1)
-	require.Equal(t, expectedID, applySnapshots[0].Ref.ID)
+	require.Len(t, applySnapshots, 2)
+	applyByID := make(map[string]*firestore.DocumentSnapshot, len(applySnapshots))
+	for _, snapshot := range applySnapshots {
+		applyByID[snapshot.Ref.ID] = snapshot
+	}
+	require.Contains(t, applyByID, expectedID)
 
 	var applyDesire kubeapplier.ApplyDesire
-	require.NoError(t, applySnapshots[0].DataTo(&applyDesire))
+	require.NoError(t, applyByID[expectedID].DataTo(&applyDesire))
 	require.Equal(t, project, applyDesire.Spec.ManagementCluster)
 	require.Equal(t, groupKey, applyDesire.Spec.GroupKey)
 	require.Equal(t, expectedTarget, applyDesire.Spec.TargetItem)
 
-	content, ok := applySnapshots[0].Data()["spec_kubeContent"].(map[string]any)
+	content, ok := applyByID[expectedID].Data()["spec_kubeContent"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "hypershift.openshift.io/v1beta1", content["apiVersion"])
 	require.Equal(t, "NodePool", content["kind"])
@@ -151,32 +155,65 @@ func TestIntegration_NodePool_ApplyAndStatusReadback(t *testing.T) {
 	require.Equal(t, np.Spec.Platform.GCP.Zone, gcp["zone"])
 	require.Equal(t, cluster.Spec.Platform.GCP.Subnet, gcp["subnet"])
 
+	configRefs, ok := manifestSpec["config"].([]any)
+	require.True(t, ok)
+	require.Len(t, configRefs, 1)
+	configRef, ok := configRefs[0].(map[string]any)
+	require.True(t, ok)
+	configName, ok := configRef["name"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, configName)
+	configTarget := kubeapplier.ResourceReference{
+		Version: "v1", Resource: "configmaps", Namespace: expectedTarget.Namespace, Name: configName,
+	}
+	configID := desireid.NewDocumentID(groupKey, configTarget.Group, configTarget.Version,
+		configTarget.Resource, configTarget.Namespace, configTarget.Name)
+	require.Contains(t, applyByID, configID)
+	var configApply kubeapplier.ApplyDesire
+	require.NoError(t, applyByID[configID].DataTo(&configApply))
+	require.Equal(t, configTarget, configApply.Spec.TargetItem)
+
 	readSnapshots, err := specsClient.Collection("readdesires").
 		Where("spec.groupKey", "==", groupKey).
 		Documents(ctx).GetAll()
 	require.NoError(t, err)
-	require.Len(t, readSnapshots, 1)
-	require.Equal(t, expectedID, readSnapshots[0].Ref.ID)
+	require.Len(t, readSnapshots, 2)
+	readByID := make(map[string]*firestore.DocumentSnapshot, len(readSnapshots))
+	for _, snapshot := range readSnapshots {
+		readByID[snapshot.Ref.ID] = snapshot
+	}
+	require.Contains(t, readByID, expectedID)
+	require.Contains(t, readByID, configID)
 	var readDesire kubeapplier.ReadDesire
-	require.NoError(t, readSnapshots[0].DataTo(&readDesire))
+	require.NoError(t, readByID[expectedID].DataTo(&readDesire))
 	require.Equal(t, expectedTarget, readDesire.Spec.TargetItem)
+	var configRead kubeapplier.ReadDesire
+	require.NoError(t, readByID[configID].DataTo(&configRead))
+	require.Equal(t, configTarget, configRead.Spec.TargetItem)
 
-	_, err = statusClient.Collection("applydesires").Doc(expectedID).Set(ctx, map[string]any{
-		"spec": applyDesire.Spec,
-		"status": kubeapplier.ApplyDesireStatus{
-			Conditions: []metav1.Condition{{
-				Type:   kubeapplier.ConditionTypeSuccessful,
-				Status: metav1.ConditionTrue,
-				Reason: "NoErrors",
-			}},
-			ObservedDesireUpdateTime: applySnapshots[0].UpdateTime,
-		},
+	for id, desire := range map[string]kubeapplier.ApplyDesire{expectedID: applyDesire, configID: configApply} {
+		_, err = statusClient.Collection("applydesires").Doc(id).Set(ctx, map[string]any{
+			"spec": desire.Spec,
+			"status": kubeapplier.ApplyDesireStatus{
+				Conditions: []metav1.Condition{{
+					Type:   kubeapplier.ConditionTypeSuccessful,
+					Status: metav1.ConditionTrue,
+					Reason: "NoErrors",
+				}},
+				ObservedDesireUpdateTime: applyByID[id].UpdateTime,
+			},
+		})
+		require.NoError(t, err)
+	}
+	_, err = statusClient.Collection("readdesires").Doc(configID).Set(ctx, map[string]any{
+		"spec":   configRead.Spec,
+		"status": kubeapplier.ReadDesireStatus{ObservedDesireUpdateTime: readByID[configID].UpdateTime},
 	})
 	require.NoError(t, err)
 	_, err = statusClient.Collection("readdesires").Doc(expectedID).Set(ctx, map[string]any{
 		"spec": readDesire.Spec,
 		"status": kubeapplier.ReadDesireStatus{
-			ObservedDesireUpdateTime: readSnapshots[0].UpdateTime,
+			ObservedDesireUpdateTime: readByID[expectedID].UpdateTime,
 		},
 		"status_kubeContent": map[string]any{
 			"status": map[string]any{

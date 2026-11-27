@@ -35,7 +35,7 @@ type Input struct {
 	ReleaseImage       string
 }
 
-// Build constructs raw JSON bytes for the NodePool manifest.
+// Build constructs raw JSON for the NodePool and its worker configuration.
 func Build(input Input) ([][]byte, error) {
 	// Apply defaults
 	zone := input.Zone
@@ -65,6 +65,10 @@ func Build(input Input) ([][]byte, error) {
 
 	genStr := strconv.FormatInt(input.NodePoolGeneration, 10)
 	namespace := fmt.Sprintf("clusters-%s", input.ClusterID)
+	helperConfig, err := credentialHelperConfig(namespace, input.NodePoolName)
+	if err != nil {
+		return nil, fmt.Errorf("nodepool manifest: %w", err)
+	}
 
 	// Build the NodePool manifest as map[string]any
 	nodePoolManifest := map[string]any{
@@ -85,6 +89,7 @@ func Build(input Input) ([][]byte, error) {
 		"spec": map[string]any{
 			"clusterName": input.ClusterName,
 			"replicas":    replicas,
+			"config":      []map[string]string{{"name": helperConfig.Name}},
 			"release": map[string]any{
 				"image": input.ReleaseImage,
 			},
@@ -120,5 +125,9 @@ func Build(input Input) ([][]byte, error) {
 		return nil, fmt.Errorf("nodepool manifest: marshal NodePool: %w", err)
 	}
 
-	return [][]byte{rawBytes}, nil
+	helperConfigBytes, err := json.Marshal(helperConfig)
+	if err != nil {
+		return nil, fmt.Errorf("nodepool manifest: marshal credential helper ConfigMap: %w", err)
+	}
+	return [][]byte{rawBytes, helperConfigBytes}, nil
 }
