@@ -26,9 +26,10 @@ const (
 	syncInterval = 15 * time.Minute
 
 	// eligibilityInterval re-observes template verification changes and pins
-	// unpinned Versions faster than the discovery sync. The POC default is
-	// deliberately short; production deployments set it explicitly.
-	defaultEligibilityInterval = 30 * time.Second
+	// unpinned Versions faster than the discovery sync. The default is a
+	// production-safe cadence; POC deployments set a shorter interval
+	// explicitly through --eligibility-interval.
+	defaultEligibilityInterval = 5 * time.Minute
 
 	// Stop probing a major after this many missing minor channels.
 	maxConsecutiveMissingMinors = 3
@@ -350,33 +351,31 @@ func (c *Controller) templates(ctx context.Context) ([]privatev1.WIFConfigTempla
 
 // nextSpec builds the Version spec to persist: desired catalog-owned fields
 // plus the existing pin carried forward (never wiped), or a freshly resolved
-// pin for an unpinned Version when template reads succeeded.
-func (c *Controller) nextSpec(
-	ctx context.Context,
-	log logger.Logger,
+// pin for an unpinned Version when template reads succeeded. The returned
+// error reports that pin resolution failed for the selected boundary: the
+// returned spec stays unpinned (fail-closed) and callers must not treat the
+// Version as confirmed pinless.
+func nextSpec(
 	name string,
 	desired privatev1.VersionSpec,
 	existing *privatev1.WIFConfigTemplateReference,
 	templates []privatev1.WIFConfigTemplate,
 	templateErr error,
-) privatev1.VersionSpec {
+) (privatev1.VersionSpec, error) {
 	next := desired
 	if existing != nil {
 		next.WIFConfigTemplateReference = existing
-		return next
+		return next, nil
 	}
 	if templateErr != nil {
-		return next
+		return next, nil //nolint:nilerr // Failed template reads leave the Version unpinned fail-closed; the caller owns the error.
 	}
 	pin, err := resolvePin(name, templates)
 	if err != nil {
-		// A single undigestable template must not fail the whole snapshot;
-		// the Version stays unpinned and unavailable, which is fail-closed.
-		log.Errorf(ctx, "resolve IAM template reference for Version %q failed: %v", name, err)
-		return next
+		return next, err
 	}
 	next.WIFConfigTemplateReference = pin
-	return next
+	return next, nil
 }
 
 func (c *Controller) apply(
@@ -390,6 +389,7 @@ func (c *Controller) apply(
 	}
 
 	templates, templateErr := c.templates(ctx)
+	warnNonCanonicalTemplateNames(ctx, log, templates)
 
 	existing := make(map[string]*privatev1.Version, len(current.Items))
 
@@ -406,7 +406,12 @@ func (c *Controller) apply(
 			continue
 		}
 
-		next := c.nextSpec(ctx, log, name, spec, version.Spec.WIFConfigTemplateReference, templates, templateErr)
+		next, err := nextSpec(name, spec, version.Spec.WIFConfigTemplateReference, templates, templateErr)
+		if err != nil {
+			// A single undigestable template must not fail the whole snapshot;
+			// the Version stays unpinned and unavailable, which is fail-closed.
+			log.Errorf(ctx, "resolve IAM template reference for Version %q failed: %v", name, err)
+		}
 		if specEqual(&version.Spec, &next) {
 			continue
 		}
@@ -425,11 +430,19 @@ func (c *Controller) apply(
 			continue
 		}
 
+		next, err := nextSpec(name, spec, nil, templates, templateErr)
+		if err != nil {
+			// A single undigestable template must not fail the whole snapshot;
+			// the Version is created unpinned and unavailable, which is
+			// fail-closed.
+			log.Errorf(ctx, "resolve IAM template reference for Version %q failed: %v", name, err)
+		}
+
 		version := &privatev1.Version{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name,
 			},
-			Spec: c.nextSpec(ctx, log, name, spec, nil, templates, templateErr),
+			Spec: next,
 		}
 
 		if err := c.apiClient.Create(ctx, version); err != nil {

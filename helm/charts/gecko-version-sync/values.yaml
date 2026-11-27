@@ -26,9 +26,9 @@ cincinnati:
 
 # Fast availability-refresh cadence: re-observes WIFConfigTemplate
 # verification changes and pins unpinned Versions between the 15-minute
-# discovery syncs. The POC default is deliberately short; production
-# deployments set it explicitly (for example 5m) to bound API load.
-eligibilityInterval: 30s
+# discovery syncs. The default is production-safe; POC deployments set a
+# shorter interval (for example 30s) explicitly to bound API load.
+eligibilityInterval: 5m
 
 # Channels define catalog membership from minimumSupportedVersion. Cincinnati
 # probes <Channel name>-<major.minor>; release-controller discovers matching

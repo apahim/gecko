@@ -89,8 +89,8 @@ func NewCommand(rootFlags *setup.RootFlags) *cobra.Command {
 	command.Flags().DurationVar(
 		&eligibilityInterval,
 		"eligibility-interval",
-		30*time.Second,
-		"Interval for re-observing WIFConfigTemplate verification and pinning unpinned Versions; the POC default is deliberately short, production deployments set it explicitly",
+		5*time.Minute,
+		"Interval for re-observing WIFConfigTemplate verification and pinning unpinned Versions; the default is production-safe, POC deployments set a shorter interval explicitly",
 	)
 
 	command.Flags().StringVar(&sourceType, "source-type", "cincinnati", "Catalog source: cincinnati or release-controller")

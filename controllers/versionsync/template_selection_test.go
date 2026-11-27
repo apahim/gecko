@@ -144,6 +144,20 @@ func TestSelectTemplateBoundaryRejectsMalformedVersionNames(t *testing.T) {
 	}
 }
 
+// Non-canonical boundary names never apply to any Version; they are surfaced
+// once per pass so a typo'd name is visible to operators.
+func TestNonCanonicalTemplateNames(t *testing.T) {
+	templates := []privatev1.WIFConfigTemplate{
+		testTemplate("5.0.0", "uid-a", true),
+		testTemplate("5.0.x", "uid-b", true),
+		testTemplate("5.0.3", "uid-c", true),
+		testTemplate("v5.0.4", "uid-d", true),
+		testTemplate("5.0", "uid-e", true),
+	}
+	assert.Equal(t, []string{"5.0.x", "v5.0.4", "5.0"}, nonCanonicalTemplateNames(templates))
+	assert.Nil(t, nonCanonicalTemplateNames(nil))
+}
+
 // Selection must be deterministic regardless of catalog input order.
 func TestSelectTemplateBoundaryShuffledInput(t *testing.T) {
 	templates := []privatev1.WIFConfigTemplate{

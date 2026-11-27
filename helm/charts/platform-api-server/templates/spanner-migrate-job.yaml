@@ -39,7 +39,7 @@ spec:
         - name: migrate
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.migrationImage.registry }}/{{ .Values.migrationImage.repository }}:{{ .Values.migrationImage.tag }}"
+          image: "{{ .Values.migrationImage.registry }}/{{ .Values.migrationImage.repository }}:{{ .Values.migrationImage.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.migrationImage.pullPolicy }}
           args:
             - --migrate-only

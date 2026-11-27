@@ -8,7 +8,10 @@ image:
 
 # Spanner DDL migration Job image, pinned independently from the API image so
 # API/catalog-only image bumps cannot recreate the Force=true,Replace=true Job
-# and re-run migrations. Bump deliberately when new DDL must ship.
+# and re-run migrations. Nothing else runs DDL: when a release includes Spanner
+# schema changes, bump migrationImage.tag in the same change or the migrations
+# silently never run. The golden rendering test pins the current tag but cannot
+# catch a missed future bump.
 migrationImage:
   registry: us-docker.pkg.dev
   repository: gcp-hcp-commons/gcp-hcp-images/gecko-platform-api-server

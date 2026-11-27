@@ -82,7 +82,16 @@ func versionAvailability(version *privatev1.Version, templates []privatev1.WIFCo
 		return condition
 	}
 	digest, err := privatev1.WIFConfigDigest(floor.Spec)
-	if err != nil || digest != pin.Digest {
+	if err != nil {
+		// Defensive: the digest protocol guards its own invariants and the
+		// contract fields are plain strings, so this is not reachable for
+		// stored contracts. Report it distinctly instead of claiming the pin
+		// no longer matches a boundary that never digested.
+		condition.Reason = availabilityReasonTemplateInvalid
+		condition.Message = fmt.Sprintf("The contract digest of the highest applicable IAM template boundary %q cannot be computed", floor.Name)
+		return condition
+	}
+	if digest != pin.Digest {
 		condition.Reason = availabilityReasonTemplateStale
 		condition.Message = fmt.Sprintf("Pinned template %q no longer matches the catalog contract digest", pin.Name)
 		return condition
@@ -103,12 +112,15 @@ func versionAvailability(version *privatev1.Version, templates []privatev1.WIFCo
 // boundary has been published and rewrites availability conditions. A failed
 // template read skips the whole pass, preserving pins and previous conditions
 // rather than flapping availability; the level-triggered pass retries.
+// Pin resolution itself is shared with the discovery apply through nextSpec,
+// so the two paths cannot drift.
 func (c *Controller) refreshEligibility(ctx context.Context, log logger.Logger) {
 	templates, err := c.templates(ctx)
 	if err != nil {
 		log.Errorf(ctx, "list WIFConfigTemplates failed, preserving version availability snapshot: %v", err)
 		return
 	}
+	warnNonCanonicalTemplateNames(ctx, log, templates)
 	var versions privatev1.VersionList
 	if err := c.apiClient.List(ctx, &versions); err != nil {
 		log.Errorf(ctx, "list versions for eligibility refresh failed: %v", err)
@@ -119,18 +131,21 @@ func (c *Controller) refreshEligibility(ctx context.Context, log logger.Logger) 
 		if !version.DeletionTimestamp.IsZero() {
 			continue
 		}
-		if version.Spec.WIFConfigTemplateReference == nil {
-			pin, err := resolvePin(version.Name, templates)
-			if err != nil {
-				log.Errorf(ctx, "resolve IAM template reference for Version %q failed: %v", version.Name, err)
-			} else if pin != nil {
-				version.Spec.WIFConfigTemplateReference = pin
-				if err := c.apiClient.Update(ctx, version); err != nil {
-					log.Errorf(ctx, "pin Version %q to IAM template %q failed: %v", version.Name, pin.Name, err)
-					continue // Availability must not report a stale generation; retry next pass.
-				}
-				log.Infof(ctx, "pinned Version %s to IAM template %s", version.Name, pin.Name)
+		spec, err := nextSpec(version.Name, version.Spec, version.Spec.WIFConfigTemplateReference, templates, nil)
+		if err != nil {
+			// The selected boundary exists but its pin could not be resolved:
+			// reporting the Version as pinless would be misleading. Preserve
+			// the previous condition and retry on the next pass.
+			log.Errorf(ctx, "resolve IAM template reference for Version %q failed, preserving availability snapshot: %v", version.Name, err)
+			continue
+		}
+		if version.Spec.WIFConfigTemplateReference == nil && spec.WIFConfigTemplateReference != nil {
+			version.Spec.WIFConfigTemplateReference = spec.WIFConfigTemplateReference
+			if err := c.apiClient.Update(ctx, version); err != nil {
+				log.Errorf(ctx, "pin Version %q to IAM template %q failed: %v", version.Name, spec.WIFConfigTemplateReference.Name, err)
+				continue // Availability must not report a stale generation; retry next pass.
 			}
+			log.Infof(ctx, "pinned Version %s to IAM template %s", version.Name, spec.WIFConfigTemplateReference.Name)
 		}
 		before := version.DeepCopy()
 		meta.SetStatusCondition(&version.Status.Conditions, versionAvailability(version, templates))

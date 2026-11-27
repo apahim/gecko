@@ -103,6 +103,14 @@ future contract needs its own retained contract data and a new version-boundary
 manifest selected by a new entry. Admission rejecting an immutable change is
 the intended fail-safe, not a reason to delete/recreate the template.
 
+The Spanner DDL migration Job image is pinned independently from the API image
+(`migrationImage`) so API image bumps cannot recreate the `Force=true,Replace=true`
+Job and re-run migrations. Release checklist: any change shipping new Spanner
+DDL must bump `migrationImage.tag` in the same release — the migration Job is
+the only runner of DDL, and a missed bump means the migrations silently never
+run. The golden rendering test pins the current tag but cannot catch a missed
+future bump.
+
 The chart defaults publish no templates and disable new Cluster assertions.
 Run the local Helm-to-API contract check with:
 
@@ -113,8 +121,8 @@ HELM_BIN=/path/to/helm go test ./cmd/platform-api-server -run TestWIFConfigTempl
 Phase 1 introduced the API and opt-in packaging. Phase 1.5 delivers versionsync
 ownership of `Available`, prerelease numeric-base floor selection, preservation
 of pinned references during catalog synchronization and minimal status RBAC,
-with an independent fast eligibility loop (default 30s POC cadence, configured
-deliberately in production). Because the catalog is append-only and contracts
+with an independent fast eligibility loop (production-safe default cadence;
+POC deployments configure a shorter interval deliberately). Because the catalog is append-only and contracts
 immutable, a boundary retained from an earlier contract revision can
 permanently fail current validation; such a boundary is unpinnable and its
 selection blocks the release fail-closed (`TemplateReferenceInvalid`) instead
