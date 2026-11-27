@@ -5,7 +5,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // WIFConfigTemplate describes an immutable installation IAM contract.
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
-
+// +orlop:authorization-exempt-verbs: get,list
 type WIFConfigTemplate struct {
 	metav1.TypeMeta `json:",inline"`
 	// +optional

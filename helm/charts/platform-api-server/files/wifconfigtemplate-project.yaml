@@ -1,5 +1,6 @@
 # Executable schemaVersion 1 contract. Publication eligibility lives on the resource.
-# Permission/trust baseline: gcp-hcp/experiments/iam-bootstrap/wifconfig-project-template.yaml
+# Reviewed project-wide permission/trust baseline; see platform-api/WIFCONFIGTEMPLATE.md.
+# Immutable after publication; the canonical digest is pinned in API and Helm tests.
 schemaVersion: 1
 iam:
   requiredComponents:

@@ -9,7 +9,7 @@ func TestGetPublicResourcesCatalogVerbs(t *testing.T) {
 		"Channel":           true,
 		"PlatformRole":      true,
 		"Version":           true,
-		"WIFConfigTemplate": false,
+		"WIFConfigTemplate": true,
 	}
 	seen := make(map[string]bool)
 	for _, resource := range getPublicResources() {

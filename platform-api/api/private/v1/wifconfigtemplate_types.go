@@ -6,6 +6,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
 // +orlop:public-verbs: get,list
+// +orlop:authorization-exempt-verbs: get,list
 type WIFConfigTemplate struct {
 	metav1.TypeMeta `json:",inline"`
 	// +optional

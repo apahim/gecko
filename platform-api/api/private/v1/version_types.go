@@ -69,4 +69,8 @@ type VersionStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// VersionAvailable is the availability condition consumers must observe as
+// True with a current observedGeneration before dispatching against a release.
+const VersionAvailable = "Available"
+
 func init() { register(&Version{}, &VersionList{}) }

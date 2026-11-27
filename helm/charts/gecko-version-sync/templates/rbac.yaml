@@ -10,11 +10,17 @@ rules:
     resources: ["versions"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["versions/status"]
+    verbs: ["update"]
+  - apiGroups: ["gcp.managed.openshift.io"]
     resources: ["channels"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["gcp.managed.openshift.io"]
     resources: ["channels/status"]
     verbs: ["update"]
+  - apiGroups: ["gcp.managed.openshift.io"]
+    resources: ["wifconfigtemplates"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

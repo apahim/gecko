@@ -1,3 +1,4 @@
+description: WIFConfigTemplate describes an immutable installation IAM contract.
 properties:
   apiVersion:
     description: |-

@@ -24,6 +24,12 @@ cincinnati:
   url: "https://api.openshift.com/api/upgrades_info/v1/graph"
   arch: amd64
 
+# Fast availability-refresh cadence: re-observes WIFConfigTemplate
+# verification changes and pins unpinned Versions between the 15-minute
+# discovery syncs. The default is production-safe; POC deployments set a
+# shorter interval (for example 30s) explicitly to bound API load.
+eligibilityInterval: 5m
+
 # Channels define catalog membership from minimumSupportedVersion. Cincinnati
 # probes <Channel name>-<major.minor>; release-controller discovers matching
 # <major>-<Channel name> and <major>.<minor>.0-0.<Channel name> streams.

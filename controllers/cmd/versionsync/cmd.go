@@ -2,6 +2,7 @@ package versionsync
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +17,7 @@ func NewCommand(rootFlags *setup.RootFlags) *cobra.Command {
 	var architecture string
 	var sourceType string
 	var sourceURL string
+	var eligibilityInterval time.Duration
 
 	command := &cobra.Command{
 		Use:   "version-sync",
@@ -62,6 +64,7 @@ func NewCommand(rootFlags *setup.RootFlags) *cobra.Command {
 			if ciSource != nil {
 				controller = versionsynccontroller.NewCIController(ciSource, log, manager.GetClient())
 			}
+			controller.SetEligibilityInterval(eligibilityInterval)
 
 			if err := manager.Add(controller); err != nil {
 				return fmt.Errorf("add version-sync controller: %w", err)
@@ -82,6 +85,12 @@ func NewCommand(rootFlags *setup.RootFlags) *cobra.Command {
 		"arch",
 		"amd64",
 		"CPU architecture for Cincinnati queries",
+	)
+	command.Flags().DurationVar(
+		&eligibilityInterval,
+		"eligibility-interval",
+		5*time.Minute,
+		"Interval for re-observing WIFConfigTemplate verification and pinning unpinned Versions; the default is production-safe, POC deployments set a shorter interval explicitly",
 	)
 
 	command.Flags().StringVar(&sourceType, "source-type", "cincinnati", "Catalog source: cincinnati or release-controller")

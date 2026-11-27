@@ -41,6 +41,18 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+Labels for the Spanner migration Job. The version label tracks the
+independently pinned migrationImage so API image bumps cannot alter (and via
+Replace=true, recreate) the Job.
+*/}}
+{{- define "platform-api-server.migrationLabels" -}}
+helm.sh/chart: {{ include "platform-api-server.chart" . }}
+{{ include "platform-api-server.selectorLabels" . }}
+app.kubernetes.io/version: {{ .Values.migrationImage.tag | default .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
 Selector labels
 */}}
 {{- define "platform-api-server.selectorLabels" -}}

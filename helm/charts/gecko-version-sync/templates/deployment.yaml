@@ -50,6 +50,7 @@ spec:
             {{- end }}
             - --cincinnati-url={{ .Values.cincinnati.url }}
             - --arch={{ .Values.cincinnati.arch }}
+            - --eligibility-interval={{ .Values.eligibilityInterval }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

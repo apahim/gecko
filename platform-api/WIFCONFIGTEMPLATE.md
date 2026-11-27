@@ -1,11 +1,12 @@
 # WIFConfigTemplate API contract and rollout
 
 `gcp.managed.openshift.io/v1` exposes a platform-scoped, retained IAM catalog.
-Public routes offer get/list only, but catalog reads are **not** exempt from
-authorization. Until explicit platform-scoped Cedar grants and frontend routing
-are delivered, authenticated callers without a grant are denied. Writes use the
-delegated private API and platform RBAC. This is not a separate Kubernetes CRD
-or a cloud IAM controller.
+Public routes offer get/list only; those reads are authorization-exempt for
+authenticated callers, matching Version, Channel and PlatformRole (GCP-1266
+precedent). Authentication remains mandatory. Explicit platform-scoped Cedar
+grants (GCP-1406) will replace the exemption and must remove it in the same
+rollout. Writes use the delegated private API and platform RBAC. This is not a
+separate Kubernetes CRD or a cloud IAM controller.
 
 ## Contract and identity
 
@@ -94,13 +95,21 @@ by self-heal. Do not use a direct patch for a durable revocation while GitOps st
 declares true. Rendered manifests retain `Prune=false,Delete=false` and tolerate
 initial aggregated-API registration with `SkipDryRunOnMissingResource=true`.
 
-The catalog is opt-in (`wifConfigTemplates.enabled`, `entries`). Initially every
-entry uses the reviewed project-wide baseline from the chart's `files/` directory.
-Do not edit this immutable file after publication to update an existing boundary.
-A genuinely different future contract needs its own retained contract data and a
-new version-boundary manifest; the current single-baseline packaging must be
-extended explicitly for that use case. Admission rejecting an immutable change is
+The catalog is opt-in (`wifConfigTemplates.enabled`, `entries`). Each entry
+selects its own immutable contract manifest through `contractFile`, defaulting
+to the reviewed project-wide baseline from the chart's `files/` directory. Do
+not edit a published file to update an existing boundary. A genuinely different
+future contract needs its own retained contract data and a new version-boundary
+manifest selected by a new entry. Admission rejecting an immutable change is
 the intended fail-safe, not a reason to delete/recreate the template.
+
+The Spanner DDL migration Job image is pinned independently from the API image
+(`migrationImage`) so API image bumps cannot recreate the `Force=true,Replace=true`
+Job and re-run migrations. Release checklist: any change shipping new Spanner
+DDL must bump `migrationImage.tag` in the same release — the migration Job is
+the only runner of DDL, and a missed bump means the migrations silently never
+run. The golden rendering test pins the current tag but cannot catch a missed
+future bump.
 
 The chart defaults publish no templates and disable new Cluster assertions.
 Run the local Helm-to-API contract check with:
@@ -109,11 +118,18 @@ Run the local Helm-to-API contract check with:
 HELM_BIN=/path/to/helm go test ./cmd/platform-api-server -run TestWIFConfigTemplateHelmRendering
 ```
 
-Phase 1 introduces the API and opt-in packaging only. Versionsync ownership of
-`Available`, prerelease numeric-base floor selection, preservation of pinned
-references during catalog synchronization, minimal status RBAC and server dispatch
-enforcement must ship before activation in Phase 2. A template's verified assertion
-alone does not authorize a Cluster or independently establish runtime permissions.
+Phase 1 introduced the API and opt-in packaging. Phase 1.5 delivers versionsync
+ownership of `Available`, prerelease numeric-base floor selection, preservation
+of pinned references during catalog synchronization and minimal status RBAC,
+with an independent fast eligibility loop (production-safe default cadence;
+POC deployments configure a shorter interval deliberately). Because the catalog is append-only and contracts
+immutable, a boundary retained from an earlier contract revision can
+permanently fail current validation; such a boundary is unpinnable and its
+selection blocks the release fail-closed (`TemplateReferenceInvalid`) instead
+of falling back to a lower boundary, without attempting writes admission
+rejects. Server dispatch enforcement must still ship
+before activation in Phase 2. A template's verified assertion alone does not
+authorize a Cluster or independently establish runtime permissions.
 
 ## Read-only IAM requirements API
 

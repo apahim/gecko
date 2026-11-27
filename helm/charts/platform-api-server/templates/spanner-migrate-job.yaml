@@ -11,7 +11,7 @@ kind: Job
 metadata:
   name: {{ include "platform-api-server.fullname" . }}-migrate
   labels:
-    {{- include "platform-api-server.labels" . | nindent 4 }}
+    {{- include "platform-api-server.migrationLabels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "-5"
     argocd.argoproj.io/sync-options: Force=true,Replace=true
@@ -39,8 +39,8 @@ spec:
         - name: migrate
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: "{{ .Values.migrationImage.registry }}/{{ .Values.migrationImage.repository }}:{{ .Values.migrationImage.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.migrationImage.pullPolicy }}
           args:
             - --migrate-only
           env:

@@ -1,6 +1,7 @@
 {{- if .Values.wifConfigTemplates.enabled }}
-{{- $contract := required "IAM contract file must be present" (.Files.Get "files/wifconfigtemplate-project.yaml") | fromYaml }}
 {{- range .Values.wifConfigTemplates.entries }}
+{{- $contractFile := .contractFile | default "files/wifconfigtemplate-project.yaml" }}
+{{- $contract := required (printf "IAM contract file %q for entry %q must be present" $contractFile .name) ($.Files.Get $contractFile) | fromYaml }}
 ---
 apiVersion: gcp.managed.openshift.io/v1
 kind: WIFConfigTemplate
