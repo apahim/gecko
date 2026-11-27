@@ -44,12 +44,15 @@ func newTestLogger(t *testing.T) logger.Logger {
 	return log
 }
 
-// mockStatusWriter captures Status().Update calls and can return a configured error.
+// mockStatusWriter captures Status().Update and Status().Patch calls and can
+// return a configured error.
 type mockStatusWriter struct {
 	called    bool
 	updates   int
 	updateErr error
 	captured  client.Object
+	patchData []byte
+	patchErr  error
 }
 
 func (m *mockStatusWriter) Update(_ context.Context, obj client.Object, _ ...client.SubResourceUpdateOption) error {
@@ -61,9 +64,14 @@ func (m *mockStatusWriter) Update(_ context.Context, obj client.Object, _ ...cli
 func (m *mockStatusWriter) Create(_ context.Context, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
 	return nil
 }
-func (m *mockStatusWriter) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+func (m *mockStatusWriter) Patch(_ context.Context, obj client.Object, patch client.Patch, _ ...client.SubResourcePatchOption) error {
 	m.called = true
 	m.captured = obj
+	// Capture the serialized patch payload: a MergeFrom snapshot taken after
+	// the in-place mutation produces an empty diff that persists nothing
+	// against a real API server even though the passed object is mutated.
+	data, err := patch.Data(obj)
+	m.patchData, m.patchErr = data, err
 	return m.updateErr
 }
 func (m *mockStatusWriter) Apply(_ context.Context, _ runtime.ApplyConfiguration, _ ...client.SubResourceApplyOption) error {
@@ -2046,6 +2054,7 @@ func TestReconcile_IAMDispatchReceiptPersistedBeforeApply(t *testing.T) {
 func TestReconcile_IAMEnforcementBlocksUncoveredInstall(t *testing.T) {
 	np := testNodePool("4.22.16")
 	np.SetUID(types.UID("np-uid-1234"))
+	np.SetResourceVersion("1")
 	cluster := coveredTestCluster()
 	cluster.Spec.Platform.GCP.IAM.TemplateApplications = nil
 	tr := mock.New()
@@ -2062,6 +2071,10 @@ func TestReconcile_IAMEnforcementBlocksUncoveredInstall(t *testing.T) {
 	require.NotNil(t, gate)
 	require.Equal(t, metav1.ConditionFalse, gate.Status)
 	require.Equal(t, privatev1.WIFConfigUpdateRequired, gate.Reason)
+	// The gate condition must travel in the patch payload itself. The
+	// pre-gate snapshot is what makes the diff non-empty; asserting only on
+	// the passed object would not catch a snapshot taken after the mutation.
+	require.Contains(t, string(store.statusWriter.patchData), string(privatev1.NodePoolIAMPermissionsReady))
 
 	// The customer asserts the exact pinned contract on the parent Cluster;
 	// the next pass proceeds to the receipt boundary.
@@ -2074,6 +2087,8 @@ func TestReconcile_IAMEnforcementBlocksUncoveredInstall(t *testing.T) {
 	require.NotNil(t, captured.Status.IAMDispatch.Pending)
 	gate = meta.FindStatusCondition(captured.Status.Conditions, privatev1.NodePoolIAMPermissionsReady)
 	require.Equal(t, metav1.ConditionTrue, gate.Status)
+	require.Contains(t, string(store.statusWriter.patchData), string(privatev1.NodePoolIAMPermissionsReady),
+		"the released gate condition must persist in the boundary write")
 }
 
 // An unavailable version contract blocks enforcement fail-closed with the
@@ -2081,6 +2096,7 @@ func TestReconcile_IAMEnforcementBlocksUncoveredInstall(t *testing.T) {
 func TestReconcile_IAMEnforcementBlocksUnavailableVersion(t *testing.T) {
 	np := testNodePool("4.22.16")
 	np.SetUID(types.UID("np-uid-1234"))
+	np.SetResourceVersion("1")
 	cluster := coveredTestCluster()
 	tr := mock.New()
 	r, store := buildReconciler(t, np, cluster, tr, nil, nil, nil)
@@ -2095,6 +2111,7 @@ func TestReconcile_IAMEnforcementBlocksUnavailableVersion(t *testing.T) {
 	require.Equal(t, metav1.ConditionFalse, gate.Status)
 	require.Equal(t, privatev1.VersionIAMUnavailable, gate.Reason)
 	require.Contains(t, gate.Message, "TemplateUnverified")
+	require.Contains(t, string(store.statusWriter.patchData), string(privatev1.NodePoolIAMPermissionsReady))
 }
 
 // Continued reconciliation of the observed release is not gated: a

@@ -415,10 +415,13 @@ func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool,
 	// exact target may be redelivered after a restart, a revocation or
 	// upstream aging; it never authorizes a different target.
 	newWork := upgrading || np.Status.Version == ""
+	// Snapshot before the gate: iamGate mutates np.Status.Conditions in place,
+	// so a MergeFrom patch must diff against the pre-gate object or the gate's
+	// own condition change produces an empty patch and is never persisted.
+	before := np.DeepCopy()
 	blocked, iamConditionChanged := r.iamGate(np, evaluation, newWork)
 	if blocked {
 		if iamConditionChanged {
-			before := np.DeepCopy()
 			if err := r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsConflict(err) {
 				return nil, fmt.Errorf("nodepool reconciler: record IAM dispatch gate: %w", err)
 			}
@@ -432,7 +435,6 @@ func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool,
 	needReceipt := evaluation.Intent != nil && !evaluation.Intent.Committed(np.Status.IAMDispatch)
 
 	if needSubmission || needReceipt || iamConditionChanged {
-		before := np.DeepCopy()
 		if needSubmission {
 			meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 				Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionUnknown,
