@@ -59,6 +59,7 @@ spec:
             - --workers={{ .Values.workers }}
             - --pull-secret-store-name={{ .Values.pullSecret.storeName }}
             - --pull-secret-gcp-key={{ .Values.pullSecret.gcpKey }}
+            - --iam-dispatch-enforcement={{ .Values.iamDispatchEnforcement }}
           {{- if and .Values.customerLabels (ne .Values.customerLabels "{}") }}
             - --customer-labels-file=/etc/config/customer-labels/customer-labels.json
           volumeMounts:

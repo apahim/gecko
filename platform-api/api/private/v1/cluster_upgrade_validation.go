@@ -14,6 +14,17 @@ import (
 const (
 	ControlPlaneUpgradeAccepted  = "ControlPlaneUpgradeAccepted"
 	ControlPlaneUpgradeSubmitted = "ControlPlaneUpgradeSubmitted"
+	// IAMPermissionsReady reports whether the target release's IAM contract
+	// authorizes dispatch. The hc dispatcher owns it for Clusters.
+	IAMPermissionsReady = "IAMPermissionsReady"
+	// WIFConfigUpdateRequired blocks new dispatch because the Cluster has not
+	// asserted the exact IAM contract pinned to the target release. Customer
+	// action (an IAM update and application append) releases it.
+	WIFConfigUpdateRequired = "WIFConfigUpdateRequired"
+	// VersionIAMUnavailable blocks new dispatch because the target release's
+	// pinned IAM contract is missing, unverified, stale or otherwise not
+	// currently available for new use. Platform action releases it.
+	VersionIAMUnavailable = "VersionIAMUnavailable"
 	// TargetSourceAutomatic identifies a target selected by the upgrade controller.
 	TargetSourceAutomatic = "automatic"
 	// TargetSourceCustomer identifies a target explicitly requested by the customer.

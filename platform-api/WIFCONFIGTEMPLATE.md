@@ -140,6 +140,68 @@ view carries the exact release/image/group/template reference of dispatched and
 pending work, resource and parent UIDs, observed generation and reconciliation
 refresh time. Refresh time is **not** the age of cloud verification or transport
 feedback. Consumers must require a complete, fresh view with matching UIDs and
-generation for every related NodePool and re-read before writing. No controller
-publishes this view in this foundation stage; until publishers and durable
-dispatch receipts are deployed, consumers must treat it as incomplete.
+generation for every related NodePool and re-read before writing. Since Phase 2
+the hc and nodepool controllers publish this view in the same status write as
+their dispatch receipts; objects without receipts keep no view at all, which
+consumers must read as Incomplete.
+
+## Dispatch protocol (Phase 2)
+
+One shared dispatch predicate gates every boundary between approval and external
+Apply. It is evaluated fresh at each boundary — a cached version-resolution
+success can never bypass the final check — by the coordinators (control-plane
+upgrade approval for customer, automatic and critical-override targets, and
+NodePool upgrade scheduling) and independently again by the installer Apply
+boundaries (hc and nodepool controllers).
+
+The predicate reads the target Version from the catalog and the Cluster's
+append-only application assertions, and produces exactly one of:
+
+- **Permitted** — the release is available at its current generation with a
+  verified pinned template, and the Cluster asserts that exact reference.
+- `WIFConfigUpdateRequired` — the target exists and is advertised, but the
+  Cluster has not asserted the exact pinned contract. Customer action (an IAM
+  update and application append) releases it. This reason is never surfaced as
+  `NoUpgradeAvailable`, and no alternative target is silently selected.
+- `VersionIAMUnavailable` — the pinned contract is missing, unverified, stale or
+  not published in the Cluster's channel group. Platform action releases it.
+
+An infrastructure read failure is a retryable error that must produce zero
+external Apply. A missing Version or channel mismatch is a fail-closed
+evaluation, not an error.
+
+### Receipts
+
+The dispatch intent (release version, release image actually dispatched,
+channel group, pinned template reference) is durably committed as a
+UID-and-parent-bound `status.iamDispatch` receipt:
+
+- The `Pending` receipt is persisted in the same status write as the dispatch
+  marker, **before** any external Apply. Failed persistence means zero Apply.
+- A successful non-stale delivery promotes the receipt to `Dispatched` while
+  preserving the committed `Pending` intent, which remains the authority for
+  same-target redelivery across restarts and revocations.
+- A committed receipt (Pending or Dispatched matching the exact intent)
+  bypasses re-gating for its own target only; it never authorizes a different
+  target, and there is no force-unlock or clear-status escape hatch.
+
+### Gating scope
+
+Only new work is gated: an initial installation or an upgrade. Continued
+reconciliation of the observed release is never gated, so a verification
+revocation never recalls a committed rollout. When enforcement later activates,
+already-committed targets are grandfathered and only new targets are gated.
+
+The dispatcher-owned conditions `IAMPermissionsReady` (Cluster) and
+`NodePoolIAMPermissionsReady` (NodePool) report the gate result. They are only
+written while enforcement is enabled, in the same pre-Apply status write.
+
+### Staged activation
+
+Enforcement is off by default (`--iam-dispatch-enforcement=false` on the hc,
+nodepool, control-plane-upgrade and nodepool-upgrade controllers, exposed as
+the `iamDispatchEnforcement` chart value). Receipts and the requirements views
+are maintained even while enforcement is off, so the staged rollout can
+validate them before activation. The versionresolution and nodepool-vr
+controllers are intentionally not gated: resolution never blocks on IAM by
+design, and the final Apply boundary is the non-bypassable check.

@@ -15,6 +15,7 @@ import (
 
 // NewCommand returns the nodepool subcommand.
 func NewCommand(rf *setup.RootFlags) *cobra.Command {
+	var iamEnforcement bool
 	cmd := &cobra.Command{
 		Use:   "nodepool",
 		Short: "Run the nodepool controller",
@@ -35,7 +36,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("create manager: %w", err)
 			}
 
-			rec := nodepool.New(t, log, mgr.GetClient())
+			rec := nodepool.New(t, log, mgr.GetClient()).
+				WithIAMDispatchEnforcement(iamEnforcement)
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.NodePool{}).
@@ -47,6 +49,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			return mgr.Start(ctx)
 		},
 	}
+
+	cmd.Flags().BoolVar(&iamEnforcement, "iam-dispatch-enforcement", false, "Gate new installation and upgrade dispatch on the IAM dispatch predicate (staged activation; receipts and requirements views are maintained even while disabled)")
 
 	return cmd
 }

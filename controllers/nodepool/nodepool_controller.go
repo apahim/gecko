@@ -8,6 +8,7 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/nodepool/manifest"
+	"github.com/openshift-online/gecko/controllers/util/catalog"
 	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -33,6 +34,10 @@ type Reconciler struct {
 	transport transport.Client
 	log       logger.Logger
 	client    client.Client
+	// iamEnforcement gates new dispatch on the shared IAM dispatch
+	// predicate. Receipts are maintained even while enforcement is off, so
+	// the staged rollout can validate the views before activation.
+	iamEnforcement bool
 }
 
 // New creates a new nodepool Reconciler.
@@ -42,6 +47,12 @@ func New(transport transport.Client, log logger.Logger, c client.Client) *Reconc
 		log:       log,
 		client:    c,
 	}
+}
+
+// WithIAMDispatchEnforcement activates the IAM dispatch gate for new work.
+func (r *Reconciler) WithIAMDispatchEnforcement(enabled bool) *Reconciler {
+	r.iamEnforcement = enabled
+	return r
 }
 
 // Reconcile runs the nodepool controller loop for one nodepool event.
@@ -93,43 +104,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil // re-reconcile with finalizer in place
 	}
 
-	// Gate: cluster placement must be ready.
-	if cluster.Status.PlacementResult == nil || cluster.Status.PlacementResult.ManagementClusterName == "" {
-		if setWaitingNPConditions(&np, "PlacementNotReady", "Waiting for cluster placement to select a management cluster") {
-			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
-				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
-			}
-		}
-		log.Infof(ctx, "placement not ready for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
-		return reconcile.Result{RequeueAfter: requeuePending}, nil
-	}
-
-	// Gate: nodepool VR must be ready.
-	if np.Status.VersionResolution == nil || np.Status.VersionResolution.ReleaseVersion == "" {
-		if setWaitingNPConditions(&np, "VersionResolutionNotReady", "Waiting for nodepool version resolution") {
-			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
-				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
-			}
-		}
-		log.Infof(ctx, "nodepool VR not ready for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
-		return reconcile.Result{RequeueAfter: requeuePending}, nil
-	}
-
-	// While a desired upgrade waits for approval, continue reconciling the
-	// observed release so scaling and fresh health feedback are not blocked.
-	version := installationVersion(&np)
-	// Gate: VR must match the release currently permitted for installation.
-	if np.Status.VersionResolution.ReleaseVersion != version {
-		msg := fmt.Sprintf("VR version %q does not match spec version %q",
-			np.Status.VersionResolution.ReleaseVersion, version)
-		if setWaitingNPConditions(&np, "VersionMismatch", msg) {
-			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
-				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
-			}
-		}
-		log.Infof(ctx, "nodepool VR version %q does not match spec version %q, requeueing after %s",
-			np.Status.VersionResolution.ReleaseVersion, version, requeuePending)
-		return reconcile.Result{RequeueAfter: requeuePending}, nil
+	// Hold the nodepool back until placement and version resolution permit
+	// installing the release currently approved for it.
+	if result, waiting, err := r.waitForInstallation(ctx, &np, &cluster, log); waiting || err != nil {
+		return result, err
 	}
 
 	// Extract nodepool GCP platform fields.
@@ -197,7 +175,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	managementCluster := cluster.Status.PlacementResult.ManagementClusterName
 
-	mwStatus, err := r.applyResources(ctx, &np, managementCluster, groupKey, manifests)
+	mwStatus, err := r.applyResources(ctx, &np, &cluster, managementCluster, groupKey, manifests)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply resources: %w", err)
 	}
@@ -208,9 +186,62 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
-	// Write nodepool status conditions — only update if something changed.
-	if r.applyStatusConditions(&np, string(cluster.UID), mwStatus) {
-		if err := r.client.Status().Update(ctx, &np); err != nil {
+	return r.reportStatus(ctx, &np, &cluster, mwStatus, log)
+}
+
+// waitForInstallation holds the nodepool back until cluster placement and
+// version resolution permit installing the release currently approved for it.
+// While a desired upgrade waits for approval, the observed release keeps
+// reconciling so scaling and fresh health feedback are not blocked. It
+// returns the waiting result when the request must requeue.
+func (r *Reconciler) waitForInstallation(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, log logger.Logger) (reconcile.Result, bool, error) {
+	wait := func(reason, message string) (reconcile.Result, error) {
+		if setWaitingNPConditions(np, reason, message) {
+			if err := r.client.Status().Update(ctx, np); err != nil && !apierrors.IsConflict(err) {
+				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
+			}
+		}
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
+	}
+
+	// Gate: cluster placement must be ready.
+	if cluster.Status.PlacementResult == nil || cluster.Status.PlacementResult.ManagementClusterName == "" {
+		log.Infof(ctx, "placement not ready for nodepool %s, requeueing after %s", np.Name, requeuePending)
+		result, err := wait("PlacementNotReady", "Waiting for cluster placement to select a management cluster")
+		return result, true, err
+	}
+
+	// Gate: nodepool VR must be ready.
+	if np.Status.VersionResolution == nil || np.Status.VersionResolution.ReleaseVersion == "" {
+		log.Infof(ctx, "nodepool VR not ready for nodepool %s, requeueing after %s", np.Name, requeuePending)
+		result, err := wait("VersionResolutionNotReady", "Waiting for nodepool version resolution")
+		return result, true, err
+	}
+
+	// Gate: VR must match the release currently permitted for installation.
+	if version := installationVersion(np); np.Status.VersionResolution.ReleaseVersion != version {
+		log.Infof(ctx, "nodepool VR version %q does not match spec version %q, requeueing after %s",
+			np.Status.VersionResolution.ReleaseVersion, version, requeuePending)
+		msg := fmt.Sprintf("VR version %q does not match spec version %q",
+			np.Status.VersionResolution.ReleaseVersion, version)
+		result, err := wait("VersionMismatch", msg)
+		return result, true, err
+	}
+	return reconcile.Result{}, false, nil
+}
+
+// reportStatus writes the observed conditions with the public IAM
+// requirements projection and returns the requeue for the nodepool's current
+// health. Objects without receipts keep no view at all, which consumers must
+// read as Incomplete.
+func (r *Reconciler) reportStatus(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, mwStatus *transport.Status, log logger.Logger) (reconcile.Result, error) {
+	conditionsChanged := r.applyStatusConditions(np, string(cluster.UID), mwStatus)
+	requirementsSynced := false
+	if np.Status.IAMDispatch != nil || np.Status.IAMRequirements != nil {
+		requirementsSynced = privatev1.SyncNodePoolIAMRequirements(np, cluster)
+	}
+	if conditionsChanged || requirementsSynced {
+		if err := r.client.Status().Update(ctx, np); err != nil {
 			if apierrors.IsConflict(err) {
 				return reconcile.Result{}, nil
 			}
@@ -219,21 +250,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if !meta.IsStatusConditionTrue(np.Status.Conditions, "NodePoolResourcesApplied") {
-		log.Infof(ctx, "nodepool reconciler: nodepool %s resources not yet applied, requeueing after %s", nodepoolID, requeuePending)
+		log.Infof(ctx, "nodepool reconciler: nodepool %s resources not yet applied, requeueing after %s", np.Name, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, "HostedClusterAvailable") {
-		log.Infof(ctx, "nodepool reconciler: cluster %s not yet available, requeueing nodepool %s after %s", clusterID, nodepoolID, requeuePending)
+		log.Infof(ctx, "nodepool reconciler: cluster %s not yet available, requeueing nodepool %s after %s", np.Spec.ClusterID, np.Name, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	if !meta.IsStatusConditionTrue(np.Status.Conditions, "NodePoolAvailable") {
-		log.Infof(ctx, "nodepool reconciler: nodepool %s not yet available, requeueing after %s", nodepoolID, requeuePending)
+		log.Infof(ctx, "nodepool reconciler: nodepool %s not yet available, requeueing after %s", np.Name, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
-	log.Infof(ctx, "nodepool reconciler: nodepool %s reconciled, requeueing after %s", nodepoolID, requeueStable)
+	log.Infof(ctx, "nodepool reconciler: nodepool %s reconciled, requeueing after %s", np.Name, requeueStable)
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
 }
 
@@ -357,43 +388,160 @@ func (r *Reconciler) preparationFailure(ctx context.Context, np *privatev1.NodeP
 // applyResources persists the dispatch boundary before transport can write the
 // target. An unknown result remains locked across errors or restarts; recovery
 // after dispatch is intentionally outside the pre-submission cancellation flow.
-func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool, managementCluster, groupKey string, manifests [][]byte) (*transport.Status, error) {
+//
+// The IAM dispatch protocol layers onto the same boundary: the durable receipt
+// for the exact target is persisted in the same status write, and new work
+// additionally requires the shared dispatch predicate evaluated against the
+// parent Cluster's application assertions. A committed receipt authorizes
+// only its own exact target; failed boundary persistence means zero Apply.
+func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, managementCluster, groupKey string, manifests [][]byte) (*transport.Status, error) {
 	upgrading := privatev1.NodePoolUpgradeActive(np) && np.Spec.Release.Version != np.Status.Version
-	if !upgrading {
-		return r.transport.Apply(ctx, managementCluster, groupKey, manifests)
+
+	vr := np.Status.VersionResolution
+	evaluation, err := catalog.EvaluateDispatch(ctx, r.client, cluster, vr.ReleaseVersion, catalog.ReleaseGroup(cluster))
+	if err != nil {
+		// Zero external Apply when the dispatch predicate cannot be evaluated.
+		return nil, fmt.Errorf("nodepool reconciler: evaluate IAM dispatch: %w", err)
 	}
+	if evaluation.Intent != nil {
+		// The receipt binds the payload actually dispatched, not a fresh
+		// catalog read that may have advanced past the resolved image.
+		evaluation.Intent.ReleaseImage = vr.ReleaseImage
+	}
+
+	// New work is an initial installation or an upgrade. Continued
+	// reconciliation of the observed release is not gated, so a verification
+	// revocation never recalls a committed rollout. An already committed
+	// exact target may be redelivered after a restart, a revocation or
+	// upstream aging; it never authorizes a different target.
+	newWork := upgrading || np.Status.Version == ""
+	blocked, iamConditionChanged := r.iamGate(np, evaluation, newWork)
+	if blocked {
+		if iamConditionChanged {
+			before := np.DeepCopy()
+			if err := r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsConflict(err) {
+				return nil, fmt.Errorf("nodepool reconciler: record IAM dispatch gate: %w", err)
+			}
+		}
+		// Fail-closed and level-triggered: the next reconcile retries.
+		return &transport.Status{Stale: true}, nil
+	}
+
 	submitted := meta.FindStatusCondition(np.Status.Conditions, privatev1.NodePoolUpgradeSubmitted)
-	if submitted == nil || submitted.Status == metav1.ConditionFalse {
+	needSubmission := upgrading && (submitted == nil || submitted.Status == metav1.ConditionFalse)
+	needReceipt := evaluation.Intent != nil && !evaluation.Intent.Committed(np.Status.IAMDispatch)
+
+	if needSubmission || needReceipt || iamConditionChanged {
 		before := np.DeepCopy()
-		meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
-			Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionUnknown,
-			Reason: "Dispatching", Message: "The desired release is being dispatched to the management cluster",
-			ObservedGeneration: np.Generation,
-		})
+		if needSubmission {
+			meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
+				Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionUnknown,
+				Reason: "Dispatching", Message: "The desired release is being dispatched to the management cluster",
+				ObservedGeneration: np.Generation,
+			})
+		}
+		if needReceipt {
+			commitPendingIAMDispatch(np, evaluation.Intent.Receipt(string(np.UID), string(cluster.UID)))
+		}
+		privatev1.SyncNodePoolIAMRequirements(np, cluster)
 		if err := r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsConflict(err) {
-			return nil, fmt.Errorf("persist upgrade dispatch boundary: %w", err)
+			return nil, fmt.Errorf("nodepool reconciler: persist dispatch boundary: %w", err)
 		}
 		return &transport.Status{Stale: true}, nil
 	}
+
 	status, err := r.transport.Apply(ctx, managementCluster, groupKey, manifests)
 	if err != nil {
 		return nil, err
 	}
-	if submitted.Status != metav1.ConditionTrue {
-		before := np.DeepCopy()
+	if err := r.acknowledgeDispatch(ctx, np, cluster, upgrading, submitted, evaluation); err != nil {
+		if apierrors.IsConflict(err) {
+			return &transport.Status{Stale: true}, nil
+		}
+		return nil, fmt.Errorf("nodepool reconciler: persist dispatch acknowledgement: %w", err)
+	}
+	return status, nil
+}
+
+// iamGate applies the shared IAM dispatch predicate to new work and records
+// the dispatcher-owned gate condition. Maintenance of the observed release
+// and an already committed exact target are not re-gated. It returns whether
+// dispatch is blocked and whether the condition changed.
+func (r *Reconciler) iamGate(np *privatev1.NodePool, evaluation *catalog.DispatchEvaluation, newWork bool) (blocked, conditionChanged bool) {
+	if !r.iamEnforcement {
+		return false, false
+	}
+	status, reason, message := metav1.ConditionTrue, "IAMPermissionsReady",
+		"The target release IAM contract is asserted for the parent Cluster"
+	if newWork && (evaluation.Intent == nil || !evaluation.Intent.Committed(np.Status.IAMDispatch)) {
+		if permitted, blockReason, blockMessage := evaluation.NewWorkPermitted(); !permitted {
+			status, reason, message = metav1.ConditionFalse, blockReason, blockMessage
+		}
+	}
+	return status == metav1.ConditionFalse, setIAMPermissionsCondition(np, status, reason, message)
+}
+
+// acknowledgeDispatch promotes the submission marker and the dispatch receipt
+// after a non-stale delivery. The committed pending intent is preserved: it
+// remains the authority for same-target redelivery.
+func (r *Reconciler) acknowledgeDispatch(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, upgrading bool, submitted *metav1.Condition, evaluation *catalog.DispatchEvaluation) error {
+	needAck := (upgrading && submitted.Status != metav1.ConditionTrue) ||
+		(evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(np.Status.IAMDispatch)))
+	if !needAck {
+		return nil
+	}
+	before := np.DeepCopy()
+	if upgrading && submitted.Status != metav1.ConditionTrue {
 		meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionTrue,
 			Reason: "Dispatched", Message: "The desired release was dispatched to the management cluster",
 			ObservedGeneration: np.Generation,
 		})
-		if err := r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
-			if apierrors.IsConflict(err) {
-				return &transport.Status{Stale: true}, nil
-			}
-			return nil, fmt.Errorf("persist upgrade dispatch acknowledgement: %w", err)
-		}
 	}
-	return status, nil
+	if evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(np.Status.IAMDispatch)) {
+		commitDispatchedIAMDispatch(np, evaluation.Intent.Receipt(string(np.UID), string(cluster.UID)))
+	}
+	privatev1.SyncNodePoolIAMRequirements(np, cluster)
+	return r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+}
+
+// setIAMPermissionsCondition records the dispatcher-owned installation-target
+// IAM gate. It returns whether the condition changed.
+func setIAMPermissionsCondition(np *privatev1.NodePool, status metav1.ConditionStatus, reason, message string) bool {
+	return meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
+		Type: privatev1.NodePoolIAMPermissionsReady, Status: status, Reason: reason, Message: message, ObservedGeneration: np.Generation,
+	})
+}
+
+// commitPendingIAMDispatch durably records the exact dispatch intent before
+// any external write. A different unconfirmed pending target is replaced; the
+// last dispatched target keeps its own separate authority.
+func commitPendingIAMDispatch(np *privatev1.NodePool, receipt *privatev1.IAMDispatchReceipt) {
+	if np.Status.IAMDispatch == nil {
+		np.Status.IAMDispatch = &privatev1.IAMDispatchState{}
+	}
+	np.Status.IAMDispatch.Pending = receipt
+}
+
+// commitDispatchedIAMDispatch promotes the exact intent after a non-stale
+// delivery. The committed pending intent is preserved: it remains the
+// authority for same-target redelivery across restarts and revocations.
+func commitDispatchedIAMDispatch(np *privatev1.NodePool, receipt *privatev1.IAMDispatchReceipt) {
+	if np.Status.IAMDispatch == nil {
+		np.Status.IAMDispatch = &privatev1.IAMDispatchState{Pending: receipt, Dispatched: receipt}
+		return
+	}
+	if np.Status.IAMDispatch.Pending == nil {
+		np.Status.IAMDispatch.Pending = receipt
+	}
+	np.Status.IAMDispatch.Dispatched = receipt
+}
+
+func dispatchedReceipt(state *privatev1.IAMDispatchState) *privatev1.IAMDispatchReceipt {
+	if state == nil {
+		return nil
+	}
+	return state.Dispatched
 }
 
 // installationVersion keeps unapproved release intent out of applied manifests.

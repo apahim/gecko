@@ -14,6 +14,11 @@ logLevel: info
 logFormat: json
 workers: 10
 
+# Gate new installation and upgrade dispatch on the IAM dispatch predicate.
+# Receipts and requirements views are maintained even while disabled, so the
+# staged rollout can validate them before enforcement is activated.
+iamDispatchEnforcement: false
+
 serviceAccount:
   create: true
   annotations: {}

@@ -72,6 +72,9 @@ const (
 	NodePoolUpgradeProgressing = "NodePoolUpgradeProgressing"
 	NodePoolUpgradeDegraded    = "NodePoolUpgradeDegraded"
 	NodePoolUpgradeSubmitted   = "NodePoolUpgradeSubmitted"
+	// NodePoolIAMPermissionsReady reports whether the target release's IAM
+	// contract authorizes NodePool dispatch. The nodepool dispatcher owns it.
+	NodePoolIAMPermissionsReady = "NodePoolIAMPermissionsReady"
 )
 
 // NodePoolReleaseApproved permits initial installation and maintenance of the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,7 @@ func (m *mockStatusWriter) Apply(_ context.Context, _ runtime.ApplyConfiguration
 type mockStoreClient struct {
 	cluster      *privatev1.Cluster
 	nodePools    []privatev1.NodePool
+	version      *privatev1.Version
 	getErr       error
 	listErr      error
 	deleteErr    error
@@ -88,15 +90,22 @@ func (m *mockStoreClient) Get(_ context.Context, _ client.ObjectKey, obj client.
 	if m.getErr != nil {
 		return m.getErr
 	}
-	if m.cluster == nil {
-		return apierrors.NewNotFound(schema.GroupResource{Resource: "cluster"}, "")
-	}
-	c, ok := obj.(*privatev1.Cluster)
-	if !ok {
+	switch o := obj.(type) {
+	case *privatev1.Cluster:
+		if m.cluster == nil {
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "cluster"}, "")
+		}
+		*o = *m.cluster
+		return nil
+	case *privatev1.Version:
+		if m.version == nil {
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "versions"}, "")
+		}
+		*o = *m.version
+		return nil
+	default:
 		return fmt.Errorf("unexpected type %T", obj)
 	}
-	*c = *m.cluster
-	return nil
 }
 
 func (m *mockStoreClient) Status() client.SubResourceWriter { return m.statusWriter }
@@ -2013,4 +2022,208 @@ func TestReconcile_IngressConditionsGateAvailability(t *testing.T) {
 			require.Equal(t, tc.reason, condition.Reason)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// IAM dispatch protocol
+// ---------------------------------------------------------------------------
+
+var hcTestPin = privatev1.WIFConfigTemplateReference{Name: "5.0.0", UID: "template-uid", Digest: "sha256:" + strings.Repeat("a", 64)}
+
+func dispatchVersion(name string, available bool, reason string) *privatev1.Version {
+	v := &privatev1.Version{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Generation: 2},
+		Spec: privatev1.VersionSpec{
+			ReleaseImage:               "quay.io/openshift-release-dev/ocp-release:4.15.0-x86_64",
+			ChannelGroups:              []string{"stable"},
+			WIFConfigTemplateReference: &hcTestPin,
+		},
+	}
+	status, message := metav1.ConditionFalse, reason
+	if available {
+		status, reason, message = metav1.ConditionTrue, "Available", "Available"
+	}
+	v.Status.Conditions = []metav1.Condition{{Type: privatev1.VersionAvailable, Status: status, Reason: reason, Message: message, ObservedGeneration: 2}}
+	return v
+}
+
+func coveredCluster(version string) *privatev1.Cluster {
+	cluster := buildReadyCluster("cluster-abc", version)
+	cluster.Spec.Platform.GCP.IAM = &privatev1.ClusterIAMSpec{
+		WorkerServiceAccount: "123456789012-compute@developer.gserviceaccount.com",
+		TemplateApplications: []privatev1.WIFConfigTemplateReference{hcTestPin},
+	}
+	return cluster
+}
+
+// persistCapturedStatus simulates a durable status write for multi-reconcile
+// flows backed by the mock store.
+func persistCapturedStatus(t *testing.T, store *mockStoreClient) {
+	t.Helper()
+	require.NotNil(t, store.statusWriter.captured)
+	cluster, ok := store.statusWriter.captured.(*privatev1.Cluster)
+	require.True(t, ok)
+	store.cluster.Status = cluster.Status
+}
+
+// Receipts are maintained even while enforcement is off: the durable receipt
+// for the exact target is persisted before any external Apply, and a
+// successful non-stale delivery promotes it. Zero Apply on failed persistence.
+func TestReconcile_IAMDispatchReceiptPersistedBeforeApply(t *testing.T) {
+	for _, statusErr := range []error{nil, fmt.Errorf("status unavailable"), conflictErr()} {
+		name := "successful write"
+		if statusErr != nil {
+			name = statusErr.Error()
+		}
+		t.Run(name, func(t *testing.T) {
+			cluster := coveredCluster("5.0.6")
+			tr := mock.New()
+			r, store := buildReconciler(t, cluster, nil, tr, statusErr)
+			store.version = dispatchVersion("5.0.6", true, "")
+
+			_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			if statusErr != nil && !apierrors.IsConflict(statusErr) {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Empty(t, tr.ApplyCalls, "the IAM receipt must be durable before any external Apply")
+			captured := store.statusWriter.captured.(*privatev1.Cluster)
+			require.NotNil(t, captured.Status.IAMDispatch.Pending, "the pending receipt must be persisted")
+			require.Nil(t, captured.Status.IAMDispatch.Dispatched)
+			receipt := captured.Status.IAMDispatch.Pending
+			require.Equal(t, string(cluster.UID), receipt.ObjectUID)
+			require.Equal(t, string(cluster.UID), receipt.ClusterUID)
+			require.Equal(t, "5.0.6", receipt.ReleaseVersion)
+			require.Equal(t, cluster.Status.VersionResolution.ReleaseImage, receipt.ReleaseImage, "the receipt binds the payload actually dispatched")
+			require.Equal(t, "stable", receipt.ChannelGroup)
+			require.Equal(t, hcTestPin, receipt.TemplateReference)
+			require.NotNil(t, captured.Status.IAMRequirements, "the requirements projection refreshes in the same write")
+			require.NotNil(t, captured.Status.IAMRequirements.Pending)
+
+			if statusErr != nil {
+				return
+			}
+			persistCapturedStatus(t, store)
+			_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+			require.NoError(t, err)
+			require.Len(t, tr.ApplyCalls, 1, "a committed receipt authorizes its own exact target")
+			captured = store.statusWriter.captured.(*privatev1.Cluster)
+			require.NotNil(t, captured.Status.IAMDispatch.Dispatched, "a non-stale delivery promotes the receipt")
+			require.Equal(t, receipt, captured.Status.IAMDispatch.Dispatched)
+			require.Equal(t, receipt, captured.Status.IAMDispatch.Pending, "the committed pending intent is preserved for redelivery")
+		})
+	}
+}
+
+// Enforcement blocks an uncovered installation fail-closed with the customer
+// action reason, never dispatching; the gate is level-triggered and releases
+// as soon as the exact application assertion appears.
+func TestReconcile_IAMEnforcementBlocksUncoveredInstall(t *testing.T) {
+	cluster := coveredCluster("5.0.6")
+	cluster.Spec.Platform.GCP.IAM.TemplateApplications = nil
+	tr := mock.New()
+	r, store := buildReconciler(t, cluster, nil, tr, nil)
+	store.version = dispatchVersion("5.0.6", true, "")
+	r.WithIAMDispatchEnforcement(true)
+
+	result, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+	require.Empty(t, tr.ApplyCalls, "an uncovered installation must not dispatch")
+	captured := store.statusWriter.captured.(*privatev1.Cluster)
+	gate := meta.FindStatusCondition(captured.Status.Conditions, privatev1.IAMPermissionsReady)
+	require.NotNil(t, gate)
+	require.Equal(t, metav1.ConditionFalse, gate.Status)
+	require.Equal(t, privatev1.WIFConfigUpdateRequired, gate.Reason)
+
+	// The customer asserts the exact pinned contract; the next pass proceeds.
+	store.cluster.Spec.Platform.GCP.IAM.TemplateApplications = []privatev1.WIFConfigTemplateReference{hcTestPin}
+	store.cluster.Status = captured.Status
+	_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "the first unblocked pass persists the receipt before Apply")
+	captured = store.statusWriter.captured.(*privatev1.Cluster)
+	require.NotNil(t, captured.Status.IAMDispatch.Pending)
+	gate = meta.FindStatusCondition(captured.Status.Conditions, privatev1.IAMPermissionsReady)
+	require.Equal(t, metav1.ConditionTrue, gate.Status)
+}
+
+// An unavailable version contract blocks enforcement fail-closed with the
+// platform action reason, carrying the Version's own availability reason.
+func TestReconcile_IAMEnforcementBlocksUnavailableVersion(t *testing.T) {
+	cluster := coveredCluster("5.0.6")
+	tr := mock.New()
+	r, store := buildReconciler(t, cluster, nil, tr, nil)
+	store.version = dispatchVersion("5.0.6", false, "TemplateUnverified")
+	r.WithIAMDispatchEnforcement(true)
+
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "an unverifiable contract must not dispatch")
+	gate := meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.Cluster).Status.Conditions, privatev1.IAMPermissionsReady)
+	require.NotNil(t, gate)
+	require.Equal(t, metav1.ConditionFalse, gate.Status)
+	require.Equal(t, privatev1.VersionIAMUnavailable, gate.Reason)
+	require.Contains(t, gate.Message, "TemplateUnverified")
+}
+
+// Continued reconciliation of the observed release is not gated: a
+// verification revocation never recalls a committed rollout, but the receipts
+// for the running target are still maintained.
+func TestReconcile_IAMEnforcementMaintenanceNotGated(t *testing.T) {
+	cluster := coveredCluster("5.0.6")
+	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "5.0.6", DesiredVersion: "5.0.6"}
+	tr := mock.New()
+	r, store := buildReconciler(t, cluster, nil, tr, nil)
+	store.version = dispatchVersion("5.0.6", false, "TemplateUnverified")
+	r.WithIAMDispatchEnforcement(true)
+
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "the first pass persists the receipt before Apply")
+	captured := store.statusWriter.captured.(*privatev1.Cluster)
+	gate := meta.FindStatusCondition(captured.Status.Conditions, privatev1.IAMPermissionsReady)
+	require.NotNil(t, gate, "the gate condition is reported for enforced objects")
+	require.Equal(t, metav1.ConditionTrue, gate.Status, "maintenance of the observed release is not gated")
+	require.NotNil(t, captured.Status.IAMDispatch.Pending)
+
+	persistCapturedStatus(t, store)
+	_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1, "maintenance of the observed release must continue")
+	require.NotNil(t, store.statusWriter.captured.(*privatev1.Cluster).Status.IAMDispatch.Dispatched)
+}
+
+// An already committed exact target may be redelivered after a revocation;
+// it never authorizes a different target.
+func TestReconcile_IAMCommittedTargetRedeliveredAfterRevocation(t *testing.T) {
+	cluster := coveredCluster("5.0.3")
+	cluster.Status.HostedClusterResult = &privatev1.HostedClusterResult{Version: "5.0.0", DesiredVersion: "5.0.0"}
+	cluster.Status.ControlPlaneUpgrade = &privatev1.ControlPlaneUpgradeResult{TargetVersion: "5.0.3"}
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeAccepted, Status: metav1.ConditionTrue, ObservedGeneration: 5})
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{Type: privatev1.ControlPlaneUpgradeSubmitted, Status: metav1.ConditionUnknown, Reason: "Dispatching", ObservedGeneration: 5})
+	cluster.Status.IAMDispatch = &privatev1.IAMDispatchState{Pending: &privatev1.IAMDispatchReceipt{
+		ObjectUID: string(cluster.UID), ClusterUID: string(cluster.UID), ReleaseVersion: "5.0.3",
+		ReleaseImage: cluster.Status.VersionResolution.ReleaseImage, ChannelGroup: "stable", TemplateReference: hcTestPin,
+	}}
+	tr := mock.New()
+	r, store := buildReconciler(t, cluster, nil, tr, nil)
+	store.version = dispatchVersion("5.0.3", false, "TemplateUnverified")
+	r.WithIAMDispatchEnforcement(true)
+
+	_, err := r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "the first pass records the gate condition before Apply")
+	captured := store.statusWriter.captured.(*privatev1.Cluster)
+	gate := meta.FindStatusCondition(captured.Status.Conditions, privatev1.IAMPermissionsReady)
+	require.NotNil(t, gate)
+	require.Equal(t, metav1.ConditionTrue, gate.Status, "a committed target must not be re-gated")
+
+	persistCapturedStatus(t, store)
+	_, err = r.Reconcile(t.Context(), clusterReq(cluster.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1, "a committed exact target is redelivered despite the revocation")
+	captured = store.statusWriter.captured.(*privatev1.Cluster)
+	require.NotNil(t, captured.Status.IAMDispatch.Dispatched)
 }

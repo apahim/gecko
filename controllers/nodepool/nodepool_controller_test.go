@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,8 +61,10 @@ func (m *mockStatusWriter) Update(_ context.Context, obj client.Object, _ ...cli
 func (m *mockStatusWriter) Create(_ context.Context, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
 	return nil
 }
-func (m *mockStatusWriter) Patch(_ context.Context, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
-	return nil
+func (m *mockStatusWriter) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+	m.called = true
+	m.captured = obj
+	return m.updateErr
 }
 func (m *mockStatusWriter) Apply(_ context.Context, _ runtime.ApplyConfiguration, _ ...client.SubResourceApplyOption) error {
 	return nil
@@ -71,6 +74,7 @@ func (m *mockStatusWriter) Apply(_ context.Context, _ runtime.ApplyConfiguration
 type mockStoreClient struct {
 	nodepool     *privatev1.NodePool
 	cluster      *privatev1.Cluster
+	version      *privatev1.Version
 	npGetErr     error
 	clsGetErr    error
 	statusWriter *mockStatusWriter
@@ -98,6 +102,12 @@ func (m *mockStoreClient) Get(_ context.Context, _ client.ObjectKey, obj client.
 			return apierrors.NewNotFound(schema.GroupResource{Resource: "cluster"}, "")
 		}
 		*o = *m.cluster
+		return nil
+	case *privatev1.Version:
+		if m.version == nil {
+			return apierrors.NewNotFound(schema.GroupResource{Resource: "versions"}, "")
+		}
+		*o = *m.version
 		return nil
 	default:
 		return fmt.Errorf("unexpected type %T", obj)
@@ -1934,4 +1944,218 @@ func TestReconcile_UnapprovedTargetImageCannotBypassSchedule(t *testing.T) {
 	_, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
 	require.NoError(t, err)
 	require.Empty(t, tr.ApplyCalls, "an already resolved image must not bypass coordinator approval")
+}
+
+// ---------------------------------------------------------------------------
+// IAM dispatch protocol
+// ---------------------------------------------------------------------------
+
+var npTestPin = privatev1.WIFConfigTemplateReference{Name: "4.22.0", UID: "template-uid", Digest: "sha256:" + strings.Repeat("a", 64)}
+
+func npDispatchVersion(available bool, reason string) *privatev1.Version {
+	v := &privatev1.Version{
+		ObjectMeta: metav1.ObjectMeta{Name: "4.22.16", Generation: 2},
+		Spec: privatev1.VersionSpec{
+			ReleaseImage:               "quay.io/openshift-release-dev/ocp-release:4.22.16-x86_64",
+			ChannelGroups:              []string{"stable"},
+			WIFConfigTemplateReference: &npTestPin,
+		},
+	}
+	status, message := metav1.ConditionFalse, reason
+	if available {
+		status, reason, message = metav1.ConditionTrue, "Available", "Available"
+	}
+	v.Status.Conditions = []metav1.Condition{{Type: privatev1.VersionAvailable, Status: status, Reason: reason, Message: message, ObservedGeneration: 2}}
+	return v
+}
+
+func coveredTestCluster() *privatev1.Cluster {
+	cluster := testCluster(true, true)
+	cluster.Spec.Platform.GCP.IAM = &privatev1.ClusterIAMSpec{
+		WorkerServiceAccount: "123456789012-compute@developer.gserviceaccount.com",
+		TemplateApplications: []privatev1.WIFConfigTemplateReference{npTestPin},
+	}
+	return cluster
+}
+
+// persistCapturedNPStatus simulates a durable status write for multi-reconcile
+// flows backed by the mock store.
+func persistCapturedNPStatus(t *testing.T, store *mockStoreClient) {
+	t.Helper()
+	require.NotNil(t, store.statusWriter.captured)
+	np, ok := store.statusWriter.captured.(*privatev1.NodePool)
+	require.True(t, ok)
+	store.nodepool.Status = np.Status
+}
+
+// Receipts are maintained even while enforcement is off: the durable receipt
+// for the exact target is persisted before any external Apply, and a
+// successful non-stale delivery promotes it. Zero Apply on failed persistence.
+func TestReconcile_IAMDispatchReceiptPersistedBeforeApply(t *testing.T) {
+	for _, statusErr := range []error{nil, fmt.Errorf("status unavailable"), conflictErr()} {
+		name := "successful write"
+		if statusErr != nil {
+			name = statusErr.Error()
+		}
+		t.Run(name, func(t *testing.T) {
+			np := testNodePool("4.22.16")
+			np.SetUID(types.UID("np-uid-1234"))
+			cluster := coveredTestCluster()
+			tr := mock.New()
+			r, store := buildReconciler(t, np, cluster, tr, nil, nil, statusErr)
+			store.version = npDispatchVersion(true, "")
+
+			_, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+			if statusErr != nil && !apierrors.IsConflict(statusErr) {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Empty(t, tr.ApplyCalls, "the IAM receipt must be durable before any external Apply")
+			captured := store.statusWriter.captured.(*privatev1.NodePool)
+			require.NotNil(t, captured.Status.IAMDispatch.Pending, "the pending receipt must be persisted")
+			require.Nil(t, captured.Status.IAMDispatch.Dispatched)
+			receipt := captured.Status.IAMDispatch.Pending
+			require.Equal(t, string(np.UID), receipt.ObjectUID)
+			require.Equal(t, string(cluster.UID), receipt.ClusterUID)
+			require.Equal(t, "4.22.16", receipt.ReleaseVersion)
+			require.Equal(t, np.Status.VersionResolution.ReleaseImage, receipt.ReleaseImage, "the receipt binds the payload actually dispatched")
+			require.Equal(t, "stable", receipt.ChannelGroup)
+			require.Equal(t, npTestPin, receipt.TemplateReference)
+			require.NotNil(t, captured.Status.IAMRequirements, "the requirements projection refreshes in the same write")
+			require.NotNil(t, captured.Status.IAMRequirements.Pending)
+
+			if statusErr != nil {
+				return
+			}
+			persistCapturedNPStatus(t, store)
+			_, err = r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+			require.NoError(t, err)
+			require.Len(t, tr.ApplyCalls, 1, "a committed receipt authorizes its own exact target")
+			captured = store.statusWriter.captured.(*privatev1.NodePool)
+			require.NotNil(t, captured.Status.IAMDispatch.Dispatched, "a non-stale delivery promotes the receipt")
+			require.Equal(t, receipt, captured.Status.IAMDispatch.Dispatched)
+			require.Equal(t, receipt, captured.Status.IAMDispatch.Pending, "the committed pending intent is preserved for redelivery")
+		})
+	}
+}
+
+// Enforcement blocks an uncovered installation fail-closed with the customer
+// action reason, never dispatching; the gate is level-triggered and releases
+// as soon as the parent Cluster asserts the exact pinned contract.
+func TestReconcile_IAMEnforcementBlocksUncoveredInstall(t *testing.T) {
+	np := testNodePool("4.22.16")
+	np.SetUID(types.UID("np-uid-1234"))
+	cluster := coveredTestCluster()
+	cluster.Spec.Platform.GCP.IAM.TemplateApplications = nil
+	tr := mock.New()
+	r, store := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	store.version = npDispatchVersion(true, "")
+	r.WithIAMDispatchEnforcement(true)
+
+	result, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+	require.Empty(t, tr.ApplyCalls, "an uncovered installation must not dispatch")
+	captured := store.statusWriter.captured.(*privatev1.NodePool)
+	gate := meta.FindStatusCondition(captured.Status.Conditions, privatev1.NodePoolIAMPermissionsReady)
+	require.NotNil(t, gate)
+	require.Equal(t, metav1.ConditionFalse, gate.Status)
+	require.Equal(t, privatev1.WIFConfigUpdateRequired, gate.Reason)
+
+	// The customer asserts the exact pinned contract on the parent Cluster;
+	// the next pass proceeds to the receipt boundary.
+	store.cluster.Spec.Platform.GCP.IAM.TemplateApplications = []privatev1.WIFConfigTemplateReference{npTestPin}
+	store.nodepool.Status = captured.Status
+	_, err = r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "the first unblocked pass persists the receipt before Apply")
+	captured = store.statusWriter.captured.(*privatev1.NodePool)
+	require.NotNil(t, captured.Status.IAMDispatch.Pending)
+	gate = meta.FindStatusCondition(captured.Status.Conditions, privatev1.NodePoolIAMPermissionsReady)
+	require.Equal(t, metav1.ConditionTrue, gate.Status)
+}
+
+// An unavailable version contract blocks enforcement fail-closed with the
+// platform action reason, carrying the Version's own availability reason.
+func TestReconcile_IAMEnforcementBlocksUnavailableVersion(t *testing.T) {
+	np := testNodePool("4.22.16")
+	np.SetUID(types.UID("np-uid-1234"))
+	cluster := coveredTestCluster()
+	tr := mock.New()
+	r, store := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	store.version = npDispatchVersion(false, "TemplateUnverified")
+	r.WithIAMDispatchEnforcement(true)
+
+	_, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "an unverifiable contract must not dispatch")
+	gate := meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.NodePool).Status.Conditions, privatev1.NodePoolIAMPermissionsReady)
+	require.NotNil(t, gate)
+	require.Equal(t, metav1.ConditionFalse, gate.Status)
+	require.Equal(t, privatev1.VersionIAMUnavailable, gate.Reason)
+	require.Contains(t, gate.Message, "TemplateUnverified")
+}
+
+// Continued reconciliation of the observed release is not gated: a
+// verification revocation never recalls a committed rollout, but the receipts
+// for the running target are still maintained.
+func TestReconcile_IAMEnforcementMaintenanceNotGated(t *testing.T) {
+	np := testNodePool("4.22.16")
+	np.SetUID(types.UID("np-uid-1234"))
+	np.Status.Version = "4.22.16"
+	cluster := coveredTestCluster()
+	tr := mock.New()
+	r, store := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	store.version = npDispatchVersion(false, "TemplateUnverified")
+	r.WithIAMDispatchEnforcement(true)
+
+	_, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "the first pass persists the receipt before Apply")
+	captured := store.statusWriter.captured.(*privatev1.NodePool)
+	gate := meta.FindStatusCondition(captured.Status.Conditions, privatev1.NodePoolIAMPermissionsReady)
+	require.NotNil(t, gate, "the gate condition is reported for enforced objects")
+	require.Equal(t, metav1.ConditionTrue, gate.Status, "maintenance of the observed release is not gated")
+	require.NotNil(t, captured.Status.IAMDispatch.Pending)
+
+	persistCapturedNPStatus(t, store)
+	_, err = r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1, "maintenance of the observed release must continue")
+	require.NotNil(t, store.statusWriter.captured.(*privatev1.NodePool).Status.IAMDispatch.Dispatched)
+}
+
+// An already committed exact target may be redelivered after a revocation;
+// it never authorizes a different target.
+func TestReconcile_IAMCommittedTargetRedeliveredAfterRevocation(t *testing.T) {
+	np := testNodePool("4.22.16")
+	np.SetUID(types.UID("np-uid-1234"))
+	np.Status.Version = "4.22.14"
+	meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{Type: privatev1.NodePoolUpgradeProgressing, Status: metav1.ConditionTrue, Reason: "UpgradeScheduled", ObservedGeneration: 3})
+	meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{Type: privatev1.NodePoolUpgradeSubmitted, Status: metav1.ConditionUnknown, Reason: "Dispatching", ObservedGeneration: 3})
+	np.Status.IAMDispatch = &privatev1.IAMDispatchState{Pending: &privatev1.IAMDispatchReceipt{
+		ObjectUID: string(np.UID), ClusterUID: string(coveredTestCluster().UID), ReleaseVersion: "4.22.16",
+		ReleaseImage: np.Status.VersionResolution.ReleaseImage, ChannelGroup: "stable", TemplateReference: npTestPin,
+	}}
+	cluster := coveredTestCluster()
+	tr := mock.New()
+	r, store := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	store.version = npDispatchVersion(false, "TemplateUnverified")
+	r.WithIAMDispatchEnforcement(true)
+
+	_, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "the first pass records the gate condition before Apply")
+	captured := store.statusWriter.captured.(*privatev1.NodePool)
+	gate := meta.FindStatusCondition(captured.Status.Conditions, privatev1.NodePoolIAMPermissionsReady)
+	require.NotNil(t, gate)
+	require.Equal(t, metav1.ConditionTrue, gate.Status, "a committed target must not be re-gated")
+
+	persistCapturedNPStatus(t, store)
+	_, err = r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1, "a committed exact target is redelivered despite the revocation")
+	captured = store.statusWriter.captured.(*privatev1.NodePool)
+	require.NotNil(t, captured.Status.IAMDispatch.Dispatched)
 }

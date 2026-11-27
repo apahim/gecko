@@ -40,6 +40,10 @@ type Reconciler struct {
 	customerLabels      map[string]string
 	pullSecretStoreName string
 	pullSecretGCPKey    string
+	// iamEnforcement gates new dispatch on the shared IAM dispatch
+	// predicate. Receipts are maintained even while enforcement is off, so
+	// the staged rollout can validate the views before activation.
+	iamEnforcement bool
 }
 
 // New creates a new Reconciler.
@@ -52,6 +56,12 @@ func New(transport transport.Client, log logger.Logger, c client.Client, custome
 		pullSecretStoreName: pullSecretStoreName,
 		pullSecretGCPKey:    pullSecretGCPKey,
 	}
+}
+
+// WithIAMDispatchEnforcement activates the IAM dispatch gate for new work.
+func (r *Reconciler) WithIAMDispatchEnforcement(enabled bool) *Reconciler {
+	r.iamEnforcement = enabled
+	return r
 }
 
 // Reconcile runs the hc-controller loop for one cluster event.
@@ -185,12 +195,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
-	// Write status conditions — only update if something changed.
+	// Write status conditions — only update if something changed. The public
+	// IAM requirements projection refreshes in the same write; objects without
+	// receipts keep no view at all, which consumers must read as Incomplete.
 	statusChanged, err := r.applyStatusConditions(&cluster, mwStatus, enableIngress, includeIngressCertificate, includeDefaultIngressCert)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("%s: apply status feedback: %w", adapterName, err)
 	}
-	if statusChanged {
+	requirementsSynced := false
+	if cluster.Status.IAMDispatch != nil || cluster.Status.IAMRequirements != nil {
+		requirementsSynced = privatev1.SyncClusterIAMRequirements(&cluster)
+	}
+	if statusChanged || requirementsSynced {
 		if err := r.client.Status().Update(ctx, &cluster); err != nil {
 			if apierrors.IsConflict(err) {
 				return reconcile.Result{}, nil
