@@ -44,6 +44,11 @@ type Reconciler struct {
 	// predicate. Receipts are maintained even while enforcement is off, so
 	// the staged rollout can validate the views before activation.
 	iamEnforcement bool
+	// iamCatalogReader is the uncached reader used to evaluate the shared IAM
+	// dispatch predicate. A Version availability change must never be
+	// evaluated from a stale informer cache at a dispatch boundary; it falls
+	// back to the cached client when not configured.
+	iamCatalogReader client.Reader
 }
 
 // New creates a new Reconciler.
@@ -62,6 +67,23 @@ func New(transport transport.Client, log logger.Logger, c client.Client, custome
 func (r *Reconciler) WithIAMDispatchEnforcement(enabled bool) *Reconciler {
 	r.iamEnforcement = enabled
 	return r
+}
+
+// WithCatalogReader sets the reader used to evaluate the IAM dispatch
+// predicate. Pass the manager's uncached API reader so a Version availability
+// change is always evaluated fresh at the dispatch boundary.
+func (r *Reconciler) WithCatalogReader(reader client.Reader) *Reconciler {
+	r.iamCatalogReader = reader
+	return r
+}
+
+// dispatchReader returns the reader for the shared IAM dispatch predicate,
+// preferring the uncached reader over the cached client.
+func (r *Reconciler) dispatchReader() client.Reader {
+	if r.iamCatalogReader != nil {
+		return r.iamCatalogReader
+	}
+	return r.client
 }
 
 // Reconcile runs the hc-controller loop for one cluster event.

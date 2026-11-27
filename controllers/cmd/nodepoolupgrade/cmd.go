@@ -31,7 +31,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				For(&privatev1.NodePool{}).
 				WithOptions(rf.ControllerOpts()).
 				Complete(nodepoolupgrade.NewReconciler(mgr.GetClient()).
-					WithIAMDispatchEnforcement(iamEnforcement)); err != nil {
+					WithIAMDispatchEnforcement(iamEnforcement).
+					WithCatalogReader(mgr.GetAPIReader())); err != nil {
 				return fmt.Errorf("setup NodePool upgrade controller: %w", err)
 			}
 			return mgr.Start(cmd.Context())

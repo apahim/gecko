@@ -38,6 +38,11 @@ type Reconciler struct {
 	// predicate. Receipts are maintained even while enforcement is off, so
 	// the staged rollout can validate the views before activation.
 	iamEnforcement bool
+	// iamCatalogReader is the uncached reader used to evaluate the shared IAM
+	// dispatch predicate. A Version availability change must never be
+	// evaluated from a stale informer cache at a dispatch boundary; it falls
+	// back to the cached client when not configured.
+	iamCatalogReader client.Reader
 }
 
 // New creates a new nodepool Reconciler.
@@ -53,6 +58,23 @@ func New(transport transport.Client, log logger.Logger, c client.Client) *Reconc
 func (r *Reconciler) WithIAMDispatchEnforcement(enabled bool) *Reconciler {
 	r.iamEnforcement = enabled
 	return r
+}
+
+// WithCatalogReader sets the reader used to evaluate the IAM dispatch
+// predicate. Pass the manager's uncached API reader so a Version availability
+// change is always evaluated fresh at the dispatch boundary.
+func (r *Reconciler) WithCatalogReader(reader client.Reader) *Reconciler {
+	r.iamCatalogReader = reader
+	return r
+}
+
+// dispatchReader returns the reader for the shared IAM dispatch predicate,
+// preferring the uncached reader over the cached client.
+func (r *Reconciler) dispatchReader() client.Reader {
+	if r.iamCatalogReader != nil {
+		return r.iamCatalogReader
+	}
+	return r.client
 }
 
 // Reconcile runs the nodepool controller loop for one nodepool event.
@@ -398,7 +420,7 @@ func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool,
 	upgrading := privatev1.NodePoolUpgradeActive(np) && np.Spec.Release.Version != np.Status.Version
 
 	vr := np.Status.VersionResolution
-	evaluation, err := catalog.EvaluateDispatch(ctx, r.client, cluster, vr.ReleaseVersion, catalog.ReleaseGroup(cluster))
+	evaluation, err := catalog.EvaluateDispatch(ctx, r.dispatchReader(), cluster, vr.ReleaseVersion, catalog.ReleaseGroup(cluster))
 	if err != nil {
 		// Zero external Apply when the dispatch predicate cannot be evaluated.
 		return nil, fmt.Errorf("nodepool reconciler: evaluate IAM dispatch: %w", err)
@@ -419,7 +441,7 @@ func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool,
 	// so a MergeFrom patch must diff against the pre-gate object or the gate's
 	// own condition change produces an empty patch and is never persisted.
 	before := np.DeepCopy()
-	blocked, iamConditionChanged := r.iamGate(np, evaluation, newWork)
+	blocked, iamConditionChanged := r.iamGate(np, cluster, evaluation, newWork)
 	if blocked {
 		if iamConditionChanged {
 			if err := r.client.Status().Patch(ctx, np, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsConflict(err) {
@@ -432,7 +454,7 @@ func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool,
 
 	submitted := meta.FindStatusCondition(np.Status.Conditions, privatev1.NodePoolUpgradeSubmitted)
 	needSubmission := upgrading && (submitted == nil || submitted.Status == metav1.ConditionFalse)
-	needReceipt := evaluation.Intent != nil && !evaluation.Intent.Committed(np.Status.IAMDispatch)
+	needReceipt := evaluation.Intent != nil && !evaluation.Intent.Committed(np.Status.IAMDispatch, string(np.UID), string(cluster.UID))
 
 	if needSubmission || needReceipt || iamConditionChanged {
 		if needSubmission {
@@ -469,13 +491,17 @@ func (r *Reconciler) applyResources(ctx context.Context, np *privatev1.NodePool,
 // the dispatcher-owned gate condition. Maintenance of the observed release
 // and an already committed exact target are not re-gated. It returns whether
 // dispatch is blocked and whether the condition changed.
-func (r *Reconciler) iamGate(np *privatev1.NodePool, evaluation *catalog.DispatchEvaluation, newWork bool) (blocked, conditionChanged bool) {
+// iamGate applies the shared IAM dispatch predicate to new work and records
+// the dispatcher-owned gate condition. Maintenance of the observed release
+// and an already committed exact target are not re-gated. It returns whether
+// dispatch is blocked and whether the condition changed.
+func (r *Reconciler) iamGate(np *privatev1.NodePool, cluster *privatev1.Cluster, evaluation *catalog.DispatchEvaluation, newWork bool) (blocked, conditionChanged bool) {
 	if !r.iamEnforcement {
 		return false, false
 	}
 	status, reason, message := metav1.ConditionTrue, "IAMPermissionsReady",
 		"The target release IAM contract is asserted for the parent Cluster"
-	if newWork && (evaluation.Intent == nil || !evaluation.Intent.Committed(np.Status.IAMDispatch)) {
+	if newWork && (evaluation.Intent == nil || !evaluation.Intent.Committed(np.Status.IAMDispatch, string(np.UID), string(cluster.UID))) {
 		if permitted, blockReason, blockMessage := evaluation.NewWorkPermitted(); !permitted {
 			status, reason, message = metav1.ConditionFalse, blockReason, blockMessage
 		}
@@ -484,11 +510,14 @@ func (r *Reconciler) iamGate(np *privatev1.NodePool, evaluation *catalog.Dispatc
 }
 
 // acknowledgeDispatch promotes the submission marker and the dispatch receipt
-// after a non-stale delivery. The committed pending intent is preserved: it
-// remains the authority for same-target redelivery.
+// once the transport has accepted the dispatch write. Dispatched records that
+// the write was accepted, not that the transport has observed the application:
+// read-back staleness delays only the observed conditions, never the receipt
+// promotion. The committed pending intent is preserved: it remains the
+// authority for same-target redelivery.
 func (r *Reconciler) acknowledgeDispatch(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, upgrading bool, submitted *metav1.Condition, evaluation *catalog.DispatchEvaluation) error {
 	needAck := (upgrading && submitted.Status != metav1.ConditionTrue) ||
-		(evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(np.Status.IAMDispatch)))
+		(evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(np.Status.IAMDispatch), string(np.UID), string(cluster.UID)))
 	if !needAck {
 		return nil
 	}
@@ -500,7 +529,7 @@ func (r *Reconciler) acknowledgeDispatch(ctx context.Context, np *privatev1.Node
 			ObservedGeneration: np.Generation,
 		})
 	}
-	if evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(np.Status.IAMDispatch)) {
+	if evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(np.Status.IAMDispatch), string(np.UID), string(cluster.UID)) {
 		commitDispatchedIAMDispatch(np, evaluation.Intent.Receipt(string(np.UID), string(cluster.UID)))
 	}
 	privatev1.SyncNodePoolIAMRequirements(np, cluster)

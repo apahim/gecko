@@ -45,9 +45,15 @@ func (i *DispatchIntent) Receipt(objectUID, clusterUID string) *privatev1.IAMDis
 	}
 }
 
-// MatchesReceipt reports whether a receipt carries exactly this intent.
-func (i *DispatchIntent) MatchesReceipt(r *privatev1.IAMDispatchReceipt) bool {
+// MatchesReceipt reports whether a receipt carries exactly this intent for the
+// dispatched object and its parent installation. Receipts bound to different
+// object or parent identities never match — mirroring the public requirements
+// projection — so a recreated object or parent can never inherit a prior
+// commitment.
+func (i *DispatchIntent) MatchesReceipt(r *privatev1.IAMDispatchReceipt, objectUID, clusterUID string) bool {
 	return r != nil &&
+		r.ObjectUID == objectUID &&
+		r.ClusterUID == clusterUID &&
 		r.ReleaseVersion == i.ReleaseVersion &&
 		r.ReleaseImage == i.ReleaseImage &&
 		r.ChannelGroup == i.ChannelGroup &&
@@ -55,14 +61,15 @@ func (i *DispatchIntent) MatchesReceipt(r *privatev1.IAMDispatchReceipt) bool {
 }
 
 // Committed reports whether the dispatch state already carries this exact
-// intent as pending or dispatched. A committed target may be redelivered after
-// a restart, a revocation or upstream aging; it never authorizes a different
-// target, and status-only generation changes never invalidate it.
-func (i *DispatchIntent) Committed(state *privatev1.IAMDispatchState) bool {
+// intent as pending or dispatched for the given object and parent identities.
+// A committed target may be redelivered after a restart, a revocation or
+// upstream aging; it never authorizes a different target, and status-only
+// generation changes never invalidate it.
+func (i *DispatchIntent) Committed(state *privatev1.IAMDispatchState, objectUID, clusterUID string) bool {
 	if state == nil {
 		return false
 	}
-	return i.MatchesReceipt(state.Pending) || i.MatchesReceipt(state.Dispatched)
+	return i.MatchesReceipt(state.Pending, objectUID, clusterUID) || i.MatchesReceipt(state.Dispatched, objectUID, clusterUID)
 }
 
 // DispatchEvaluation is the shared dispatch predicate evaluated against one

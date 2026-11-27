@@ -38,6 +38,11 @@ type Reconciler struct {
 	// iamEnforcement gates scheduling on the shared IAM dispatch predicate.
 	// The nodepool installer's Apply boundary re-checks it independently.
 	iamEnforcement bool
+	// iamCatalogReader is the uncached reader used to evaluate the shared IAM
+	// dispatch predicate. A Version availability change must never be
+	// evaluated from a stale informer cache at a scheduling boundary; it
+	// falls back to the cached client when not configured.
+	iamCatalogReader client.Reader
 }
 
 func NewReconciler(c client.Client) *Reconciler { return &Reconciler{client: c, now: time.Now} }
@@ -46,6 +51,23 @@ func NewReconciler(c client.Client) *Reconciler { return &Reconciler{client: c, 
 func (r *Reconciler) WithIAMDispatchEnforcement(enabled bool) *Reconciler {
 	r.iamEnforcement = enabled
 	return r
+}
+
+// WithCatalogReader sets the reader used to evaluate the IAM dispatch
+// predicate. Pass the manager's uncached API reader so a Version availability
+// change is always evaluated fresh at the scheduling boundary.
+func (r *Reconciler) WithCatalogReader(reader client.Reader) *Reconciler {
+	r.iamCatalogReader = reader
+	return r
+}
+
+// dispatchReader returns the reader for the shared IAM dispatch predicate,
+// preferring the uncached reader over the cached client.
+func (r *Reconciler) dispatchReader() client.Reader {
+	if r.iamCatalogReader != nil {
+		return r.iamCatalogReader
+	}
+	return r.client
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, key reconcile.Request) (reconcile.Result, error) {
@@ -171,7 +193,7 @@ func (r *Reconciler) validate(ctx context.Context, pool *privatev1.NodePool, tar
 	// One shared dispatch predicate at the scheduling boundary; the nodepool
 	// installer's Apply boundary re-checks it independently.
 	if r.iamEnforcement {
-		evaluation, err := catalog.EvaluateDispatch(ctx, r.client, &cluster, target, catalog.ReleaseGroup(&cluster))
+		evaluation, err := catalog.EvaluateDispatch(ctx, r.dispatchReader(), &cluster, target, catalog.ReleaseGroup(&cluster))
 		if err != nil {
 			return err
 		}

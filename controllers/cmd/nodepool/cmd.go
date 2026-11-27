@@ -37,7 +37,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			}
 
 			rec := nodepool.New(t, log, mgr.GetClient()).
-				WithIAMDispatchEnforcement(iamEnforcement)
+				WithIAMDispatchEnforcement(iamEnforcement).
+				WithCatalogReader(mgr.GetAPIReader())
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.NodePool{}).

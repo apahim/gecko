@@ -2114,6 +2114,96 @@ func TestReconcile_IAMEnforcementBlocksUnavailableVersion(t *testing.T) {
 	require.Contains(t, string(store.statusWriter.patchData), string(privatev1.NodePoolIAMPermissionsReady))
 }
 
+// The dispatch predicate reads the configured uncached catalog reader rather
+// than the cached client: an availability change visible only through the
+// uncached reader must gate new work at the Apply boundary.
+func TestReconcile_IAMDispatchPredicateUsesCatalogReader(t *testing.T) {
+	np := testNodePool("4.22.16")
+	np.SetUID(types.UID("np-uid-1234"))
+	cluster := coveredTestCluster()
+	tr := mock.New()
+	r, store := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	// The cached client still observes the Version as available; only the
+	// uncached reader sees the revocation.
+	store.version = npDispatchVersion(true, "")
+	catalogReader := &mockStoreClient{
+		cluster:      cluster,
+		statusWriter: &mockStatusWriter{},
+		version:      npDispatchVersion(false, "TemplateUnverified"),
+	}
+	r.WithIAMDispatchEnforcement(true).WithCatalogReader(catalogReader)
+
+	_, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "a revocation visible only to the uncached reader must gate dispatch")
+	gate := meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.NodePool).Status.Conditions, privatev1.NodePoolIAMPermissionsReady)
+	require.NotNil(t, gate)
+	require.Equal(t, metav1.ConditionFalse, gate.Status)
+	require.Equal(t, privatev1.VersionIAMUnavailable, gate.Reason)
+}
+
+// A persisted receipt bound to different object or parent identities never
+// counts as committed: a recreated NodePool or parent Cluster cannot inherit a
+// prior dispatch authorization, mirroring the public requirements projection.
+func TestReconcile_IAMEnforcementForeignUIDReceiptNotCommitted(t *testing.T) {
+	np := testNodePool("4.22.16")
+	np.SetUID(types.UID("np-uid-1234"))
+	np.SetResourceVersion("1")
+	cluster := coveredTestCluster()
+	cluster.Spec.Platform.GCP.IAM.TemplateApplications = nil // uncovered
+	tr := mock.New()
+	r, store := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	store.version = npDispatchVersion(true, "")
+	// The exact same intent, but bound to a different object and parent.
+	np.Status.IAMDispatch = &privatev1.IAMDispatchState{
+		Pending: &privatev1.IAMDispatchReceipt{
+			ObjectUID:         "old-object-uid",
+			ClusterUID:        "old-cluster-uid",
+			ReleaseVersion:    "4.22.16",
+			ReleaseImage:      "quay.io/openshift-release-dev/ocp-release:4.22.16-x86_64",
+			ChannelGroup:      "stable",
+			TemplateReference: npTestPin,
+		},
+	}
+	r.WithIAMDispatchEnforcement(true)
+
+	_, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "a foreign-identity receipt must not authorize dispatch")
+	gate := meta.FindStatusCondition(store.statusWriter.captured.(*privatev1.NodePool).Status.Conditions, privatev1.NodePoolIAMPermissionsReady)
+	require.NotNil(t, gate)
+	require.Equal(t, metav1.ConditionFalse, gate.Status)
+	require.Equal(t, privatev1.WIFConfigUpdateRequired, gate.Reason)
+}
+
+// A successful Apply that reports stale read-back still promotes the receipt:
+// Dispatched records that the transport accepted the dispatch write, while
+// read-back staleness delays only the observed conditions.
+func TestReconcile_IAMDispatchReceiptPromotedOnStaleFeedback(t *testing.T) {
+	np := testNodePool("4.22.16")
+	np.SetUID(types.UID("np-uid-1234"))
+	cluster := coveredTestCluster()
+	tr := mock.New()
+	groupKey, err := transport.NodePoolGroupKey(np.Namespace, np.Spec.ClusterID, np.Name)
+	require.NoError(t, err)
+	tr.StatusOverrides["mc-us-c1/"+groupKey] = &transport.Status{Stale: true}
+	r, store := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	store.version = npDispatchVersion(true, "")
+
+	_, err = r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Empty(t, tr.ApplyCalls, "the first pass persists the receipt before Apply")
+	persistCapturedNPStatus(t, store)
+
+	result, err := r.Reconcile(t.Context(), npReq(np.Namespace, np.Name))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1, "a committed receipt authorizes its own exact target")
+	require.Equal(t, 15*time.Second, result.RequeueAfter, "stale feedback requeues quickly")
+	captured := store.statusWriter.captured.(*privatev1.NodePool)
+	require.NotNil(t, captured.Status.IAMDispatch.Dispatched, "a stale read-back still promotes the receipt after the write was accepted")
+	require.Equal(t, captured.Status.IAMDispatch.Pending, captured.Status.IAMDispatch.Dispatched, "the committed pending intent is preserved")
+}
+
 // Continued reconciliation of the observed release is not gated: a
 // verification revocation never recalls a committed rollout, but the receipts
 // for the running target are still maintained.

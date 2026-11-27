@@ -117,7 +117,7 @@ func (r *Reconciler) approveUpgrade(ctx context.Context, c *privatev1.Cluster, t
 	// or a silent alternative selection; the final installer Apply boundary
 	// re-checks it independently.
 	if r.iamEnforcement {
-		evaluation, err := catalog.EvaluateDispatch(ctx, r.apiClient, c, target, releaseGroup(c))
+		evaluation, err := catalog.EvaluateDispatch(ctx, r.dispatchReader(), c, target, releaseGroup(c))
 		if err != nil {
 			return reconcile.Result{}, err
 		}

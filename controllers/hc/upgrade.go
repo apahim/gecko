@@ -40,7 +40,7 @@ func (r *Reconciler) applyResources(ctx context.Context, c *privatev1.Cluster, m
 		c.Status.HostedClusterResult != nil && c.Spec.Release.Version != c.Status.HostedClusterResult.Version
 
 	vr := c.Status.VersionResolution
-	evaluation, err := catalog.EvaluateDispatch(ctx, r.client, c, vr.ReleaseVersion, catalog.ReleaseGroup(c))
+	evaluation, err := catalog.EvaluateDispatch(ctx, r.dispatchReader(), c, vr.ReleaseVersion, catalog.ReleaseGroup(c))
 	if err != nil {
 		// Zero external Apply when the dispatch predicate cannot be evaluated.
 		return nil, fmt.Errorf("evaluate IAM dispatch: %w", err)
@@ -71,7 +71,7 @@ func (r *Reconciler) applyResources(ctx context.Context, c *privatev1.Cluster, m
 	submitted := meta.FindStatusCondition(c.Status.Conditions, privatev1.ControlPlaneUpgradeSubmitted)
 	accepted := meta.FindStatusCondition(c.Status.Conditions, privatev1.ControlPlaneUpgradeAccepted)
 	needSubmission := upgrading && (submitted == nil || submitted.Status == metav1.ConditionFalse || submitted.ObservedGeneration < accepted.ObservedGeneration)
-	needReceipt := evaluation.Intent != nil && !evaluation.Intent.Committed(c.Status.IAMDispatch)
+	needReceipt := evaluation.Intent != nil && !evaluation.Intent.Committed(c.Status.IAMDispatch, string(c.UID), string(c.UID))
 
 	if needSubmission || needReceipt || iamConditionChanged {
 		if needSubmission {
@@ -113,7 +113,7 @@ func (r *Reconciler) iamGate(c *privatev1.Cluster, evaluation *catalog.DispatchE
 	}
 	status, reason, message := metav1.ConditionTrue, "IAMPermissionsReady",
 		"The target release IAM contract is asserted for this Cluster"
-	if newWork && (evaluation.Intent == nil || !evaluation.Intent.Committed(c.Status.IAMDispatch)) {
+	if newWork && (evaluation.Intent == nil || !evaluation.Intent.Committed(c.Status.IAMDispatch, string(c.UID), string(c.UID))) {
 		if permitted, blockReason, blockMessage := evaluation.NewWorkPermitted(); !permitted {
 			status, reason, message = metav1.ConditionFalse, blockReason, blockMessage
 		}
@@ -122,11 +122,14 @@ func (r *Reconciler) iamGate(c *privatev1.Cluster, evaluation *catalog.DispatchE
 }
 
 // acknowledgeDispatch promotes the submission marker and the dispatch receipt
-// after a non-stale delivery. The committed pending intent is preserved: it
-// remains the authority for same-target redelivery.
+// once the transport has accepted the dispatch write. Dispatched records that
+// the write was accepted, not that the transport has observed the application:
+// read-back staleness delays only the observed conditions, never the receipt
+// promotion. The committed pending intent is preserved: it remains the
+// authority for same-target redelivery.
 func (r *Reconciler) acknowledgeDispatch(ctx context.Context, c *privatev1.Cluster, upgrading bool, submitted *metav1.Condition, evaluation *catalog.DispatchEvaluation) error {
 	needAck := (upgrading && submitted.Status != metav1.ConditionTrue) ||
-		(evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(c.Status.IAMDispatch)))
+		(evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(c.Status.IAMDispatch), string(c.UID), string(c.UID)))
 	if !needAck {
 		return nil
 	}
@@ -136,7 +139,7 @@ func (r *Reconciler) acknowledgeDispatch(ctx context.Context, c *privatev1.Clust
 			Reason: "Dispatched", Message: "The approved release was dispatched", ObservedGeneration: c.Generation,
 		})
 	}
-	if evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(c.Status.IAMDispatch)) {
+	if evaluation.Intent != nil && !evaluation.Intent.MatchesReceipt(dispatchedReceipt(c.Status.IAMDispatch), string(c.UID), string(c.UID)) {
 		commitDispatchedIAMDispatch(c, evaluation.Intent.Receipt(string(c.UID), string(c.UID)))
 	}
 	privatev1.SyncClusterIAMRequirements(c)

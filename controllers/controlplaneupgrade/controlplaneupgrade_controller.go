@@ -48,6 +48,11 @@ type Reconciler struct {
 	// The final installer Apply boundary re-checks it independently, so a
 	// cached approval can never bypass a fresh check.
 	iamEnforcement bool
+	// iamCatalogReader is the uncached reader used to evaluate the shared IAM
+	// dispatch predicate. A Version availability change must never be
+	// evaluated from a stale informer cache at an approval boundary; it falls
+	// back to the cached client when not configured.
+	iamCatalogReader client.Reader
 }
 
 func NewReconciler(apiClient client.Client, log logger.Logger) *Reconciler {
@@ -61,6 +66,23 @@ func (r *Reconciler) WithAdmissionGate(gate AdmissionGate) *Reconciler { r.admis
 func (r *Reconciler) WithIAMDispatchEnforcement(enabled bool) *Reconciler {
 	r.iamEnforcement = enabled
 	return r
+}
+
+// WithCatalogReader sets the reader used to evaluate the IAM dispatch
+// predicate. Pass the manager's uncached API reader so a Version availability
+// change is always evaluated fresh at the approval boundary.
+func (r *Reconciler) WithCatalogReader(reader client.Reader) *Reconciler {
+	r.iamCatalogReader = reader
+	return r
+}
+
+// dispatchReader returns the reader for the shared IAM dispatch predicate,
+// preferring the uncached reader over the cached client.
+func (r *Reconciler) dispatchReader() client.Reader {
+	if r.iamCatalogReader != nil {
+		return r.iamCatalogReader
+	}
+	return r.apiClient
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {

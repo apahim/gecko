@@ -44,7 +44,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			}
 
 			rec := controlplaneupgrade.NewReconciler(mgr.GetClient(), log).
-				WithIAMDispatchEnforcement(iamEnforcement)
+				WithIAMDispatchEnforcement(iamEnforcement).
+				WithCatalogReader(mgr.GetAPIReader())
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).

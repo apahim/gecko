@@ -159,23 +159,34 @@ func TestDispatchIntentReceiptMatching(t *testing.T) {
 	require.Equal(t, "object-uid", receipt.ObjectUID)
 	require.Equal(t, "cluster-uid", receipt.ClusterUID)
 
-	assert.True(t, intent.MatchesReceipt(receipt))
-	assert.False(t, intent.Committed(nil))
-	assert.False(t, intent.Committed(&privatev1.IAMDispatchState{}))
+	assert.True(t, intent.MatchesReceipt(receipt, "object-uid", "cluster-uid"))
+	assert.False(t, intent.Committed(nil, "object-uid", "cluster-uid"))
+	assert.False(t, intent.Committed(&privatev1.IAMDispatchState{}, "object-uid", "cluster-uid"))
 
 	// A committed pending or dispatched receipt authorizes only its own
 	// exact target; any field difference is a different target.
-	assert.True(t, intent.Committed(&privatev1.IAMDispatchState{Pending: receipt}))
-	assert.True(t, intent.Committed(&privatev1.IAMDispatchState{Dispatched: receipt}))
+	assert.True(t, intent.Committed(&privatev1.IAMDispatchState{Pending: receipt}, "object-uid", "cluster-uid"))
+	assert.True(t, intent.Committed(&privatev1.IAMDispatchState{Dispatched: receipt}, "object-uid", "cluster-uid"))
 
 	other := intent.Receipt("object-uid", "cluster-uid")
 	other.ReleaseImage = "different-image"
-	assert.False(t, intent.MatchesReceipt(other))
-	assert.False(t, intent.Committed(&privatev1.IAMDispatchState{Pending: other, Dispatched: other}))
+	assert.False(t, intent.MatchesReceipt(other, "object-uid", "cluster-uid"))
+	assert.False(t, intent.Committed(&privatev1.IAMDispatchState{Pending: other, Dispatched: other}, "object-uid", "cluster-uid"))
 
 	other = intent.Receipt("object-uid", "cluster-uid")
 	other.TemplateReference.UID = "different-uid"
-	assert.False(t, intent.MatchesReceipt(other))
+	assert.False(t, intent.MatchesReceipt(other, "object-uid", "cluster-uid"))
+
+	// Receipts bound to a different object or parent identity never match,
+	// mirroring the public requirements projection: a recreated object or
+	// parent can never inherit a prior commitment.
+	other = intent.Receipt("different-object-uid", "cluster-uid")
+	assert.False(t, intent.MatchesReceipt(other, "object-uid", "cluster-uid"))
+	assert.False(t, intent.Committed(&privatev1.IAMDispatchState{Pending: other, Dispatched: other}, "object-uid", "cluster-uid"))
+
+	other = intent.Receipt("object-uid", "different-cluster-uid")
+	assert.False(t, intent.MatchesReceipt(other, "object-uid", "cluster-uid"))
+	assert.False(t, intent.Committed(&privatev1.IAMDispatchState{Pending: other, Dispatched: other}, "object-uid", "cluster-uid"))
 }
 
 // EvaluateDispatch distinguishes retryable infrastructure failures from
