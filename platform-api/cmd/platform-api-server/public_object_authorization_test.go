@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,8 +30,10 @@ type publicAuthorizationRequester func(method, path string, body []byte, content
 
 //nolint:kubeapilinter // Test-only HTTP harness, not a serialized API type.
 type publicAuthorizationTestServer struct {
-	apiPrefix string
-	request   publicAuthorizationRequester
+	apiPrefix      string
+	request        publicAuthorizationRequester
+	privateRequest publicAuthorizationRequester
+	bindingStore   storage.ResourceStore
 }
 
 func TestPublicAPIObjectStateAuthorization(t *testing.T) {
@@ -48,6 +51,11 @@ func TestPublicAPIObjectStateAuthorization(t *testing.T) {
 
 func newPublicAuthorizationTestServer(t *testing.T) publicAuthorizationTestServer {
 	t.Helper()
+	return newPublicAuthorizationTestServerWithDecorator(t, nil)
+}
+
+func newPublicAuthorizationTestServerWithDecorator(t *testing.T, decorate func(runtimeschema.GroupVersionKind, storage.ResourceStore) storage.ResourceStore) publicAuthorizationTestServer {
+	t.Helper()
 	privatePort := freePublicAPITestPort(t)
 	publicPort := freePublicAPITestPort(t)
 	privateScheme := getPrivateScheme()
@@ -57,7 +65,10 @@ func newPublicAuthorizationTestServer(t *testing.T) publicAuthorizationTestServe
 		if store, found := backingStores[gvk]; found {
 			return store, nil
 		}
-		store := memory.NewMemoryStore(resourceType, scheme, gvk)
+		var store storage.ResourceStore = memory.NewMemoryStore(resourceType, scheme, gvk)
+		if decorate != nil {
+			store = decorate(gvk, store)
+		}
 		backingStores[gvk] = store
 		return store, nil
 	}
@@ -70,11 +81,11 @@ func newPublicAuthorizationTestServer(t *testing.T) publicAuthorizationTestServe
 		"rolebinding.create", "rolebinding.get", "rolebinding.update", "rolebinding.delete", "rolebinding.list",
 	})
 	seedPlatformRole(t, stores, "cluster-viewer", []string{"cluster.get", "cluster.list"})
-	serviceAdminCondition := `context.spec.subject == "bob@example.com"`
-	clusterRegionCondition := `context.spec.platform.gcp.region == "us-east1"`
-	seedRoleBinding(t, stores, "project-a", "alice-service-admin", "alice@example.com", "service-admin", &serviceAdminCondition)
-	seedRoleBinding(t, stores, "project-a", "alice-cluster-viewer", "alice@example.com", "cluster-viewer", &clusterRegionCondition)
-	seedRoleBinding(t, stores, "project-c", "alice-cluster-viewer", "alice@example.com", "cluster-viewer", &clusterRegionCondition)
+	serviceAdminCondition := []privatev1.RoleBindingRequirement{{Key: "name", Operator: "In", Values: []string{"allowed-*", "existing-bob"}}}
+	clusterRegionCondition := []privatev1.RoleBindingRequirement{{Key: "region", Operator: "In", Values: []string{"us-east1"}}}
+	seedRoleBinding(t, stores, "project-a", "alice-service-admin", "alice@example.com", "service-admin", serviceAdminCondition)
+	seedRoleBinding(t, stores, "project-a", "alice-cluster-viewer", "alice@example.com", "cluster-viewer", clusterRegionCondition)
+	seedRoleBinding(t, stores, "project-c", "alice-cluster-viewer", "alice@example.com", "cluster-viewer", clusterRegionCondition)
 	seedRoleBinding(t, stores, "project-a", "existing-eve", "eve@example.com", "cluster-viewer", nil)
 	seedRoleBinding(t, stores, "project-a", "existing-bob", "bob@example.com", "cluster-viewer", nil)
 
@@ -157,8 +168,10 @@ func newPublicAuthorizationTestServer(t *testing.T) publicAuthorizationTestServe
 	client := &http.Client{Timeout: 3 * time.Second}
 	waitForPublicAPITestServer(t, client, baseURL+"/apis", runDone, &runErr)
 	return publicAuthorizationTestServer{
-		apiPrefix: "/apis/gcp.managed.openshift.io/v1",
-		request:   publicAuthorizationRequest(t, client, baseURL),
+		apiPrefix:      "/apis/gcp.managed.openshift.io/v1",
+		request:        publicAuthorizationRequest(t, client, baseURL),
+		privateRequest: publicAuthorizationRequest(t, &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}, fmt.Sprintf("https://127.0.0.1:%d", privatePort)),
+		bindingStore:   stores.RoleBindings,
 	}
 }
 
@@ -224,11 +237,11 @@ func testRoleBindingObjectState(t *testing.T, server publicAuthorizationTestServ
 	assertAuthorizationStatus(t, server.request, http.MethodPost, roleBindingPath,
 		[]byte(`{"metadata":{"name":"denied-binding"},"spec":{"subject":"eve@example.com","roleRef":`+roleRef+`}}`), constants.ContentTypeJSON, http.StatusForbidden, "denied create")
 	assertAuthorizationStatus(t, server.request, http.MethodPost, roleBindingPath,
-		[]byte(`{"metadata":{"name":"invalid-condition"},"spec":{"subject":"bob@example.com","roleRef":`+roleRef+`,"condition":"context.spec =="}}`), constants.ContentTypeJSON, http.StatusBadRequest, "invalid condition create")
+		[]byte(`{"metadata":{"name":"invalid-condition"},"spec":{"subject":"bob@example.com","roleRef":`+roleRef+`,"condition":"context.spec =="}}`), constants.ContentTypeJSON, http.StatusForbidden, "pruned raw input still subject to target authorization: invalid condition create")
 	assertAuthorizationStatus(t, server.request, http.MethodPost, roleBindingPath,
-		[]byte(`{"metadata":{"name":"namespace-reference"},"spec":{"subject":"bob@example.com","roleRef":`+roleRef+`,"condition":"resource in Namespace::\"other\""}}`), constants.ContentTypeJSON, http.StatusBadRequest, "Namespace entity condition create")
+		[]byte(`{"metadata":{"name":"namespace-reference"},"spec":{"subject":"bob@example.com","roleRef":`+roleRef+`,"condition":"resource in Namespace::\"other\""}}`), constants.ContentTypeJSON, http.StatusForbidden, "pruned raw input still subject to target authorization: Namespace entity condition create")
 	assertAuthorizationStatus(t, server.request, http.MethodPost, roleBindingPath,
-		[]byte(`{"metadata":{"name":"trailing-policy"},"spec":{"subject":"bob@example.com","roleRef":`+roleRef+`,"condition":"true }; forbid (principal, action, resource) when { true"}}`), constants.ContentTypeJSON, http.StatusBadRequest, "trailing Cedar policy condition create")
+		[]byte(`{"metadata":{"name":"trailing-policy"},"spec":{"subject":"bob@example.com","roleRef":`+roleRef+`,"condition":"true }; forbid (principal, action, resource) when { true"}}`), constants.ContentTypeJSON, http.StatusForbidden, "pruned raw input still subject to target authorization: trailing Cedar policy condition create")
 	assertAuthorizationStatus(t, server.request, http.MethodGet, roleBindingPath+"/trailing-policy", nil, "", http.StatusNotFound, "trailing Cedar policy condition not persisted")
 
 	existingPath := roleBindingPath + "/existing-eve"
@@ -244,9 +257,9 @@ func testRoleBindingObjectState(t *testing.T, server publicAuthorizationTestServ
 	assertAuthorizationStatus(t, server.request, http.MethodPatch, allowedPath,
 		[]byte(`{"spec":{"subject":"bob@example.com"}}`), constants.ContentTypeMergePatch, http.StatusOK, "stored and final allowed patch")
 	assertAuthorizationStatus(t, server.request, http.MethodPut, allowedPath,
-		[]byte(`{"metadata":{"name":"existing-bob"},"spec":{"subject":"eve@example.com","roleRef":`+roleRef+`}}`), constants.ContentTypeJSON, http.StatusForbidden, "replacement disallowed update")
+		[]byte(`{"metadata":{"name":"existing-bob"},"spec":{"subject":"eve@example.com","roleRef":`+roleRef+`}}`), constants.ContentTypeJSON, http.StatusOK, "changing subject does not change target name")
 	assertAuthorizationStatus(t, server.request, http.MethodPatch, allowedPath,
-		[]byte(`{"spec":{"subject":"eve@example.com"}}`), constants.ContentTypeMergePatch, http.StatusForbidden, "final disallowed patch")
+		[]byte(`{"spec":{"subject":"eve@example.com"}}`), constants.ContentTypeMergePatch, http.StatusOK, "patching subject does not change target name")
 	assertAuthorizationStatus(t, server.request, http.MethodDelete, allowedPath, nil, "", http.StatusOK, "allowed delete")
 	assertAuthorizationStatus(t, server.request, http.MethodGet, allowedPath, nil, "", http.StatusNotFound, "missing rolebinding get")
 }
@@ -297,15 +310,15 @@ func seedPlatformRole(t *testing.T, stores authz.Stores, name string, permission
 	}
 }
 
-func seedRoleBinding(t *testing.T, stores authz.Stores, namespace, name, subject, roleName string, condition *string) {
+func seedRoleBinding(t *testing.T, stores authz.Stores, namespace, name, subject, roleName string, conditions []privatev1.RoleBindingRequirement) {
 	t.Helper()
 	binding := &privatev1.RoleBinding{
 		TypeMeta:   metav1.TypeMeta{APIVersion: privatev1.GroupVersion.String(), Kind: "RoleBinding"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: privatev1.RoleBindingSpec{
-			Subject:   subject,
-			RoleRef:   privatev1.RoleRef{Kind: "PlatformRole", Name: roleName, APIGroup: privatev1.GroupVersion.Group},
-			Condition: condition,
+			Subject:    subject,
+			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: roleName, APIGroup: privatev1.GroupVersion.Group},
+			Conditions: conditions,
 		},
 	}
 	binding.SetGroupVersionKind(privatev1.GroupVersion.WithKind("RoleBinding"))

@@ -81,12 +81,11 @@ func TestAuthorizerEvaluatesEffectiveObjectState(t *testing.T) {
 	if err := stores.PlatformRoles.Create(context.Background(), role); err != nil {
 		t.Fatal(err)
 	}
-	condition := `context.resourceName == "east" && context.resourcePlural == "clusters" && context.method == "GET" && context.spec.region == "us-east1"`
 	binding := &privatev1.RoleBinding{
 		Spec: privatev1.RoleBindingSpec{
-			Subject:   "alice@example.com",
-			RoleRef:   privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
-			Condition: &condition,
+			Subject:    "alice@example.com",
+			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+			Conditions: []privatev1.RoleBindingRequirement{{Key: "name", Operator: "In", Values: []string{"east"}}},
 		},
 	}
 	binding.Name = "east-viewer"
@@ -118,7 +117,7 @@ func TestAuthorizerEvaluatesEffectiveObjectState(t *testing.T) {
 	}
 }
 
-func TestAuthorizerAllowsIndependentBindingWhenConditionEvaluationFails(t *testing.T) {
+func TestAuthorizerAllowsIndependentBindingWithDifferentConditions(t *testing.T) {
 	stores, authorizer := newTestAuthorizer(t)
 	role := &privatev1.PlatformRole{Spec: privatev1.PlatformRoleSpec{Permissions: []string{"cluster.get"}}}
 	role.Name = "cluster-viewer"
@@ -126,23 +125,23 @@ func TestAuthorizerAllowsIndependentBindingWhenConditionEvaluationFails(t *testi
 	if err := stores.PlatformRoles.Create(context.Background(), role); err != nil {
 		t.Fatal(err)
 	}
-	condition := `context.spec.region == "us-east1"`
+	condition := []privatev1.RoleBindingRequirement{{Key: "region", Operator: "In", Values: []string{"us-east1"}}}
 	for _, tt := range []struct {
 		name      string
-		condition *string
+		condition []privatev1.RoleBindingRequirement
 	}{
 		{
 			name: "unconditional-viewer",
 		},
 		{
 			name:      "conditioned-viewer",
-			condition: &condition,
+			condition: condition,
 		},
 	} {
 		binding := &privatev1.RoleBinding{Spec: privatev1.RoleBindingSpec{
-			Subject:   "alice@example.com",
-			RoleRef:   privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
-			Condition: tt.condition,
+			Subject:    "alice@example.com",
+			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+			Conditions: tt.condition,
 		}}
 		binding.Name = tt.name
 		binding.Namespace = "project-a"
@@ -165,7 +164,7 @@ func TestAuthorizerAllowsIndependentBindingWhenConditionEvaluationFails(t *testi
 	}
 }
 
-func TestAuthorizerFailsClosedWhenAllMatchingBindingsHaveEvaluationErrors(t *testing.T) {
+func TestAuthorizerFailsClosedForMissingNormalizedAttribute(t *testing.T) {
 	stores, authorizer := newTestAuthorizer(t)
 	role := &privatev1.PlatformRole{Spec: privatev1.PlatformRoleSpec{Permissions: []string{"cluster.get"}}}
 	role.Name = "cluster-viewer"
@@ -173,12 +172,11 @@ func TestAuthorizerFailsClosedWhenAllMatchingBindingsHaveEvaluationErrors(t *tes
 	if err := stores.PlatformRoles.Create(context.Background(), role); err != nil {
 		t.Fatal(err)
 	}
-	condition := `context.spec.region == "us-east1"`
 	binding := &privatev1.RoleBinding{
 		Spec: privatev1.RoleBindingSpec{
-			Subject:   "alice@example.com",
-			RoleRef:   privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
-			Condition: &condition,
+			Subject:    "alice@example.com",
+			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+			Conditions: []privatev1.RoleBindingRequirement{{Key: "region", Operator: "In", Values: []string{"us-east1"}}},
 		},
 	}
 	binding.Name = "conditioned-viewer"
@@ -196,8 +194,8 @@ func TestAuthorizerFailsClosedWhenAllMatchingBindingsHaveEvaluationErrors(t *tes
 		t.Fatal(err)
 	}
 	allowed, err := authorizer.AuthorizeWithContext(context.Background(), "alice@example.com", GetCluster, "project-a", requestContext)
-	if err == nil || allowed {
-		t.Fatalf("AuthorizeWithContext() = allowed %t, err %v; want denied evaluation error", allowed, err)
+	if err != nil || allowed {
+		t.Fatalf("AuthorizeWithContext() = allowed %t, err %v; want guarded denial without evaluation error", allowed, err)
 	}
 }
 
@@ -209,12 +207,11 @@ func TestHasNamespacePermissionIgnoresBindingConditions(t *testing.T) {
 	if err := stores.PlatformRoles.Create(context.Background(), role); err != nil {
 		t.Fatal(err)
 	}
-	condition := "false"
 	binding := &privatev1.RoleBinding{
 		Spec: privatev1.RoleBindingSpec{
-			Subject:   "alice@example.com",
-			RoleRef:   privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
-			Condition: &condition,
+			Subject:    "alice@example.com",
+			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+			Conditions: []privatev1.RoleBindingRequirement{{Key: "name", Operator: "In", Values: []string{"never-match"}}},
 		},
 	}
 	binding.Name = "conditioned-viewer"
@@ -278,7 +275,7 @@ func TestHasNamespacePermissionResolvesNamespacedRole(t *testing.T) {
 	}
 }
 
-func TestAuthorizerSupportsResourcePluralGuards(t *testing.T) {
+func TestAuthorizerNameConditionsApplyAcrossPermittedResourceKinds(t *testing.T) {
 	stores, authorizer := newTestAuthorizer(t)
 	role := &privatev1.PlatformRole{Spec: privatev1.PlatformRoleSpec{Permissions: []string{"cluster.get", "nodepool.get"}}}
 	role.Name = "mixed-viewer"
@@ -286,12 +283,11 @@ func TestAuthorizerSupportsResourcePluralGuards(t *testing.T) {
 	if err := stores.PlatformRoles.Create(context.Background(), role); err != nil {
 		t.Fatal(err)
 	}
-	condition := `context.resourcePlural != "clusters" || context.spec.region == "us-east1"`
 	binding := &privatev1.RoleBinding{
 		Spec: privatev1.RoleBindingSpec{
-			Subject:   "alice@example.com",
-			RoleRef:   privatev1.RoleRef{Kind: "PlatformRole", Name: "mixed-viewer", APIGroup: privatev1.GroupVersion.Group},
-			Condition: &condition,
+			Subject:    "alice@example.com",
+			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: "mixed-viewer", APIGroup: privatev1.GroupVersion.Group},
+			Conditions: []privatev1.RoleBindingRequirement{{Key: "name", Operator: "In", Values: []string{"workers"}}},
 		},
 	}
 	binding.Name = "mixed-viewer"
@@ -424,9 +420,9 @@ func TestGeneratePolicySetSkipsMalformedConditionWithoutBlockingValidBindings(t 
 	malformedCondition := `true }; forbid (principal, action, resource) when { true`
 	malformedBinding := &privatev1.RoleBinding{
 		Spec: privatev1.RoleBindingSpec{
-			Subject:   "bob@example.com",
-			RoleRef:   privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
-			Condition: &malformedCondition,
+			Subject:    "bob@example.com",
+			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+			Conditions: []privatev1.RoleBindingRequirement{{Key: "invalid", Operator: "In", Values: []string{malformedCondition}}},
 		},
 	}
 	malformedBinding.Name = "malformed-condition"
@@ -460,9 +456,9 @@ func TestGeneratePolicySetLogsMalformedConditionSafely(t *testing.T) {
 	condition := `true }; forbid (principal, action, resource) when { true`
 	binding := &privatev1.RoleBinding{
 		Spec: privatev1.RoleBindingSpec{
-			Subject:   "customer@example.com",
-			RoleRef:   privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
-			Condition: &condition,
+			Subject:    "customer@example.com",
+			RoleRef:    privatev1.RoleRef{Kind: "PlatformRole", Name: "cluster-viewer", APIGroup: privatev1.GroupVersion.Group},
+			Conditions: []privatev1.RoleBindingRequirement{{Key: "invalid", Operator: "In", Values: []string{condition}}},
 		},
 	}
 	binding.Name = "customer-binding"
@@ -487,7 +483,7 @@ func TestGeneratePolicySetLogsMalformedConditionSafely(t *testing.T) {
 	if entry.attributes["reason"] != "invalid_binding_policy" || entry.attributes["failureCount"] != "1" {
 		t.Fatalf("log attributes = %v, want sanitized reason and failure count", entry.attributes)
 	}
-	for _, sensitive := range []string{*binding.Spec.Condition, binding.Namespace, binding.Name, binding.Spec.Subject, binding.Spec.RoleRef.Name} {
+	for _, sensitive := range []string{condition, binding.Namespace, binding.Name, binding.Spec.Subject, binding.Spec.RoleRef.Name} {
 		if strings.Contains(entry.String(), sensitive) {
 			t.Errorf("authorization log contains customer-controlled value %q: %s", sensitive, entry)
 		}

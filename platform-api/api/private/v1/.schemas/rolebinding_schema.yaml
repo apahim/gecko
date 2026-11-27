@@ -23,12 +23,52 @@ properties:
   spec:
     description: RoleBindingSpec identifies the principal and role granted in a namespace.
     properties:
-      condition:
+      conditions:
         description: |-
-          condition is an optional Cedar expression that further limits the
-          resources this binding grants access to.
-        maxLength: 4096
-        type: string
+          conditions narrow this binding's grants. Requirements are ANDed, including
+          repeated keys. Values are ORed; '*' is the only wildcard. Values are opaque
+          strings, not validated region/name identifiers. Omitted or empty conditions
+          add no restriction. PUT omission clears; merge PATCH omission preserves.
+          Name requirements need an explicit metadata.name at authorization time;
+          generateName alone cannot match. An independent grant may allow generation.
+        items:
+          description: RoleBindingRequirement narrows the target objects accessible
+            through a binding.
+          properties:
+            key:
+              description: key is name or region. Region applies only to Cluster and
+                NodePool targets.
+              enum:
+              - name
+              - region
+              type: string
+            operator:
+              description: operator is In (any match) or NotIn (no match). Both require
+                a present attribute.
+              enum:
+              - In
+              - NotIn
+              type: string
+            values:
+              description: |-
+                values are literal strings except '*' matches zero or more characters.
+                Matching is case-sensitive and whole-string. No escape language is supported.
+                Empty or whitespace-only strings are rejected; other values are not trimmed.
+                At least one value is required; duplicates are allowed.
+                Misspelled exclusions may broaden access.
+              items:
+                minLength: 1
+                type: string
+              minItems: 1
+              type: array
+              x-kubernetes-list-type: atomic
+          required:
+          - key
+          - operator
+          - values
+          type: object
+        type: array
+        x-kubernetes-list-type: atomic
       roleRef:
         description: |-
           RoleRef identifies either a cluster-scoped PlatformRole or a namespaced

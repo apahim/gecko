@@ -30,6 +30,8 @@ type RoleBindingList struct {
 }
 
 // RoleBindingSpec identifies the principal and role granted in a namespace.
+//
+//nolint:kubeapilinter,geckoconventions // spec.conditions contains authorization requirements, not status conditions; only emitted Cedar is bounded.
 type RoleBindingSpec struct {
 
 	// +kubebuilder:validation:MinLength=1
@@ -39,12 +41,16 @@ type RoleBindingSpec struct {
 	// +required
 	RoleRef RoleRef `json:"roleRef"`
 
-	// condition is an optional Cedar expression that further limits the
-	// resources this binding grants access to.
+	// conditions narrow this binding's grants. Requirements are ANDed, including
+	// repeated keys. Values are ORed; '*' is the only wildcard. Values are opaque
+	// strings, not validated region/name identifiers. Omitted or empty conditions
+	// add no restriction. PUT omission clears; merge PATCH omission preserves.
+	// Name requirements need an explicit metadata.name at authorization time;
+	// generateName alone cannot match. An independent grant may allow generation.
 
 	// +optional
-	// +kubebuilder:validation:MaxLength=4096
-	Condition *string `json:"condition,omitempty"`
+	// +listType=atomic
+	Conditions []RoleBindingRequirement `json:"conditions,omitempty"`
 }
 
 // RoleRef identifies either a cluster-scoped PlatformRole or a namespaced
@@ -59,6 +65,41 @@ type RoleRef struct {
 
 	// +required
 	APIGroup string `json:"apiGroup"`
+}
+
+// RoleBindingConditionKey selects a normalized target attribute.
+// The name key requires explicit metadata.name; generateName alone cannot match.
+// An independent grant without a name requirement may allow name generation.
+// +kubebuilder:validation:Enum=name;region
+type RoleBindingConditionKey string
+
+// RoleBindingConditionOperator determines membership in the value alternatives.
+// +kubebuilder:validation:Enum=In;NotIn
+type RoleBindingConditionOperator string
+
+// RoleBindingRequirement narrows the target objects accessible through a binding.
+//
+//nolint:geckoconventions // Schema-only string values and arrays have no per-field size/count limits; emitted Cedar is bounded.
+type RoleBindingRequirement struct {
+	// key is name or region. Region applies only to Cluster and NodePool targets.
+
+	// +required
+	Key RoleBindingConditionKey `json:"key"`
+	// operator is In (any match) or NotIn (no match). Both require a present attribute.
+
+	// +required
+	Operator RoleBindingConditionOperator `json:"operator"`
+	// values are literal strings except '*' matches zero or more characters.
+	// Matching is case-sensitive and whole-string. No escape language is supported.
+	// Empty or whitespace-only strings are rejected; other values are not trimmed.
+	// At least one value is required; duplicates are allowed.
+	// Misspelled exclusions may broaden access.
+
+	// +required
+	// +listType=atomic
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:items:MinLength=1
+	Values []string `json:"values"`
 }
 
 func init() {

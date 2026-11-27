@@ -2,9 +2,12 @@ package replication
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -40,7 +43,7 @@ func TestAPIMirrorAppliesToDirectPrivateAPI(t *testing.T) {
 	}
 	config := aggregated.Config{
 		Scheme:    scheme,
-		Resources: []types.ResourceInfo{privatev1.RoleResourceInfo},
+		Resources: []types.ResourceInfo{privatev1.RoleResourceInfo, privatev1.RoleBindingResourceInfo},
 		StorageFactory: func(resourceType string, scheme *runtime.Scheme, gvk schema.GroupVersionKind) (storage.ResourceStore, error) {
 			return memory.NewMemoryStore(resourceType, scheme, gvk), nil
 		},
@@ -132,5 +135,86 @@ func TestAPIMirrorAppliesToDirectPrivateAPI(t *testing.T) {
 	}
 	if _, err := api.Resource(supportedResources[roleResourceID]).Namespace("tenant-a").Get(ctx, "viewer", metav1.GetOptions{}); err != nil {
 		t.Fatalf("snapshot Role missing from private API: %v", err)
+	}
+
+	t.Run("complete RoleBinding replication", func(t *testing.T) {
+		testCompleteRoleBindingReplication(t, ctx, api, mirror)
+	})
+}
+
+// testCompleteRoleBindingReplication exercises ordinary mirroring against the
+// real private admission path, including copying structured requirements unchanged.
+func testCompleteRoleBindingReplication(t *testing.T, ctx context.Context, api dynamic.Interface, mirror *APIMirror) {
+	t.Helper()
+	const resourceID = "rolebindings.gcp.managed.openshift.io"
+	client := api.Resource(supportedResources[resourceID]).Namespace("tenant-a")
+	binding := &privatev1.RoleBinding{
+		TypeMeta:   metav1.TypeMeta{APIVersion: privatev1.GroupVersion.String(), Kind: "RoleBinding"},
+		ObjectMeta: metav1.ObjectMeta{Name: "binding-viewer", Namespace: "tenant-a", UID: "source-binding"},
+		Spec:       privatev1.RoleBindingSpec{Subject: "user@example.com", RoleRef: privatev1.RoleRef{Kind: "Role", Name: "viewer", APIGroup: privatev1.GroupVersion.Group}},
+	}
+	for i, requirements := range [][]privatev1.RoleBindingRequirement{
+		{{Key: "name", Operator: "In", Values: []string{"demo-*", "exact"}}, {Key: "region", Operator: "NotIn", Values: []string{"europe-*"}}},
+		{{Key: "name", Operator: "In", Values: []string{"prod-*"}}},
+		nil,
+	} {
+		version := strconv.Itoa(i + 1)
+		binding.ResourceVersion = version
+		binding.Spec.Conditions = requirements
+		data, err := json.Marshal(binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		event := Event{EventType: CreateOrUpdate, ResourceKind: resourceID, OriginRegion: "us-central1", Generation: 3, Namespace: binding.Namespace, Name: binding.Name, SourceResourceVersion: version, Object: data, UpdatedAt: time.Now().UTC()}
+		if applied, err := mirror.ApplyIncremental(ctx, event); err != nil || !applied {
+			t.Fatalf("version %s: applied=%v error=%v", version, applied, err)
+		}
+		local, err := client.Get(ctx, binding.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got privatev1.RoleBinding
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(local.Object, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got.Spec, binding.Spec) {
+			t.Fatalf("complete binding spec changed during replication: got=%#v want=%#v", got.Spec, binding.Spec)
+		}
+		if got.UID == binding.UID || got.Annotations[sourceUIDAnnotation] != string(binding.UID) || got.Annotations[sourceVersionAnnotation] != version {
+			t.Fatal("replication failed to preserve local identity/source tracking")
+		}
+		if applied, err := mirror.ApplyIncremental(ctx, event); err != nil || applied {
+			t.Fatalf("replay: applied=%v error=%v", applied, err)
+		}
+		after, err := client.Get(ctx, binding.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(local.Object, after.Object) {
+			t.Fatal("replay changed destination")
+		}
+	}
+	// Destination admission, not the mirror, rejects invalid structured
+	// requirements. A rejected update must leave the previously admitted grant untouched.
+	before, err := client.Get(ctx, binding.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.Spec.Conditions = []privatev1.RoleBindingRequirement{{Key: "invalid", Operator: "In", Values: []string{"x"}}}
+	binding.ResourceVersion = "4"
+	data, err := json.Marshal(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := Event{EventType: CreateOrUpdate, ResourceKind: resourceID, OriginRegion: "us-central1", Generation: 3, Namespace: binding.Namespace, Name: binding.Name, SourceResourceVersion: "4", Object: data, UpdatedAt: time.Now().UTC()}
+	if applied, err := mirror.ApplyIncremental(ctx, event); !apierrors.IsInvalid(err) || applied {
+		t.Fatalf("expected destination validation rejection: applied=%v error=%v", applied, err)
+	}
+	after, err := client.Get(ctx, binding.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before.Object, after.Object) {
+		t.Fatal("rejected binding changed destination")
 	}
 }

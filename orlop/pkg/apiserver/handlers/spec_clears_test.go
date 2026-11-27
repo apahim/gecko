@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/json"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -237,5 +238,24 @@ func TestConvertingResourceHandlerSpecClears(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+// Required slices must retain [] on the wire, not become absent/null. Optional
+// RoleBinding conditions use the same helper but would not detect this regression.
+func TestPublicFieldClearsPreserveRequiredEmptyArrays(t *testing.T) {
+	previous := map[string]interface{}{"items": []interface{}{"old"}}
+	current := map[string]interface{}{"items": []interface{}{}}
+	converted := map[string]interface{}{"items": []interface{}{}}
+	applyPublicFieldClears(converted, publicFieldClears(current, previous), previous, previous)
+	data, err := json.Marshal(converted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"items":[]}` {
+		t.Fatalf("required array lost its empty-list representation: %s", data)
+	}
+	if len(previous["items"].([]interface{})) != 1 {
+		t.Fatal("clearing mutated old object")
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kjson "k8s.io/apimachinery/pkg/util/json"
@@ -542,14 +541,14 @@ func (c *Converter) extractNonPublicConditions(obj runtime.Object, kind string) 
 }
 
 // TypedOldObject converts a stored object into the typed object registered in
-// scheme for gvk, returning non-unstructured input unchanged.
+// scheme for gvk, returning non-unstructured input unchanged. It also supports unstructured lists.
 //
-// Storage backends decode persisted rows into *unstructured.Unstructured, but
+// Storage backends decode persisted rows into unstructured objects, but
 // types.CustomValidator implementations are written against their concrete
 // type and type-assert the old object they are handed. Without this conversion
 // every such validator rejects every update.
 func TypedOldObject(scheme *runtime.Scheme, gvk schema.GroupVersionKind, obj runtime.Object) (runtime.Object, error) {
-	u, ok := obj.(*unstructured.Unstructured)
+	u, ok := obj.(runtime.Unstructured)
 	if !ok {
 		return obj, nil
 	}
@@ -557,7 +556,7 @@ func TypedOldObject(scheme *runtime.Scheme, gvk schema.GroupVersionKind, obj run
 	if err != nil {
 		return nil, fmt.Errorf("creating typed object for %s: %w", gvk, err)
 	}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, typed); err != nil {
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.UnstructuredContent(), typed); err != nil {
 		return nil, fmt.Errorf("converting old object to %s: %w", gvk.Kind, err)
 	}
 	return typed, nil

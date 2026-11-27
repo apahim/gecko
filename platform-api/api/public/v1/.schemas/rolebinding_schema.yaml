@@ -23,9 +23,41 @@ properties:
   spec:
     description: RoleBindingSpec identifies the principal and role granted in a namespace.
     properties:
-      condition:
-        maxLength: 4096
-        type: string
+      conditions:
+        items:
+          description: RoleBindingRequirement narrows the target objects accessible
+            through a binding.
+          properties:
+            key:
+              description: |-
+                RoleBindingConditionKey selects a normalized target attribute.
+                The name key requires explicit metadata.name; generateName alone cannot match.
+                An independent grant without a name requirement may allow name generation.
+              enum:
+              - name
+              - region
+              type: string
+            operator:
+              description: RoleBindingConditionOperator determines membership in the
+                value alternatives.
+              enum:
+              - In
+              - NotIn
+              type: string
+            values:
+              items:
+                minLength: 1
+                type: string
+              minItems: 1
+              type: array
+              x-kubernetes-list-type: atomic
+          required:
+          - key
+          - operator
+          - values
+          type: object
+        type: array
+        x-kubernetes-list-type: atomic
       roleRef:
         description: |-
           RoleRef identifies either a cluster-scoped PlatformRole or a namespaced

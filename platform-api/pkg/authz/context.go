@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/cedar-policy/cedar-go"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,7 +32,43 @@ func CedarContextForObject(obj client.Object, resourcePlural, method string) (ce
 	if value, found := objectMap["spec"]; found {
 		spec = value
 	}
-	return cedarContext(obj.GetName(), resourcePlural, method, spec)
+	context, err := cedarContext(obj.GetName(), resourcePlural, method, spec)
+	if err != nil {
+		return cedar.Record{}, err
+	}
+	values := context.Map()
+	switch resourcePlural {
+	case "clusters", "nodepools", "roles", "rolebindings":
+		values["resourceType"] = cedar.String(pluralToResource(resourcePlural))
+	}
+	var region string
+	switch resourcePlural {
+	case "clusters":
+		// Resource admission owns validation; authorization uses the stored value.
+		region, _, _ = unstructured.NestedString(objectMap, "spec", "platform", "gcp", "region")
+	case "nodepools":
+		zone, _, _ := unstructured.NestedString(objectMap, "spec", "platform", "gcp", "zone")
+		region = regionForStandardZone(zone)
+	}
+	if region != "" {
+		values["resourceRegion"] = cedar.String(region)
+	}
+	return cedar.NewRecord(values), nil
+}
+
+// regionForStandardZone extracts a region from an already validated standard
+// zone. Only the supported single-letter suffix is handled; this does not
+// revalidate the region prefix or impose additional resource-admission rules.
+func regionForStandardZone(zone string) string {
+	separator := strings.LastIndexByte(zone, '-')
+	if separator <= 0 || separator != len(zone)-2 {
+		return ""
+	}
+	suffix := zone[len(zone)-1]
+	if suffix < 'a' || suffix > 'z' {
+		return ""
+	}
+	return zone[:separator]
 }
 
 func cedarContext(resourceName, resourcePlural, method string, spec any) (cedar.Record, error) {

@@ -2,80 +2,97 @@ package v1
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
+func testRoleBinding(requirements []RoleBindingRequirement) *RoleBinding {
+	return &RoleBinding{Spec: RoleBindingSpec{Subject: "alice@example.com", RoleRef: RoleRef{Kind: "PlatformRole", Name: "viewer", APIGroup: GroupVersion.Group}, Conditions: requirements}}
+}
+
 func TestRoleBindingConditionValidation(t *testing.T) {
-	validCondition := `context.resourcePlural == "clusters" && context.spec.platform.gcp.region == "us-east1"`
-	invalidSyntax := `context.spec.platform.gcp.region ==`
-	namespaceReference := `resource in Namespace::"other"`
-	stringLiteral := `context.resourceName == "Namespace::literal"`
-	trailingPolicy := `true }; forbid (principal, action, resource) when { true`
-
-	tests := []struct {
-		name      string
-		condition *string
-		wantErr   string
+	for _, tt := range []struct {
+		name         string
+		requirements []RoleBindingRequirement
+		valid        bool
 	}{
-		{name: "omitted", condition: nil},
-		{name: "valid expression", condition: &validCondition},
-		{name: "string literal is not an entity reference", condition: &stringLiteral},
-		{name: "invalid syntax", condition: &invalidSyntax, wantErr: "spec.condition is not a valid Cedar expression"},
-		{name: "namespace entity", condition: &namespaceReference, wantErr: "must not reference Namespace:: entities"},
-		{name: "trailing policy", condition: &trailingPolicy, wantErr: "must be a single Cedar condition expression; trailing Cedar policy statements are not allowed"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			binding := testRoleBinding(tt.condition)
-			err := binding.ValidateCreate(context.Background())
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("ValidateCreate() error = %v", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("ValidateCreate() error = %v, want containing %q", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestRoleBindingConditionValidationOnUpdate(t *testing.T) {
-	for _, condition := range []struct {
-		name    string
-		value   string
-		wantErr string
-	}{
-		{
-			name:    "invalid syntax",
-			value:   `context.spec ==`,
-			wantErr: "spec.condition is not a valid Cedar expression",
-		},
-		{
-			name:    "trailing policy",
-			value:   `true }; forbid (principal, action, resource) when { true`,
-			wantErr: "must be a single Cedar condition expression; trailing Cedar policy statements are not allowed",
-		},
+		{"omitted", nil, true}, {"mixed", []RoleBindingRequirement{{"region", "In", []string{"TYPO", "europe-*", " literal value "}}, {"name", "NotIn", []string{"*-private"}}}, true},
+		{"empty alternatives", []RoleBindingRequirement{{"name", "NotIn", []string{}}}, false},
+		{"duplicates", []RoleBindingRequirement{{"name", "In", []string{"x", "x"}}, {"name", "In", []string{"x"}}}, true},
+		{"bad key", []RoleBindingRequirement{{"version", "In", []string{"x"}}}, false},
+		{"bad operator", []RoleBindingRequirement{{"name", "Like", []string{"x"}}}, false},
+		{"missing values", []RoleBindingRequirement{{"name", "In", nil}}, false},
+		{"oversize", []RoleBindingRequirement{{"name", "In", []string{strings.Repeat("x", 4096)}}}, false},
 	} {
-		t.Run(condition.name, func(t *testing.T) {
-			binding := testRoleBinding(&condition.value)
-			err := binding.ValidateUpdate(context.Background(), testRoleBinding(nil))
-			if err == nil || !strings.Contains(err.Error(), condition.wantErr) {
-				t.Fatalf("ValidateUpdate() error = %v, want containing %q", err, condition.wantErr)
+		t.Run(tt.name, func(t *testing.T) {
+			binding := testRoleBinding(tt.requirements)
+			validationErr := binding.ValidateCreate(context.Background())
+			if tt.valid && validationErr != nil {
+				t.Fatalf("valid candidate: %v", validationErr)
+			}
+			if !tt.valid && validationErr == nil {
+				t.Fatal("validator accepted invalid candidate")
+			}
+			if tt.valid {
+				if err := binding.ValidateUpdate(context.Background(), testRoleBinding(nil)); err != nil {
+					t.Fatal(err)
+				}
 			}
 		})
 	}
 }
 
-func testRoleBinding(condition *string) *RoleBinding {
-	return &RoleBinding{
-		Spec: RoleBindingSpec{
-			Subject:   "alice@example.com",
-			RoleRef:   RoleRef{Kind: "PlatformRole", Name: "viewer", APIGroup: GroupVersion.Group},
-			Condition: condition,
-		},
+func TestRoleBindingUpdatePreservesIdentity(t *testing.T) {
+	old := testRoleBinding(nil)
+	old.Name = "target"
+	old.Namespace = "project-a"
+	for _, field := range []string{"name", "namespace"} {
+		t.Run(field, func(t *testing.T) {
+			candidate := old.DeepCopy()
+			if field == "name" {
+				candidate.Name = "other"
+			} else {
+				candidate.Namespace = "project-b"
+			}
+			if err := candidate.ValidateUpdate(t.Context(), old); err == nil {
+				t.Fatal("update changed stored identity")
+			}
+			if old.Name != "target" || old.Namespace != "project-a" {
+				t.Fatal("validation mutated old object")
+			}
+		})
+	}
+}
+
+func TestRequirementValuesSchemaMinimum(t *testing.T) {
+	for _, path := range []string{".schemas/rolebinding_schema.yaml", "../../public/v1/.schemas/rolebinding_schema.yaml"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema map[string]interface{}
+		if err := yaml.Unmarshal(data, &schema); err != nil {
+			t.Fatal(err)
+		}
+		conditions := schema["properties"].(map[string]interface{})["spec"].(map[string]interface{})["properties"].(map[string]interface{})["conditions"].(map[string]interface{})
+		if minimum, ok := conditions["minItems"]; ok && minimum != float64(0) {
+			t.Fatalf("top-level conditions must allow empty: %v", minimum)
+		}
+		node := schema
+		for _, key := range []string{"properties", "spec", "properties", "conditions", "items", "properties", "values"} {
+			node = node[key].(map[string]interface{})
+		}
+		if node["minItems"] != float64(1) {
+			t.Fatalf("%s: minItems=%v", path, node["minItems"])
+		}
+	}
+}
+
+func TestCompileRoleBindingConditionsRejectsImpossibleRequirementCount(t *testing.T) {
+	if expression, err := CompileRoleBindingConditions(make([]RoleBindingRequirement, 4097)); err == nil || expression != nil {
+		t.Fatal("impossible requirement count accepted")
 	}
 }

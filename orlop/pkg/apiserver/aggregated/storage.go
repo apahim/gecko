@@ -119,7 +119,7 @@ func (s *ResourceStorage) Get(ctx context.Context, name string, options *metav1.
 		return nil, errors.NewInternalError(fmt.Errorf("failed to get %s %s: %w", s.singular, name, err))
 	}
 	obj.GetObjectKind().SetGroupVersionKind(s.gvk)
-	return obj, nil
+	return conversion.TypedOldObject(s.scheme, s.gvk, obj)
 }
 
 func (s *ResourceStorage) List(ctx context.Context, options *metainternalversion.ListOptions) (runtime.Object, error) {
@@ -150,7 +150,9 @@ func (s *ResourceStorage) List(ctx context.Context, options *metainternalversion
 		return nil, errors.NewInternalError(fmt.Errorf("failed to list %s: %w", s.plural, err))
 	}
 	list.GetObjectKind().SetGroupVersionKind(s.gvk.GroupVersion().WithKind(s.gvk.Kind + "List"))
-	return list, nil
+	// Fail the whole list on incompatible known fields rather than silently
+	// omitting records and returning a misleading inventory/pagination result.
+	return conversion.TypedOldObject(s.scheme, s.gvk.GroupVersion().WithKind(s.gvk.Kind+"List"), list)
 }
 
 func (s *ResourceStorage) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
@@ -295,12 +297,12 @@ func (s *ResourceStorage) Delete(ctx context.Context, name string, deleteValidat
 				return nil, false, fmt.Errorf("failed to set deletionTimestamp: %w", err)
 			}
 		}
-		return existing, false, nil
+		return s.deleteResponse(existing, false), false, nil
 	}
 	if err := s.store.Delete(ctx, namespace, name); err != nil {
 		return nil, false, fmt.Errorf("failed to delete %s: %w", s.singular, err)
 	}
-	return existing, true, nil
+	return s.deleteResponse(existing, true), true, nil
 }
 
 func (s *ResourceStorage) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
@@ -357,14 +359,14 @@ func (s *ResourceStorage) Watch(ctx context.Context, options *metainternalversio
 			metav1.InitialEventsAnnotationKey: "true",
 		})
 
-		return newInitialEventsWatch(items, bookmark, eventCh, stopFn), nil
+		return s.typedWatch(newInitialEventsWatch(items, bookmark, eventCh, stopFn)), nil
 	}
 
 	eventCh, stopFn, err := s.store.Watch(ctx, opts, resourceVersion)
 	if err != nil {
 		return nil, errors.NewInternalError(fmt.Errorf("failed to watch %s: %w", s.plural, err))
 	}
-	return newWatchAdapter(eventCh, stopFn), nil
+	return s.typedWatch(newWatchAdapter(eventCh, stopFn)), nil
 }
 
 // StatusStorage handles /status subresource operations.
