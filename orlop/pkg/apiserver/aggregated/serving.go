@@ -81,8 +81,8 @@ func newProjectedWatch(source watch.Interface, project watch.FilterFunc) watch.I
 func (w *projectedWatch) Stop()                          { w.once.Do(func() { close(w.done); w.source.Stop() }) }
 func (w *projectedWatch) ResultChan() <-chan watch.Event { return w.result }
 
-// deleteResponse never makes recovery depend on rendering obsolete/malformed
-// stored data. Admission, storage errors and finalizers are handled by Delete.
+// deleteResponse renders the result only after Delete admission/storage handling.
+// This defensive response fallback never bypasses mandatory typed delete validation.
 func (s *ResourceStorage) deleteResponse(existing client.Object, deleted bool) runtime.Object {
 	served, err := conversion.TypedOldObject(s.scheme, s.gvk, existing)
 	if err == nil {

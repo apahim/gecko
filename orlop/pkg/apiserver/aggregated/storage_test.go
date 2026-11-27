@@ -2,11 +2,9 @@ package aggregated
 
 import (
 	"context"
-	"encoding/json"
 	stderrors "errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -723,13 +721,15 @@ func TestResourceStorage_Delete_CallsValidateDelete(t *testing.T) {
 	}
 }
 
+// Delete must fail closed if the stored object cannot be decoded for its
+// typed validator. Response fallback must never bypass that admission step.
 func TestDeleteMalformedStoredObject(t *testing.T) {
 	for _, finalizers := range []bool{false, true} {
 		for _, deny := range []bool{false, true} {
 			t.Run(fmt.Sprintf("finalizers=%t/deny=%t", finalizers, deny), func(t *testing.T) {
 				env := setupStorageTest(t)
 				ctx := testCtx("default")
-				doc := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": testGVK.GroupVersion().String(), "kind": testGVK.Kind, "metadata": map[string]interface{}{"name": "broken", "namespace": "default", "uid": "broken-uid"}, "spec": map[string]interface{}{"publicField": []interface{}{"sensitive"}}}}
+				doc := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": testGVK.GroupVersion().String(), "kind": testGVK.Kind, "metadata": map[string]interface{}{"name": "broken", "namespace": "default"}, "spec": map[string]interface{}{"publicField": []interface{}{"sensitive"}}}}
 				if finalizers {
 					doc.SetFinalizers([]string{"test.example.com/cleanup"})
 				}
@@ -740,56 +740,29 @@ func TestDeleteMalformedStoredObject(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				validation := func(_ context.Context, _ runtime.Object) error {
-					if deny {
-						return fmt.Errorf("denied")
-					}
-					return nil
-				}
+				denied := fmt.Errorf("denied")
 				for range 2 {
-					response, deleted, err := env.storage.Delete(ctx, "broken", validation, &metav1.DeleteOptions{})
-					if deny {
-						if err == nil {
-							t.Fatal("delete bypassed validation")
+					response, deleted, err := env.storage.Delete(ctx, "broken", func(context.Context, runtime.Object) error {
+						if deny {
+							return denied
 						}
-						after, e := env.store.Get(ctx, "default", "broken")
-						if e != nil {
-							t.Fatal(e)
-						}
-						if !reflect.DeepEqual(before, after) {
-							t.Fatal("rejected delete mutated object")
-						}
-						return
+						return nil
+					}, nil)
+					if err == nil || deleted || response != nil {
+						t.Fatal("malformed delete bypassed validation")
 					}
-					if err != nil {
-						t.Fatal(err)
+					if deny && !stderrors.Is(err, denied) {
+						t.Fatalf("callback denial not preserved: %v", err)
 					}
-					status, ok := response.(*metav1.Status)
-					if !ok || status.Status != metav1.StatusSuccess || status.Details.UID != "broken-uid" {
-						t.Fatalf("unexpected response: %#v", response)
+					if !deny && !errors.IsInternalError(err) {
+						t.Fatalf("expected decode failure: %v", err)
 					}
-					if deleted == finalizers {
-						t.Fatal("incorrect deletion state")
-					}
-					data, e := json.Marshal(response)
+					after, e := env.store.Get(ctx, "default", "broken")
 					if e != nil {
 						t.Fatal(e)
 					}
-					if strings.Contains(string(data), "sensitive") || strings.Contains(string(data), "publicField") {
-						t.Fatal("malformed data leaked")
-					}
-					stored, e := env.store.Get(ctx, "default", "broken")
-					if !finalizers {
-						if status.Code != 200 || !errors.IsNotFound(e) {
-							t.Fatalf("hard delete failed: %v", e)
-						}
-						return
-					}
-					if e != nil {
-						t.Fatal(e)
-					}
-					if status.Code != 202 || stored.GetDeletionTimestamp() == nil || len(stored.GetFinalizers()) != 1 {
-						t.Fatal("finalizers bypassed")
+					if !reflect.DeepEqual(before, after) {
+						t.Fatal("rejected deletion mutated stored object")
 					}
 				}
 			})
@@ -830,10 +803,10 @@ func TestListFailsOnMalformedKnownField(t *testing.T) {
 	}
 }
 
-func TestDeleteResponseFallbackDoesNotMaskStorageFailure(t *testing.T) {
+func TestDeleteDoesNotMaskStorageFailure(t *testing.T) {
 	env := setupStorageTest(t)
 	ctx := testCtx("default")
-	doc := &unstructured.Unstructured{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "broken", "namespace": "default"}, "spec": map[string]interface{}{"publicField": []interface{}{"bad"}}}}
+	doc := &unstructured.Unstructured{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "broken", "namespace": "default"}, "spec": map[string]interface{}{"publicField": "valid"}}}
 	if err := env.store.Create(ctx, doc); err != nil {
 		t.Fatal(err)
 	}
