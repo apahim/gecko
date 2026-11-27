@@ -150,6 +150,8 @@ func (s *ResourceStorage) List(ctx context.Context, options *metainternalversion
 		return nil, errors.NewInternalError(fmt.Errorf("failed to list %s: %w", s.plural, err))
 	}
 	list.GetObjectKind().SetGroupVersionKind(s.gvk.GroupVersion().WithKind(s.gvk.Kind + "List"))
+	// Fail the whole list on incompatible known fields rather than silently
+	// omitting records and returning a misleading inventory/pagination result.
 	return conversion.TypedOldObject(s.scheme, s.gvk.GroupVersion().WithKind(s.gvk.Kind+"List"), list)
 }
 
@@ -286,16 +288,6 @@ func (s *ResourceStorage) Delete(ctx context.Context, name string, deleteValidat
 		}
 	}
 
-	served, err := conversion.TypedOldObject(s.scheme, s.gvk, existing)
-	if err != nil {
-		return nil, false, errors.NewInternalError(err)
-	}
-	served.GetObjectKind().SetGroupVersionKind(s.gvk)
-	servedMeta, err := meta.Accessor(served)
-	if err != nil {
-		return nil, false, errors.NewInternalError(err)
-	}
-
 	if len(existing.GetFinalizers()) > 0 {
 		if existing.GetDeletionTimestamp() == nil {
 			now := metav1.Now()
@@ -305,14 +297,12 @@ func (s *ResourceStorage) Delete(ctx context.Context, name string, deleteValidat
 				return nil, false, fmt.Errorf("failed to set deletionTimestamp: %w", err)
 			}
 		}
-		servedMeta.SetDeletionTimestamp(existing.GetDeletionTimestamp())
-		servedMeta.SetResourceVersion(existing.GetResourceVersion())
-		return served, false, nil
+		return s.deleteResponse(existing, false), false, nil
 	}
 	if err := s.store.Delete(ctx, namespace, name); err != nil {
 		return nil, false, fmt.Errorf("failed to delete %s: %w", s.singular, err)
 	}
-	return served, true, nil
+	return s.deleteResponse(existing, true), true, nil
 }
 
 func (s *ResourceStorage) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {

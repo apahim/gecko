@@ -48,6 +48,8 @@ type RoleBindingSpec struct {
 	// repeated keys. Values are ORed; '*' is the only wildcard. Values are opaque
 	// strings, not validated region/name identifiers. Omitted or empty conditions
 	// add no restriction. PUT omission clears; merge PATCH omission preserves.
+	// Name requirements need an explicit metadata.name at authorization time;
+	// generateName alone cannot match. An independent grant may allow generation.
 	// +orlop:public
 	// +optional
 	// +listType=atomic
@@ -75,6 +77,8 @@ func init() {
 }
 
 // RoleBindingConditionKey selects a normalized target attribute.
+// The name key requires explicit metadata.name; generateName alone cannot match.
+// An independent grant without a name requirement may allow name generation.
 // +kubebuilder:validation:Enum=name;region
 type RoleBindingConditionKey string
 

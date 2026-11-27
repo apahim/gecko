@@ -20,7 +20,9 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
@@ -681,4 +683,58 @@ func keysOf(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func TestIntegration_DeleteMalformedStoredObject(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("finalizers=%t", pending), func(t *testing.T) {
+			var backing *memory.MemoryStore
+			env := setupIntegrationTestWithConfig(t, func(config *Config) {
+				config.StorageFactory = func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
+					backing = memory.NewMemoryStore(resourceType, scheme, gvk)
+					return backing, nil
+				}
+			})
+			doc := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": testv1.GroupVersion.String(), "kind": "Object", "metadata": map[string]interface{}{"name": "broken", "namespace": "default", "uid": "broken-uid"}, "spec": map[string]interface{}{"publicField": []interface{}{"sensitive"}}}}
+			if pending {
+				doc.SetFinalizers([]string{"test.example.com/cleanup"})
+			}
+			if err := backing.Create(t.Context(), doc); err != nil {
+				t.Fatal(err)
+			}
+			path := env.url(fmt.Sprintf("/apis/%s/%s/namespaces/default/objects/broken", testv1.GroupVersion.Group, testv1.GroupVersion.Version))
+			response, err := doRequest(env.client, http.MethodDelete, path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			data, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// HTTP status follows GenericAPIServer deletion handling; pending finalizers
+			// are represented in the status body, not a guaranteed HTTP 202.
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("DELETE %d: %s", response.StatusCode, data)
+			}
+			var status metav1.Status
+			if err := json.Unmarshal(data, &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.Kind != "Status" || status.Status != metav1.StatusSuccess || strings.Contains(string(data), "sensitive") {
+				t.Fatalf("unsafe response: %s", data)
+			}
+			stored, err := backing.Get(t.Context(), "default", "broken")
+			if pending {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stored.GetDeletionTimestamp() == nil || len(stored.GetFinalizers()) != 1 {
+					t.Fatal("finalizers bypassed")
+				}
+			} else if !apierrors.IsNotFound(err) {
+				t.Fatalf("object not deleted: %v", err)
+			}
+		})
+	}
 }

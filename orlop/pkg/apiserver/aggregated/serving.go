@@ -7,7 +7,10 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // typedWatch projects persisted unstructured data into the registered API type.
@@ -77,3 +80,18 @@ func newProjectedWatch(source watch.Interface, project watch.FilterFunc) watch.I
 }
 func (w *projectedWatch) Stop()                          { w.once.Do(func() { close(w.done); w.source.Stop() }) }
 func (w *projectedWatch) ResultChan() <-chan watch.Event { return w.result }
+
+// deleteResponse never makes recovery depend on rendering obsolete/malformed
+// stored data. Admission, storage errors and finalizers are handled by Delete.
+func (s *ResourceStorage) deleteResponse(existing client.Object, deleted bool) runtime.Object {
+	served, err := conversion.TypedOldObject(s.scheme, s.gvk, existing)
+	if err == nil {
+		served.GetObjectKind().SetGroupVersionKind(s.gvk)
+		return served
+	}
+	code := http.StatusAccepted
+	if deleted {
+		code = http.StatusOK
+	}
+	return &metav1.Status{Status: metav1.StatusSuccess, Code: int32(code), Details: &metav1.StatusDetails{Name: existing.GetName(), Group: s.gvk.Group, Kind: s.gvk.Kind, UID: existing.GetUID()}}
+}

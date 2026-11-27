@@ -2,24 +2,32 @@ package aggregated
 
 import (
 	"context"
+	"encoding/json"
+	stderrors "errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
 
 	testv1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type storageTestEnv struct {
@@ -712,5 +720,130 @@ func TestResourceStorage_Delete_CallsValidateDelete(t *testing.T) {
 	_, err = env.storage.Get(ctx, "reject-test", &metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("object should still exist after rejected delete: %v", err)
+	}
+}
+
+func TestDeleteMalformedStoredObject(t *testing.T) {
+	for _, finalizers := range []bool{false, true} {
+		for _, deny := range []bool{false, true} {
+			t.Run(fmt.Sprintf("finalizers=%t/deny=%t", finalizers, deny), func(t *testing.T) {
+				env := setupStorageTest(t)
+				ctx := testCtx("default")
+				doc := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": testGVK.GroupVersion().String(), "kind": testGVK.Kind, "metadata": map[string]interface{}{"name": "broken", "namespace": "default", "uid": "broken-uid"}, "spec": map[string]interface{}{"publicField": []interface{}{"sensitive"}}}}
+				if finalizers {
+					doc.SetFinalizers([]string{"test.example.com/cleanup"})
+				}
+				if err := env.store.Create(ctx, doc); err != nil {
+					t.Fatal(err)
+				}
+				before, err := env.store.Get(ctx, "default", "broken")
+				if err != nil {
+					t.Fatal(err)
+				}
+				validation := func(_ context.Context, _ runtime.Object) error {
+					if deny {
+						return fmt.Errorf("denied")
+					}
+					return nil
+				}
+				for range 2 {
+					response, deleted, err := env.storage.Delete(ctx, "broken", validation, &metav1.DeleteOptions{})
+					if deny {
+						if err == nil {
+							t.Fatal("delete bypassed validation")
+						}
+						after, e := env.store.Get(ctx, "default", "broken")
+						if e != nil {
+							t.Fatal(e)
+						}
+						if !reflect.DeepEqual(before, after) {
+							t.Fatal("rejected delete mutated object")
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					status, ok := response.(*metav1.Status)
+					if !ok || status.Status != metav1.StatusSuccess || status.Details.UID != "broken-uid" {
+						t.Fatalf("unexpected response: %#v", response)
+					}
+					if deleted == finalizers {
+						t.Fatal("incorrect deletion state")
+					}
+					data, e := json.Marshal(response)
+					if e != nil {
+						t.Fatal(e)
+					}
+					if strings.Contains(string(data), "sensitive") || strings.Contains(string(data), "publicField") {
+						t.Fatal("malformed data leaked")
+					}
+					stored, e := env.store.Get(ctx, "default", "broken")
+					if !finalizers {
+						if status.Code != 200 || !errors.IsNotFound(e) {
+							t.Fatalf("hard delete failed: %v", e)
+						}
+						return
+					}
+					if e != nil {
+						t.Fatal(e)
+					}
+					if status.Code != 202 || stored.GetDeletionTimestamp() == nil || len(stored.GetFinalizers()) != 1 {
+						t.Fatal("finalizers bypassed")
+					}
+				}
+			})
+		}
+	}
+}
+
+// recoveryTestStore exposes database-shaped lists or injected storage failures.
+type recoveryTestStore struct {
+	storage.ResourceStore
+	list      client.ObjectList
+	deleteErr error
+}
+
+func (s *recoveryTestStore) List(ctx context.Context, opts storage.ListOptions) (client.ObjectList, error) {
+	if s.list != nil {
+		return s.list, nil
+	}
+	return s.ResourceStore.List(ctx, opts)
+}
+func (s *recoveryTestStore) Delete(ctx context.Context, namespace, name string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	return s.ResourceStore.Delete(ctx, namespace, name)
+}
+
+func TestListFailsOnMalformedKnownField(t *testing.T) {
+	env := setupStorageTest(t)
+	valid := unstructured.Unstructured{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "valid"}, "spec": map[string]interface{}{"publicField": "ok"}}}
+	invalid := valid.DeepCopy()
+	invalid.SetName("invalid")
+	invalid.Object["spec"] = map[string]interface{}{"publicField": []interface{}{"bad"}}
+	env.storage.store = &recoveryTestStore{ResourceStore: env.store, list: &unstructured.UnstructuredList{Items: []unstructured.Unstructured{valid, *invalid}}}
+	result, err := env.storage.List(testCtx("default"), nil)
+	if err == nil || result != nil {
+		t.Fatal("malformed list silently skipped or exposed a row")
+	}
+}
+
+func TestDeleteResponseFallbackDoesNotMaskStorageFailure(t *testing.T) {
+	env := setupStorageTest(t)
+	ctx := testCtx("default")
+	doc := &unstructured.Unstructured{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "broken", "namespace": "default"}, "spec": map[string]interface{}{"publicField": []interface{}{"bad"}}}}
+	if err := env.store.Create(ctx, doc); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := fmt.Errorf("storage unavailable")
+	env.storage.store = &recoveryTestStore{ResourceStore: env.store, deleteErr: sentinel}
+	response, deleted, err := env.storage.Delete(ctx, "broken", nil, nil)
+	if !stderrors.Is(err, sentinel) || deleted || response != nil {
+		t.Fatalf("storage failure masked: %v", err)
+	}
+	if _, err := env.store.Get(ctx, "default", "broken"); err != nil {
+		t.Fatal("failed delete removed object")
 	}
 }
